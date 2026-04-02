@@ -16,7 +16,7 @@
         .balance-card { background: #f0f4f8; padding: 15px; border-radius: 10px; margin-bottom: 10px; text-align: center; }
         .balance-amt { font-size: 1.8rem; font-weight: bold; color: var(--primary); }
         
-        /* Input Upgrades for Chrome Mobile */
+        /* Form Elements Optimized for Mobile */
         input, select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 16px; outline: none; }
         input:focus { border-color: var(--primary); }
         
@@ -29,12 +29,13 @@
         .btn-interest { background: #9b59b6; color: white; }
         .btn-logout { background: #eee; color: #666; font-size: 0.8rem; width: auto; }
         
+        /* Grid Layouts */
         .admin-section { border-top: 2px dashed #eee; margin-top: 20px; padding-top: 20px; }
         .row { display: flex; gap: 10px; }
         .col { flex: 1; }
         label { font-size: 0.75rem; color: #666; font-weight: bold; display: block; margin-bottom: 4px; text-transform: uppercase; }
 
-        /* Ledger Styling */
+        /* Ledger / Recent Activity */
         .ledger-container { margin-top: 25px; border-top: 2px solid #eee; padding-top: 15px; }
         .ledger-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f9f9f9; font-size: 0.85rem; }
         .ledger-note { color: #555; display: block; font-style: italic; }
@@ -73,22 +74,30 @@
             <small>Rate: <span id="int-sav-display">0</span>%</small>
         </div>
 
-        <div id="trans-input-area">
-            <label>Transaction Details</label>
-            <input type="number" id="trans-amt" placeholder="Amount $" inputmode="decimal">
-            <input type="text" id="trans-note" placeholder="What is this for? (Required)">
-        </div>
-
         <div id="linnea-controls" class="hidden">
+            <h3>Manage Money</h3>
+            <input type="number" id="trans-amt" placeholder="Amount $" inputmode="decimal">
+            <input type="text" id="trans-note" placeholder="What is this for?">
             <button class="btn-secondary" onclick="transferToSavings()">Move to Savings</button>
             <button class="btn-primary" onclick="withdraw()">Withdraw Cash</button>
             <button class="btn-logout" style="width:100%; margin-top:20px;" onclick="changePinPrompt('Linnea')">Change My PIN</button>
         </div>
 
         <div id="dad-controls" class="hidden">
-            <div class="admin-section" style="background: #fff9eb; padding: 10px; border-radius: 10px; border: 1px solid #f39c12;">
+            <div class="admin-section" style="background: #fff9eb; padding: 15px; border-radius: 10px; border: 1px solid #f39c12;">
                 <h3>Instant Adjustment</h3>
-                <button class="btn-deposit" onclick="multiInstantAdjust()">Apply to Checking</button>
+                <div class="row">
+                    <div class="col">
+                        <label>Chk Adjust $</label>
+                        <input type="number" id="instant-chk" placeholder="0.00" inputmode="decimal">
+                    </div>
+                    <div class="col">
+                        <label>Sav Adjust $</label>
+                        <input type="number" id="instant-sav" placeholder="0.00" inputmode="decimal">
+                    </div>
+                </div>
+                <input type="text" id="dad-note" placeholder="Comment (e.g. Bonus, Chore)">
+                <button class="btn-deposit" onclick="multiInstantAdjust()">Apply Adjustments</button>
             </div>
 
             <div class="admin-section">
@@ -162,7 +171,6 @@
         document.getElementById('auto-chk').value = state.autoDeposit.checking || 0;
         document.getElementById('auto-sav').value = state.autoDeposit.savings || 0;
 
-        // Render Ledger
         const list = document.getElementById('ledger-list');
         list.innerHTML = state.history.slice(-10).reverse().map(h => `
             <div class="ledger-row">
@@ -196,14 +204,24 @@
     }
 
     function multiInstantAdjust() {
-        const amt = parseFloat(document.getElementById('trans-amt').value) || 0;
-        const note = document.getElementById('trans-note').value || "Dad Adjustment";
-        if (amt === 0) return alert("Enter an amount first.");
+        const cAmt = parseFloat(document.getElementById('instant-chk').value) || 0;
+        const sAmt = parseFloat(document.getElementById('instant-sav').value) || 0;
+        const note = document.getElementById('dad-note').value || "Dad Adjustment";
+
+        if (cAmt === 0 && sAmt === 0) return alert("Enter an amount first.");
         
-        state.balances.checking += amt;
-        recordTransaction("Dad", note, amt);
-        document.getElementById('trans-amt').value = '';
-        document.getElementById('trans-note').value = '';
+        if (cAmt !== 0) {
+            state.balances.checking += cAmt;
+            recordTransaction("Dad", note + " (Chk)", cAmt);
+        }
+        if (sAmt !== 0) {
+            state.balances.savings += sAmt;
+            recordTransaction("Dad", note + " (Sav)", sAmt);
+        }
+
+        document.getElementById('instant-chk').value = '';
+        document.getElementById('instant-sav').value = '';
+        document.getElementById('dad-note').value = '';
         sync("Adjustment");
     }
 
@@ -226,13 +244,10 @@
         const rSav = state.rates.savings || 0;
         const earnedChk = state.balances.checking * (rChk / 100 / 12);
         const earnedSav = state.balances.savings * (rSav / 100 / 12);
-        
         state.balances.checking += earnedChk;
         state.balances.savings += earnedSav;
-        
-        recordTransaction("Bank", "Monthly Interest (Chk)", earnedChk);
-        recordTransaction("Bank", "Monthly Interest (Sav)", earnedSav);
-        
+        recordTransaction("Bank", "Interest (Chk)", earnedChk);
+        recordTransaction("Bank", "Interest (Sav)", earnedSav);
         sync("Interest"); 
         alert(`Interest Applied!`);
     }
@@ -247,25 +262,20 @@
             document.getElementById('trans-amt').value = '';
             document.getElementById('trans-note').value = '';
             sync("Transfer");
-        } else { 
-            alert("Check balance or amount."); 
-        }
+        } else { alert("Check balance or amount."); }
     }
 
     function withdraw() {
         const amt = parseFloat(document.getElementById('trans-amt').value);
         const note = document.getElementById('trans-note').value;
-        if (!note) return alert("Please enter what this withdrawal is for.");
-        
+        if (!note) return alert("Please enter a description.");
         if (amt > 0 && state.balances.checking >= amt) {
             state.balances.checking -= amt;
             recordTransaction("Linnea", note, -amt);
             document.getElementById('trans-amt').value = '';
             document.getElementById('trans-note').value = '';
             sync("Withdrawal"); 
-        } else { 
-            alert("Insufficient funds."); 
-        }
+        } else { alert("Insufficient funds."); }
     }
 
     function changePinPrompt(user) {
