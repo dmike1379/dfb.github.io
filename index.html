@@ -44,7 +44,7 @@
         </select>
         <input type="password" id="pin-input" placeholder="Enter PIN" maxlength="4" inputmode="numeric">
         <button class="btn-primary" onclick="attemptLogin()">Login</button>
-        <p id="status-msg" style="text-align:center; font-size:10px; color:#999; margin-top:10px;">Connecting to Vault...</p>
+        <p id="status-msg" style="text-align:center; font-size:10px; color:#999; margin-top:10px;">Connecting...</p>
     </div>
 
     <div id="main-interface" class="hidden">
@@ -77,10 +77,10 @@
             <div class="admin-section" style="background: #fff9eb; padding: 10px; border-radius: 10px; border: 1px solid #f39c12;">
                 <h3>Instant Adjustment</h3>
                 <div class="row">
-                    <div class="col"><label>Chk $</label><input type="number" id="instant-chk" placeholder="0.00" inputmode="decimal"></div>
-                    <div class="col"><label>Sav $</label><input type="number" id="instant-sav" placeholder="0.00" inputmode="decimal"></div>
+                    <div class="col"><label>Chk $</label><input type="number" id="instant-chk" placeholder="0.00"></div>
+                    <div class="col"><label>Sav $</label><input type="number" id="instant-sav" placeholder="0.00"></div>
                 </div>
-                <input type="text" id="dad-note" placeholder="Comment" style="margin-top:5px;">
+                <input type="text" id="dad-note" placeholder="Comment">
                 <button class="btn-deposit" onclick="multiInstantAdjust()">Apply Adjustments</button>
             </div>
 
@@ -117,7 +117,6 @@
 </div>
 
 <script>
-    // 1. ENSURE THIS URL IS EXACTLY YOUR DEPLOYED WEB APP URL
     const API_URL = "https://script.google.com/macros/s/AKfycby7ESNf6m1F33BJkcPs9BZSiVO0EPLHsSjKEbORMrGsstNEvMI_jbkBh4Dp3Kt0K5S3Nw/exec";
 
     let state = {
@@ -128,12 +127,7 @@
         history: []
     };
 
-    // Initialize UI on startup
-    window.onload = function() {
-        console.log("App Started");
-        load(); 
-    };
-
+    // 1. Initial Data Load
     async function load() {
         const status = document.getElementById('status-msg');
         try {
@@ -142,15 +136,14 @@
             if (data && data.pins) {
                 state = data;
                 status.innerText = "Vault Connected";
-                console.log("Data loaded from Google");
                 render();
             }
         } catch(e) {
-            status.innerText = "Offline Mode (Using Saved PINs)";
-            console.log("Could not reach Google. Using local defaults.");
+            status.innerText = "Offline Mode";
         }
     }
 
+    // 2. Render UI
     function render() {
         document.getElementById('checking-val').innerText = "$" + (state.balances.checking || 0).toFixed(2);
         document.getElementById('savings-val').innerText = "$" + (state.balances.savings || 0).toFixed(2);
@@ -172,53 +165,48 @@
         }
     }
 
+    // 3. Login
     function attemptLogin() {
         const u = document.getElementById('user-select').value;
         const p = document.getElementById('pin-input').value;
         
-        console.log("Login attempt for:", u);
-
         if (state.pins[u] === p) {
             document.getElementById('login-screen').classList.add('hidden');
             document.getElementById('main-interface').classList.remove('hidden');
             document.getElementById('welcome-msg').innerText = "Hello, " + u;
-            
-            if (u === 'Dad') {
-                document.getElementById('dad-controls').classList.remove('hidden');
-            } else {
-                document.getElementById('linnea-controls').classList.remove('hidden');
-            }
+            document.getElementById(u === 'Dad' ? 'dad-controls' : 'linnea-controls').classList.remove('hidden');
             render();
         } else {
-            alert("Incorrect PIN. Try again.");
+            alert("Incorrect PIN");
         }
     }
 
-    async function sync(actionType) {
+    // 4. Sync to Google
+    async function sync(action) {
         render();
         try {
             await fetch(API_URL, { 
                 method: 'POST', 
                 mode: 'no-cors', 
-                body: JSON.stringify({ ...state, lastAction: actionType }) 
+                body: JSON.stringify({ ...state, lastAction: action }) 
             });
-        } catch(e) { console.error("Sync error", e); }
+        } catch(e) { console.error("Sync Error"); }
     }
 
-    function recordTransaction(user, note, amt) {
+    // 5. Utility Functions
+    function record(user, note, amt) {
         if (!state.history) state.history = [];
         state.history.push({ date: new Date().toLocaleDateString(), user: user, note: note, amt: amt });
     }
 
     function multiInstantAdjust() {
-        const cAmt = parseFloat(document.getElementById('instant-chk').value) || 0;
-        const sAmt = parseFloat(document.getElementById('instant-sav').value) || 0;
-        const note = document.getElementById('dad-note').value || "Adjustment";
-        if (cAmt !== 0) { state.balances.checking += cAmt; recordTransaction("Dad", note + " (Chk)", cAmt); }
-        if (sAmt !== 0) { state.balances.savings += sAmt; recordTransaction("Dad", note + " (Sav)", sAmt); }
+        const c = parseFloat(document.getElementById('instant-chk').value) || 0;
+        const s = parseFloat(document.getElementById('instant-sav').value) || 0;
+        const n = document.getElementById('dad-note').value || "Adjustment";
+        if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
+        if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
         document.getElementById('instant-chk').value = '';
         document.getElementById('instant-sav').value = '';
-        document.getElementById('dad-note').value = '';
         sync("Adjustment");
     }
 
@@ -235,46 +223,43 @@
     }
 
     function applyInterestNow() {
-        const cEarned = state.balances.checking * (state.rates.checking / 100 / 12);
-        const sEarned = state.balances.savings * (state.rates.savings / 100 / 12);
-        state.balances.checking += cEarned;
-        state.balances.savings += sEarned;
-        recordTransaction("Bank", "Interest (Chk)", cEarned);
-        recordTransaction("Bank", "Interest (Sav)", sEarned);
+        const cE = state.balances.checking * (state.rates.checking / 100 / 12);
+        const sE = state.balances.savings * (state.rates.savings / 100 / 12);
+        state.balances.checking += cE; state.balances.savings += sE;
+        record("Bank", "Interest (Chk)", cE); record("Bank", "Interest (Sav)", sE);
         sync("Interest"); alert("Interest Applied!");
     }
 
     function transferToSavings() {
-        const amt = parseFloat(document.getElementById('trans-amt').value);
-        if (amt > 0 && state.balances.checking >= amt) {
-            state.balances.checking -= amt;
-            state.balances.savings += amt;
-            recordTransaction("Linnea", "To Savings", -amt);
+        const a = parseFloat(document.getElementById('trans-amt').value);
+        if (a > 0 && state.balances.checking >= a) {
+            state.balances.checking -= a; state.balances.savings += a;
+            record("Linnea", "To Savings", -a);
             document.getElementById('trans-amt').value = '';
             sync("Transfer");
-        } else { alert("Check balance."); }
+        } else { alert("Insufficient funds"); }
     }
 
     function withdraw() {
-        const amt = parseFloat(document.getElementById('trans-amt').value);
-        const note = document.getElementById('trans-note').value || "Withdrawal";
-        if (amt > 0 && state.balances.checking >= amt) {
-            state.balances.checking -= amt;
-            recordTransaction("Linnea", note, -amt);
-            document.getElementById('trans-amt').value = '';
-            document.getElementById('trans-note').value = '';
-            sync("Withdrawal");
-        } else { alert("Insufficient funds."); }
+        const a = parseFloat(document.getElementById('trans-amt').value);
+        const n = document.getElementById('trans-note').value || "Withdrawal";
+        if (a > 0 && state.balances.checking >= a) {
+            state.balances.checking -= a; record("Linnea", n, -a);
+            document.getElementById('trans-amt').value = ''; sync("Withdrawal");
+        } else { alert("Insufficient funds"); }
     }
 
-    function changePinPrompt(user) {
+    function changePinPrompt(u) {
         const p = prompt("New 4-digit PIN:");
-        if (p && p.length === 4) { state.pins[user] = p; sync("PIN Change"); alert("PIN Changed!"); }
+        if (p && p.length === 4) { state.pins[u] = p; sync("PIN Change"); alert("PIN Updated!"); }
     }
 
     function adminResetPin() {
         state.pins.Linnea = "0000"; sync("Reset"); alert("Linnea reset to 0000");
     }
+
+    // START
+    load();
 </script>
 </body>
 </html>
