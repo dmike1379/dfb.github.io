@@ -149,7 +149,9 @@
 
 <script>
     const API_URL = "https://script.google.com/macros/s/AKfycby7ESNf6m1F33BJkcPs9BZSiVO0EPLHsSjKEbORMrGsstNEvMI_jbkBh4Dp3Kt0K5S3Nw/exec";
+    // Initialize with empty history to ensure it only populates from the Sheet
     let state = { pins: { Dad: "1234", Linnea: "0000" }, balances: { checking: 0, savings: 0 }, rates: { checking: 0, savings: 0 }, autoDeposit: { checking: 0, savings: 0 }, history: [] };
+    let tempHistory = []; // Used to queue new items before they are written to the Sheet
 
     function fmt(val) { return "$" + (parseFloat(val) || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
 
@@ -159,7 +161,10 @@
             const data = await response.json();
             if (data && data.pins) { 
                 state = data; 
+                // CRITICAL: We do not append tempHistory to state.history here. 
+                // We want to ONLY show what the spreadsheet returned.
                 if (!state.history) state.history = [];
+                tempHistory = []; // Reset queue after a successful load
                 document.getElementById('status-msg').innerText = "System Ready"; 
                 render(); 
             }
@@ -189,9 +194,9 @@
         const acctF = document.getElementById('acct-filter').value;
         const typeF = document.getElementById('type-filter').value;
 
-        // Force pulling strictly from the data array loaded from the Spreadsheet
         let filtered = [...state.history].filter(h => {
-            const isSav = (h.note.toLowerCase().includes('(sav)') || h.note.toLowerCase().includes('to sav') || h.note.toLowerCase().includes('interest (sav)'));
+            const noteLower = h.note.toLowerCase();
+            const isSav = (noteLower.includes('(sav)') || noteLower.includes('to sav') || noteLower.includes('interest (sav)'));
             if (userF !== 'all' && h.user !== userF) return false;
             if (acctF === 'chk' && isSav) return false;
             if (acctF === 'sav' && !isSav) return false;
@@ -203,7 +208,8 @@
         if (sort === 'new') filtered.reverse();
 
         list.innerHTML = filtered.map(h => {
-            const isSav = (h.note.toLowerCase().includes('(sav)') || h.note.toLowerCase().includes('to sav') || h.note.toLowerCase().includes('interest (sav)'));
+            const noteLower = h.note.toLowerCase();
+            const isSav = (noteLower.includes('(sav)') || noteLower.includes('to sav') || noteLower.includes('interest (sav)'));
             return `
             <div class="ledger-row">
                 <div class="acct-tag">${isSav ? 'SAV' : 'CHK'}</div>
@@ -216,8 +222,8 @@
     function record(user, note, amt) {
         const now = new Date();
         const dateStr = now.toLocaleDateString() + " " + now.toLocaleTimeString([], {hour: 'numeric', minute:'2-digit'});
-        if(!state.history) state.history = [];
-        state.history.push({ date: dateStr, user: user, note: note, amt: amt });
+        // Push to tempHistory instead of permanent state.history to prevent "ghosting"
+        tempHistory.push({ date: dateStr, user: user, note: note, amt: amt });
     }
 
     function attemptLogin() {
@@ -234,7 +240,11 @@
 
     async function sync(action) {
         render();
-        try { await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ ...state, lastAction: action }) }); } catch(e) {}
+        // Prepare the payload: we send the current temp transactions
+        const payload = { ...state, tempTransactions: tempHistory, lastAction: action };
+        // Clear tempHistory locally after sending
+        tempHistory = [];
+        try { await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) }); } catch(e) {}
     }
 
     function multiInstantAdjust() {
