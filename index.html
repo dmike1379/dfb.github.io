@@ -34,6 +34,7 @@
         .btn-deposit { background: #f39c12; color: white; }
         .btn-interest { background: #9b59b6; color: white; }
         .btn-logout { background: #eee; color: #666; font-size: 0.8rem; width: auto; }
+        .btn-danger { background: #e74c3c; color: white; margin-top: 20px; font-size: 12px; }
         
         .admin-section { border-top: 2px dashed #eee; margin-top: 20px; padding-top: 20px; }
         .row { display: flex; gap: 8px; }
@@ -62,13 +63,10 @@
             <img src="images/logo.png" class="bank-logo" alt="Logo" onerror="this.style.display='none'">
             <h2>Family Bank</h2>
         </div>
-        <select id="user-select">
-            <option value="Linnea">Linnea</option>
-            <option value="Dad">Dad</option>
-        </select>
+        <select id="user-select"><option value="Linnea">Linnea</option><option value="Dad">Dad</option></select>
         <input type="password" id="pin-input" placeholder="Enter PIN" maxlength="4" inputmode="numeric">
         <button class="btn-primary" onclick="attemptLogin()">Login</button>
-        <p id="status-msg" style="text-align:center; font-size:10px; color:#999; margin-top:10px;">Initializing...</p>
+        <p id="status-msg" style="text-align:center; font-size:10px; color:#999; margin-top:10px;">Connecting...</p>
     </div>
 
     <div id="main-interface" class="hidden">
@@ -92,8 +90,8 @@
 
         <div id="linnea-controls" class="hidden">
             <h3>Manage Money</h3>
-            <input type="number" id="trans-amt" placeholder="Amount $0.00" step="0.01" onblur="if(this.value) this.value = parseFloat(this.value).toFixed(2)">
-            <input type="text" id="trans-note" placeholder="What is this for? (Required)">
+            <input type="number" id="trans-amt" placeholder="Amount $0.00" step="0.01">
+            <input type="text" id="trans-note" placeholder="What is this for?">
             <button class="btn-secondary" onclick="transferToSavings()">Move to Savings</button>
             <button class="btn-primary" onclick="withdraw()">Withdraw Cash</button>
             <button class="btn-logout" style="width:100%; margin-top:20px;" onclick="changePinPrompt('Linnea')">Change My PIN</button>
@@ -103,10 +101,10 @@
             <div class="admin-section" style="background: #fff9eb; padding: 10px; border-radius: 10px; border: 1px solid #f39c12;">
                 <h3>Instant Adjustment</h3>
                 <div class="row">
-                    <div class="col"><label>Chk $</label><input type="number" id="instant-chk" placeholder="0.00" step="0.01" onblur="if(this.value) this.value = parseFloat(this.value).toFixed(2)"></div>
-                    <div class="col"><label>Sav $</label><input type="number" id="instant-sav" placeholder="0.00" step="0.01" onblur="if(this.value) this.value = parseFloat(this.value).toFixed(2)"></div>
+                    <div class="col"><label>Chk $</label><input type="number" id="instant-chk" step="0.01"></div>
+                    <div class="col"><label>Sav $</label><input type="number" id="instant-sav" step="0.01"></div>
                 </div>
-                <input type="text" id="dad-note" placeholder="Reason (Required) *" style="margin-top:5px;">
+                <input type="text" id="dad-note" placeholder="Reason (Required)">
                 <button class="btn-deposit" onclick="multiInstantAdjust()">Apply Adjustments</button>
             </div>
 
@@ -132,32 +130,17 @@
             <div class="admin-section">
                 <button class="btn-logout" style="width:100%;" onclick="changePinPrompt('Dad')">Change Dad PIN</button>
                 <button class="btn-logout" style="width:100%; margin-top:10px;" onclick="adminResetPin()">Reset Linnea PIN (0000)</button>
+                <button class="btn-danger" style="width:100%;" onclick="hardResetHistory()">⚠️ FORCE WIPE CLOUD HISTORY</button>
             </div>
         </div>
     </div>
 </div>
 
 <div id="history-page" class="hidden">
-    <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom:10px; border-bottom: 2px solid #eee; padding-bottom:10px;">
+    <div style="display:flex; justify-content: space-between; align-items:center; border-bottom: 2px solid #eee; padding-bottom:10px;">
         <h3 style="margin:0;">Transaction Vault</h3>
-        <button class="btn-logout" style="background:#ff7675; color:white; padding:5px 12px;" onclick="toggleHistory(false)">Close</button>
+        <button class="btn-logout" onclick="toggleHistory(false)">Close</button>
     </div>
-    
-    <div class="filter-grid">
-        <div class="col"><label>Sort</label>
-            <select id="sort-by" onchange="renderHistory()"><option value="newest">Newest</option><option value="high">Highest $</option></select>
-        </div>
-        <div class="col"><label>User</label>
-            <select id="filter-user" onchange="renderHistory()"><option value="all">Everyone</option><option value="Dad">Dad</option><option value="Linnea">Linnea</option><option value="Bank">Bank</option></select>
-        </div>
-        <div class="col"><label>Account</label>
-            <select id="filter-acct" onchange="renderHistory()"><option value="all">All Accts</option><option value="Chk">Checking</option><option value="Sav">Savings</option></select>
-        </div>
-        <div class="col"><label>Type</label>
-            <select id="filter-type" onchange="renderHistory()"><option value="all">All Types</option><option value="credit">Income</option><option value="debit">Spent</option></select>
-        </div>
-    </div>
-
     <div id="full-ledger-list"></div>
 </div>
 
@@ -173,7 +156,6 @@
             const data = await response.json();
             if (data && data.pins) { 
                 state = data; 
-                // Ensure history is at least an empty array if missing
                 if (!state.history) state.history = [];
                 document.getElementById('status-msg').innerText = "System Ready"; 
                 render(); 
@@ -194,39 +176,18 @@
 
     function toggleHistory(show) {
         document.getElementById('history-page').classList.toggle('hidden', !show);
-        if (show) renderHistory();
-    }
-
-    function renderHistory() {
-        const list = document.getElementById('full-ledger-list');
-        const sortVal = document.getElementById('sort-by').value;
-        const userFilter = document.getElementById('filter-user').value;
-        const acctFilter = document.getElementById('filter-acct').value;
-        const typeFilter = document.getElementById('filter-type').value;
-
-        // CRITICAL FIX: Only look at what is in the current state.history array
-        let logs = (state.history || []).filter(h => {
-            const matchUser = userFilter === 'all' || h.user === userFilter;
-            const isSav = h.note.includes('(Sav)') || h.note.includes('To Sav') || h.note.includes('Interest (Sav)');
-            const isChk = h.note.includes('(Chk)') || h.note.includes('To Chk') || h.note.includes('Interest (Chk)') || (!isSav);
-
-            const matchAcct = acctFilter === 'all' || (acctFilter === 'Sav' && isSav) || (acctFilter === 'Chk' && isChk);
-            const matchType = typeFilter === 'all' || (typeFilter === 'credit' ? h.amt >= 0 : h.amt < 0);
-            return matchUser && matchAcct && matchType;
-        });
-
-        if (sortVal === 'newest') logs = [...logs].reverse();
-        else if (sortVal === 'high') logs.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
-
-        list.innerHTML = logs.length === 0 ? '<p style="text-align:center;color:#999;margin-top:20px;">No transactions found in ledger.</p>' : logs.map(h => {
-            const acct = (h.note.includes('(Sav)') || h.note.includes('To Sav') || h.note.includes('Interest (Sav)')) ? 'SAV' : 'CHK';
-            return `
-            <div class="ledger-row">
-                <div class="acct-tag" style="background:${acct === 'SAV' ? '#d1f2eb' : '#dfe6e9'}">${acct}</div>
-                <div><span class="time-label">${h.date}</span><br><strong>${h.user}</strong>: ${h.note}</div>
-                <div class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}${fmt(Math.abs(h.amt))}</div>
-            </div>`;
-        }).join('');
+        if (show) {
+            const list = document.getElementById('full-ledger-list');
+            list.innerHTML = state.history.slice().reverse().map(h => {
+                const acct = (h.note.includes('(Sav)') || h.note.includes('To Sav') || h.note.includes('Interest (Sav)')) ? 'SAV' : 'CHK';
+                return `
+                <div class="ledger-row">
+                    <div class="acct-tag">${acct}</div>
+                    <div><span class="time-label">${h.date}</span><br><strong>${h.user}</strong>: ${h.note}</div>
+                    <div class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}${fmt(Math.abs(h.amt))}</div>
+                </div>`;
+            }).join('') || '<p style="text-align:center;color:#999;margin-top:20px;">No transactions found in ledger.</p>';
+        }
     }
 
     function record(user, note, amt) {
@@ -253,24 +214,23 @@
         try { await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ ...state, lastAction: action }) }); } catch(e) {}
     }
 
+    function hardResetHistory() {
+        if(confirm("DANGER: This will delete all history in the app and only keep what is in your Sheet. Continue?")) {
+            state.history = [];
+            sync("HARD_WIPE");
+            alert("History Wiped. Refreshing.");
+            location.reload();
+        }
+    }
+
     function multiInstantAdjust() {
         const c = parseFloat(document.getElementById('instant-chk').value) || 0;
         const s = parseFloat(document.getElementById('instant-sav').value) || 0;
         const n = document.getElementById('dad-note').value.trim();
         if ((c === 0 && s === 0) || !n) { alert("Enter amount and a reason!"); return; }
-        
-        if (c !== 0) { 
-            state.balances.checking += c; 
-            record("Dad", n + " (Chk)", c); 
-        }
-        if (s !== 0) { 
-            state.balances.savings += s; 
-            record("Dad", n + " (Sav)", s); 
-        }
-        
-        document.getElementById('instant-chk').value = ''; 
-        document.getElementById('instant-sav').value = ''; 
-        document.getElementById('dad-note').value = '';
+        if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
+        if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
+        document.getElementById('instant-chk').value = ''; document.getElementById('instant-sav').value = ''; document.getElementById('dad-note').value = '';
         sync("Adjustment");
     }
 
@@ -289,10 +249,8 @@
     function applyInterestNow() {
         const cE = state.balances.checking * (state.rates.checking / 100 / 12);
         const sE = state.balances.savings * (state.rates.savings / 100 / 12);
-        state.balances.checking += cE; 
-        state.balances.savings += sE;
-        record("Bank", "Interest (Chk)", cE); 
-        record("Bank", "Interest (Sav)", sE);
+        state.balances.checking += cE; state.balances.savings += sE;
+        record("Bank", "Interest (Chk)", cE); record("Bank", "Interest (Sav)", sE);
         sync("Interest Run"); alert("Interest added.");
     }
 
@@ -300,11 +258,9 @@
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
         if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
-        state.balances.checking -= a; 
-        state.balances.savings += a;
+        state.balances.checking -= a; state.balances.savings += a;
         record("Linnea", "To Sav: " + n, -a);
-        document.getElementById('trans-amt').value = ''; 
-        document.getElementById('trans-note').value = '';
+        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
         sync("Transfer");
     }
 
@@ -312,10 +268,8 @@
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
         if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
-        state.balances.checking -= a; 
-        record("Linnea", n + " (Chk)", -a);
-        document.getElementById('trans-amt').value = ''; 
-        document.getElementById('trans-note').value = '';
+        state.balances.checking -= a; record("Linnea", n + " (Chk)", -a);
+        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
         sync("Withdrawal");
     }
 
