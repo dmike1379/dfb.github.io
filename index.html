@@ -11,7 +11,7 @@
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 10px; margin: 0; touch-action: manipulation; }
         .container { background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 450px; position: relative; }
-        .hidden { display: none; }
+        .hidden { display: none !important; }
         h2, h3 { color: #333; text-align: center; margin-top: 0; }
         .balance-card { background: #f0f4f8; padding: 12px; border-radius: 10px; margin-bottom: 8px; text-align: center; }
         .balance-amt { font-size: 1.6rem; font-weight: bold; color: var(--primary); }
@@ -20,6 +20,7 @@
         button:active { transform: scale(0.98); }
         .btn-primary { background: var(--primary); color: white; }
         .btn-secondary { background: var(--secondary); color: white; }
+        .btn-history { background: #34495e; color: white; margin-bottom: 15px; }
         .btn-deposit { background: #f39c12; color: white; }
         .btn-logout { background: #eee; color: #666; font-size: 0.8rem; width: auto; }
         .admin-section { border-top: 2px dashed #eee; margin-top: 20px; padding-top: 20px; }
@@ -27,7 +28,7 @@
         .col { flex: 1; }
         label { font-size: 0.7rem; color: #666; font-weight: bold; display: block; margin-bottom: 2px; text-transform: uppercase; }
         
-        /* History Page & Advanced Filters */
+        /* History Page */
         #history-page { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 100; padding: 15px; overflow-y: auto; }
         .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f9f9f9; padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #eee; }
         .filter-grid select { margin-bottom: 0; font-size: 12px; padding: 8px; height: 35px; }
@@ -67,7 +68,7 @@
             <div class="balance-amt" id="savings-val">$0.00</div>
         </div>
 
-        <button class="btn-primary" style="background: #34495e; margin-bottom: 15px;" onclick="toggleHistory(true)">📜 View Full History</button>
+        <button class="btn-history" id="vault-btn" onclick="toggleHistory(true)">📜 View Full History</button>
 
         <div id="linnea-controls" class="hidden">
             <h3>Manage Money</h3>
@@ -178,8 +179,13 @@
     }
 
     function toggleHistory(show) {
-        document.getElementById('history-page').classList.toggle('hidden', !show);
-        if (show) renderHistory();
+        const page = document.getElementById('history-page');
+        if (show) {
+            page.classList.remove('hidden');
+            renderHistory();
+        } else {
+            page.classList.add('hidden');
+        }
     }
 
     function renderHistory() {
@@ -189,7 +195,6 @@
         const acctFilter = document.getElementById('filter-acct').value;
         const typeFilter = document.getElementById('filter-type').value;
 
-        // 1. Filter
         let logs = state.history.filter(h => {
             const matchUser = userFilter === 'all' || h.user === userFilter;
             const matchAcct = acctFilter === 'all' || (h.note && h.note.includes(`(${acctFilter})`)) || (h.note && h.note.includes(`To ${acctFilter}`));
@@ -197,11 +202,9 @@
             return matchUser && matchAcct && matchType;
         });
 
-        // 2. Sort
-        if (sortVal === 'newest') logs.reverse();
+        if (sortVal === 'newest') logs = [...logs].reverse();
         else if (sortVal === 'high') logs.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
         else if (sortVal === 'low') logs.sort((a, b) => Math.abs(a.amt) - Math.abs(b.amt));
-        // 'oldest' is the default array order
 
         list.innerHTML = logs.map(h => `
             <div class="ledger-row">
@@ -233,7 +236,18 @@
             document.getElementById('login-screen').classList.add('hidden');
             document.getElementById('main-interface').classList.remove('hidden');
             document.getElementById('welcome-msg').innerText = "Hello, " + u;
-            document.getElementById(u === 'Dad' ? 'dad-controls' : 'linnea-controls').classList.remove('hidden');
+            
+            // Explicitly show the common elements
+            document.getElementById('vault-btn').classList.remove('hidden');
+            
+            // Show user-specific controls
+            if (u === 'Dad') {
+                document.getElementById('dad-controls').classList.remove('hidden');
+                document.getElementById('linnea-controls').classList.add('hidden');
+            } else {
+                document.getElementById('linnea-controls').classList.remove('hidden');
+                document.getElementById('dad-controls').classList.add('hidden');
+            }
             render();
         } else { alert("Incorrect PIN"); }
     }
@@ -255,10 +269,8 @@
         const n = document.getElementById('dad-note').value.trim();
         if (c === 0 && s === 0) { alert("Enter an amount!"); return; }
         if (!n) { alert("Comment Required!"); return; }
-
         if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
         if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
-        
         document.getElementById('instant-chk').value = '';
         document.getElementById('instant-sav').value = '';
         document.getElementById('dad-note').value = '';
