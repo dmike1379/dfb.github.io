@@ -104,7 +104,7 @@
                     <div class="col"><label>Chk $</label><input type="number" id="instant-chk" step="0.01"></div>
                     <div class="col"><label>Sav $</label><input type="number" id="instant-sav" step="0.01"></div>
                 </div>
-                <input type="text" id="dad-note" placeholder="Reason (Required)">
+                <input type="text" id="dad-note" placeholder="Reason (Required) *">
                 <button class="btn-deposit" onclick="multiInstantAdjust()">Apply Adjustments</button>
             </div>
 
@@ -186,7 +186,7 @@
                     <div><span class="time-label">${h.date}</span><br><strong>${h.user}</strong>: ${h.note}</div>
                     <div class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}${fmt(Math.abs(h.amt))}</div>
                 </div>`;
-            }).join('') || '<p style="text-align:center;color:#999;margin-top:20px;">No transactions found in ledger.</p>';
+            }).join('') || '<p style="text-align:center;color:#999;margin-top:20px;">No transactions found.</p>';
         }
     }
 
@@ -215,10 +215,10 @@
     }
 
     function hardResetHistory() {
-        if(confirm("DANGER: This will delete all history in the app and only keep what is in your Sheet. Continue?")) {
+        if(confirm("DANGER: This will delete the app's internal memory and only show what is currently in your Google Sheet. Continue?")) {
             state.history = [];
             sync("HARD_WIPE");
-            alert("History Wiped. Refreshing.");
+            alert("History Cleared. Refreshing app.");
             location.reload();
         }
     }
@@ -227,7 +227,7 @@
         const c = parseFloat(document.getElementById('instant-chk').value) || 0;
         const s = parseFloat(document.getElementById('instant-sav').value) || 0;
         const n = document.getElementById('dad-note').value.trim();
-        if ((c === 0 && s === 0) || !n) { alert("Enter amount and a reason!"); return; }
+        if ((c === 0 && s === 0) || !n) { alert("Enter amount and reason!"); return; }
         if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
         if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
         document.getElementById('instant-chk').value = ''; document.getElementById('instant-sav').value = ''; document.getElementById('dad-note').value = '';
@@ -257,7 +257,7 @@
     function transferToSavings() {
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
+        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount."); return; }
         state.balances.checking -= a; state.balances.savings += a;
         record("Linnea", "To Sav: " + n, -a);
         document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
@@ -267,7 +267,7 @@
     function withdraw() {
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
+        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount."); return; }
         state.balances.checking -= a; record("Linnea", n + " (Chk)", -a);
         document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
         sync("Withdrawal");
