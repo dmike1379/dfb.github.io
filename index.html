@@ -4,143 +4,90 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>DeLeo Family Bank</title>
-    
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#001f3f">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    
     <style>
         :root { --primary: #001f3f; --secondary: #2ecc71; --bg: #f0f2f5; --accent: #f39c12; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 10px; margin: 0; }
-        .container { background: white; padding: 1.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); width: 100%; max-width: 400px; margin-top: 10px; }
-        
-        /* BRANDING STYLES */
+        body { font-family: -apple-system, sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 10px; margin: 0; }
+        .container { background: white; padding: 1.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
         .brand-header { text-align: center; margin-bottom: 20px; }
-        .brand-logo { width: 80px; height: 80px; margin-bottom: 10px; border-radius: 50%; }
-        .brand-banner { width: 100%; border-radius: 10px; margin-bottom: 15px; display: block; }
-
+        .brand-logo { width: 60px; height: 60px; border-radius: 50%; }
         .hidden { display: none; }
-        h2, h3 { color: var(--primary); text-align: center; margin-top: 0; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; }
+        .balance-card { background: linear-gradient(135deg, #001f3f 0%, #003366 100%); color: white; padding: 15px; border-radius: 15px; margin-bottom: 10px; text-align: center; }
+        .balance-amt { font-size: 2rem; font-weight: 800; }
         
-        .balance-card { background: linear-gradient(135deg, #001f3f 0%, #003366 100%); color: white; padding: 20px; border-radius: 15px; margin-bottom: 15px; text-align: center; position: relative; overflow: hidden; }
-        .balance-card::after { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: rgba(255,255,255,0.05); transform: rotate(30deg); }
-        .balance-label { font-size: 0.8rem; text-transform: uppercase; opacity: 0.8; font-weight: 600; }
-        .balance-amt { font-size: 2.2rem; font-weight: 800; margin: 5px 0; }
-        .balance-rate { font-size: 0.7rem; background: rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 10px; }
+        /* LEDGER STYLES */
+        .ledger-container { margin-top: 25px; border-top: 2px solid #eee; padding-top: 15px; }
+        .ledger-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f9f9f9; font-size: 0.85rem; }
+        .ledger-date { color: #888; font-size: 0.7rem; }
+        .ledger-comment { display: block; color: #555; font-style: italic; margin-top: 2px; }
+        .amt-pos { color: #2ecc71; font-weight: bold; }
+        .amt-neg { color: #e74c3c; font-weight: bold; }
 
-        input, select { width: 100%; padding: 14px; border: 2px solid #eee; border-radius: 12px; box-sizing: border-box; margin-bottom: 12px; font-size: 16px; transition: border-color 0.3s; }
-        input:focus { border-color: var(--primary); outline: none; }
-        
-        button { width: 100%; padding: 15px; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; margin-top: 10px; font-size: 16px; transition: transform 0.1s; }
-        button:active { transform: scale(0.98); }
-        
+        input, select { width: 100%; padding: 12px; border: 2px solid #eee; border-radius: 10px; margin-bottom: 10px; font-size: 16px; box-sizing: border-box; }
+        button { width: 100%; padding: 15px; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; margin-top: 8px; font-size: 16px; }
         .btn-primary { background: var(--primary); color: white; }
         .btn-secondary { background: var(--secondary); color: white; }
-        .btn-deposit { background: var(--accent); color: white; }
-        .btn-interest { background: #9b59b6; color: white; }
         .btn-logout { background: #f8f9fa; color: #666; font-size: 0.8rem; width: auto; border: 1px solid #ddd; }
-        
-        .admin-section { border-top: 1px solid #eee; margin-top: 25px; padding-top: 20px; }
-        .row { display: flex; gap: 10px; }
-        .col { flex: 1; }
-        label { font-size: 0.7rem; color: #888; font-weight: 800; display: block; margin-bottom: 5px; text-transform: uppercase; }
     </style>
 </head>
 <body>
 
 <div class="container">
     <div class="brand-header">
-        <img src="images/logo.png" alt="DFB Logo" class="brand-logo" id="app-logo">
-        <h2>DeLeo Family Bank</h2>
+        <img src="images/logo.png" class="brand-logo">
+        <h2 style="margin:5px 0; color:var(--primary)">DeLeo Family Bank</h2>
     </div>
 
     <div id="login-screen">
-        <select id="user-select">
-            <option value="Linnea">Linnea</option>
-            <option value="Dad">Dad</option>
-        </select>
-        <input type="password" id="pin-input" placeholder="Enter 4-Digit PIN" pattern="\[0-9]*" inputmode="numeric" maxlength="4">
-        <button class="btn-primary" onclick="attemptLogin()">Access Vault</button>
+        <select id="user-select"><option>Linnea</option><option>Dad</option></select>
+        <input type="password" id="pin-input" placeholder="PIN" inputmode="numeric" maxlength="4">
+        <button class="btn-primary" onclick="attemptLogin()">Login</button>
     </div>
 
     <div id="main-interface" class="hidden">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <span id="welcome-msg" style="font-weight:800; color: var(--primary)"></span>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <span id="welcome-msg" style="font-weight:bold"></span>
             <button class="btn-logout" onclick="location.reload()">Logout</button>
         </div>
 
-        <img src="images/banner.png" alt="Bank Banner" class="brand-banner">
-
         <div class="balance-card">
-            <div class="balance-label">Checking (Spending)</div>
-            <div class="balance-amt" id="checking-val">$0.00</div>
-            <span class="balance-rate"><span id="int-chk-display">0</span>% APY</span>
+            <small>Checking</small><div class="balance-amt" id="checking-val">$0.00</div>
         </div>
-        
-        <div class="balance-card" style="background: linear-gradient(135deg, #1a1a1a 0%, #333 100%);">
-            <div class="balance-label">Savings (The Vault)</div>
-            <div class="balance-amt" id="savings-val">$0.00</div>
-            <span class="balance-rate"><span id="int-sav-display">0</span>% APY</span>
+        <div class="balance-card" style="background:#333">
+            <small>Savings</small><div class="balance-amt" id="savings-val">$0.00</div>
         </div>
 
-        <div id="linnea-controls" class="hidden">
-            <h3>Transaction Center</h3>
-            <input type="number" id="trans-amt" placeholder="Amount $" inputmode="decimal">
-            <button class="btn-secondary" onclick="transferToSavings()">Deposit to Vault</button>
-            <button class="btn-primary" onclick="withdraw()">Withdraw to Chase Card</button>
-            <button class="btn-logout" style="width:100%; margin-top:20px;" onclick="changePinPrompt('Linnea')">Security: Change PIN</button>
+        <div id="transaction-area">
+            <h3>New Transaction</h3>
+            <input type="number" id="trans-amt" placeholder="Amount $">
+            <input type="text" id="trans-comment" placeholder="What is this for? (e.g. Robux, Chores)">
+            
+            <div id="linnea-controls" class="hidden">
+                <button class="btn-secondary" onclick="executeTrans('save')">Move to Savings</button>
+                <button class="btn-primary" onclick="executeTrans('withdraw')">Withdraw Cash</button>
+            </div>
+
+            <div id="dad-controls" class="hidden">
+                <button class="btn-secondary" onclick="executeTrans('deposit')">Add to Checking</button>
+                <button class="btn-primary" onclick="executeTrans('adjust')">Manual Adjustment</button>
+            </div>
         </div>
 
-        <div id="dad-controls" class="hidden">
-            <div class="admin-section" style="background: #fff9eb; padding: 15px; border-radius: 15px; border: 1px solid #f39c12;">
-                <h3 style="color: #d35400;">Quick Adjust</h3>
-                <div class="row">
-                    <div class="col"><label>Checking +/-</label><input type="number" id="instant-chk"></div>
-                    <div class="col"><label>Savings +/-</label><input type="number" id="instant-sav"></div>
-                </div>
-                <button class="btn-deposit" onclick="multiInstantAdjust()">Update Balances</button>
-            </div>
-
-            <div class="admin-section">
-                <h3>Allowance Config</h3>
-                <div class="row">
-                    <div class="col"><label>Weekly Chk $</label><input type="number" id="auto-chk"></div>
-                    <div class="col"><label>Weekly Sav $</label><input type="number" id="auto-sav"></div>
-                </div>
-                <button class="btn-secondary" onclick="updateAutoDeposit()">Save Weekly Pay</button>
-            </div>
-
-            <div class="admin-section">
-                <h3>Rate Management</h3>
-                <div class="row">
-                    <div class="col"><label>Chk Rate %</label><input type="number" id="set-int-chk"></div>
-                    <div class="col"><label>Sav Rate %</label><input type="number" id="set-int-sav"></div>
-                </div>
-                <button class="btn-primary" onclick="saveRatesOnly()">Update Rates</button>
-                <button class="btn-interest" onclick="applyInterestNow()">Force Interest Apply</button>
-            </div>
-
-            <div class="admin-section">
-                <button class="btn-logout" style="width:100%;" onclick="changePinPrompt('Dad')">Update Admin PIN</button>
-                <button class="btn-logout" style="width:100%; margin-top:10px;" onclick="adminResetPin()">Reset Linnea PIN</button>
-            </div>
+        <div class="ledger-container">
+            <h3 style="text-align:left">Recent Activity</h3>
+            <div id="ledger-list">Loading history...</div>
         </div>
     </div>
 </div>
 
 <script>
     const API_URL = "https://script.google.com/macros/s/AKfycbzOnYiTJYk9ULaUjQDWaj_Fek9Us987ub7C_waMpupM5ppDbuptQJYmdEQr4yESm5oHyA/exec";
+    let state = { pins: { Dad: "1234", Linnea: "0000" }, balances: { checking: 0, savings: 0 }, history: [] };
 
-    let state = {
-        pins: { Dad: "1234", Linnea: "0000" },
-        balances: { checking: 0, savings: 0 },
-        rates: { checking: 0, savings: 0 },
-        autoDeposit: { checking: 0, savings: 0 }
-    };
-
-    async function sync() {
+    async function sync(actionDescription) {
         render();
-        await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(state) });
+        await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ ...state, lastAction: actionDescription }) });
     }
 
     async function load() {
@@ -149,18 +96,23 @@
             const data = await r.json();
             if (data.pins) state = data;
             render();
-        } catch(e) { console.log("Initializing..."); }
+        } catch(e) { document.getElementById('ledger-list').innerText = "No activity yet."; }
     }
 
     function render() {
         document.getElementById('checking-val').innerText = `$${state.balances.checking.toFixed(2)}`;
         document.getElementById('savings-val').innerText = `$${state.balances.savings.toFixed(2)}`;
-        document.getElementById('int-chk-display').innerText = state.rates.checking || 0;
-        document.getElementById('int-sav-display').innerText = state.rates.savings || 0;
-        document.getElementById('set-int-chk').value = state.rates.checking || 0;
-        document.getElementById('set-int-sav').value = state.rates.savings || 0;
-        document.getElementById('auto-chk').value = state.autoDeposit.checking || 0;
-        document.getElementById('auto-sav').value = state.autoDeposit.savings || 0;
+        
+        const list = document.getElementById('ledger-list');
+        list.innerHTML = state.history.slice(-10).reverse().map(h => `
+            <div class="ledger-row">
+                <div>
+                    <span class="ledger-date">${h.date}</span>
+                    <span class="ledger-comment">${h.user}: ${h.note}</span>
+                </div>
+                <span class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}$${Math.abs(h.amt).toFixed(2)}</span>
+            </div>
+        `).join('') || "No transactions yet.";
     }
 
     function attemptLogin() {
@@ -169,84 +121,36 @@
         if (state.pins[u] === p) {
             document.getElementById('login-screen').classList.add('hidden');
             document.getElementById('main-interface').classList.remove('hidden');
-            document.getElementById('welcome-msg').innerText = "Account: " + u;
+            document.getElementById('welcome-msg').innerText = "Hi, " + u;
             document.getElementById(u === 'Dad' ? 'dad-controls' : 'linnea-controls').classList.remove('hidden');
-        } else { alert("Access Denied: Incorrect PIN"); }
+        } else { alert("Wrong PIN"); }
     }
 
-    function multiInstantAdjust() {
-        const sAmt = parseFloat(document.getElementById('instant-sav').value) || 0;
-        const cAmt = parseFloat(document.getElementById('instant-chk').value) || 0;
-        state.balances.savings += sAmt;
-        state.balances.checking += cAmt;
-        document.getElementById('instant-sav').value = '';
-        document.getElementById('instant-chk').value = '';
-        sync();
-        alert(`Success: Adjusted Chk by $${cAmt.toFixed(2)} and Sav by $${sAmt.toFixed(2)}`);
-    }
-
-    function updateAutoDeposit() {
-        state.autoDeposit.checking = parseFloat(document.getElementById('auto-chk').value) || 0;
-        state.autoDeposit.savings = parseFloat(document.getElementById('auto-sav').value) || 0;
-        sync(); alert("Allowance Schedule Updated.");
-    }
-
-    function saveRatesOnly() {
-        state.rates.checking = parseFloat(document.getElementById('set-int-chk').value) || 0;
-        state.rates.savings = parseFloat(document.getElementById('set-int-sav').value) || 0;
-        sync();
-        alert("Rates Updated Successfully.");
-    }
-
-    function applyInterestNow() {
-        const rChk = state.rates.checking || 0;
-        const rSav = state.rates.savings || 0;
-        const earnedChk = state.balances.checking * (rChk / 100 / 12);
-        const earnedSav = state.balances.savings * (rSav / 100 / 12);
-        state.balances.checking += earnedChk;
-        state.balances.savings += earnedSav;
-        sync(); 
-        alert(`Interest Applied! Chk +$${earnedChk.toFixed(2)} | Sav +$${earnedSav.toFixed(2)}`);
-    }
-
-    function transferToSavings() {
+    function executeTrans(type) {
         const amt = parseFloat(document.getElementById('trans-amt').value);
-        if (amt > 0 && state.balances.checking >= amt) {
-            state.balances.checking -= amt;
-            state.balances.savings += amt;
-            document.getElementById('trans-amt').value = '';
-            sync();
-            alert(`Moved $${amt.toFixed(2)} to The Vault!`);
-        } else { 
-            alert("Transfer Failed: Check balance."); 
-        }
-    }
+        const note = document.getElementById('trans-comment').value;
+        const user = document.getElementById('user-select').value;
 
-    function withdraw() {
-        const amt = parseFloat(document.getElementById('trans-amt').value);
-        if (amt > 0 && state.balances.checking >= amt) {
-            state.balances.checking -= amt;
-            document.getElementById('trans-amt').value = '';
-            sync(); 
-            alert(`Withdrawal Approved! $${amt.toFixed(2)} will be moved to your Chase card by Dad.`);
-        } else {
-            alert("Insufficient funds in Checking.");
+        if (!amt || note.length < 4) {
+            alert("Please enter an amount and a detailed comment (min 4 chars).");
+            return;
         }
-    }
 
-    function changePinPrompt(user) {
-        const p = prompt(`New 4-digit PIN for ${user}:`);
-        if (p && p.length === 4 && !isNaN(p)) { 
-            state.pins[user] = p; 
-            sync(); 
-            alert(`Security Updated.`);
-        } else {
-            alert("Invalid PIN. Use 4 digits.");
+        let change = 0;
+        if (type === 'withdraw') {
+            if (state.balances.checking < amt) return alert("Low funds!");
+            state.balances.checking -= amt; change = -amt;
+        } else if (type === 'save') {
+            if (state.balances.checking < amt) return alert("Low funds!");
+            state.balances.checking -= amt; state.balances.savings += amt; change = -amt;
+        } else if (type === 'deposit' || type === 'adjust') {
+            state.balances.checking += amt; change = amt;
         }
-    }
 
-    function adminResetPin() {
-        state.pins.Linnea = "0000"; sync(); alert("User PIN reset to default (0000)");
+        state.history.push({ date: new Date().toLocaleDateString(), user, note, amt: change });
+        document.getElementById('trans-amt').value = '';
+        document.getElementById('trans-comment').value = '';
+        sync(type);
     }
 
     load();
