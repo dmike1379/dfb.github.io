@@ -5,16 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Family Bank</title>
     <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="images/icon.png">
+    <link rel="apple-touch-icon" href="images/icon.png">
     <meta name="theme-color" content="#4a90e2">
     <style>
         :root { --primary: #4a90e2; --secondary: #2ecc71; --bg: #f8f9fa; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 10px; margin: 0; touch-action: manipulation; }
-        .container { background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 450px; position: relative; }
+        .container { background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 450px; position: relative; overflow: hidden; }
         .hidden { display: none !important; }
+        
+        /* Branding Assets */
+        .header-banner { width: calc(100% + 3rem); margin: -1.5rem -1.5rem 15px -1.5rem; display: block; }
+        .logo-container { text-align: center; margin-bottom: 15px; }
+        .bank-logo { width: 100px; height: auto; margin: 0 auto; display: block; }
+        
         h2, h3 { color: #333; text-align: center; margin-top: 0; }
         .balance-card { background: #f0f4f8; padding: 12px; border-radius: 10px; margin-bottom: 8px; text-align: center; }
         .balance-amt { font-size: 1.6rem; font-weight: bold; color: var(--primary); }
+        .rate-badge { font-size: 0.7rem; color: #7f8c8d; font-weight: bold; }
+        
         input, select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 16px; outline: none; background: white; }
         button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 10px; font-size: 16px; transition: transform 0.1s; }
         button:active { transform: scale(0.98); }
@@ -24,17 +34,18 @@
         .btn-deposit { background: #f39c12; color: white; }
         .btn-interest { background: #9b59b6; color: white; }
         .btn-logout { background: #eee; color: #666; font-size: 0.8rem; width: auto; }
+        
         .admin-section { border-top: 2px dashed #eee; margin-top: 20px; padding-top: 20px; }
         .row { display: flex; gap: 8px; }
         .col { flex: 1; }
         label { font-size: 0.7rem; color: #666; font-weight: bold; display: block; margin-bottom: 2px; text-transform: uppercase; }
         
-        /* History Page Table */
+        /* History Vault */
         #history-page { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 100; padding: 15px; overflow-y: auto; }
         .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f9f9f9; padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #eee; }
         .filter-grid select { margin-bottom: 0; font-size: 12px; padding: 8px; height: 35px; }
-        .ledger-row { display: grid; grid-template-columns: 60px 1fr 80px; gap: 10px; padding: 12px 0; border-bottom: 1px solid #f2f2f2; font-size: 0.75rem; align-items: center; }
-        .acct-tag { font-weight: bold; text-align: center; background: #e9ecef; border-radius: 4px; padding: 4px; font-size: 10px; }
+        .ledger-row { display: grid; grid-template-columns: 55px 1fr 85px; gap: 10px; padding: 12px 0; border-bottom: 1px solid #f2f2f2; font-size: 0.75rem; align-items: center; }
+        .acct-tag { font-weight: bold; text-align: center; background: #dfe6e9; border-radius: 4px; padding: 4px; font-size: 9px; }
         .amt-pos { color: #2ecc71; font-weight: bold; text-align: right; }
         .amt-neg { color: #e74c3c; font-weight: bold; text-align: right; }
         .time-label { color: #aaa; font-size: 0.65rem; }
@@ -43,8 +54,13 @@
 <body>
 
 <div class="container">
+    <img src="images/banner.png" class="header-banner" alt="Banner" onerror="this.style.display='none'">
+
     <div id="login-screen">
-        <h2>Family Bank</h2>
+        <div class="logo-container">
+            <img src="images/logo.png" class="bank-logo" alt="Family Bank Logo" onerror="this.style.display='none'">
+            <h2>Family Bank</h2>
+        </div>
         <select id="user-select">
             <option value="Linnea">Linnea</option>
             <option value="Dad">Dad</option>
@@ -63,15 +79,15 @@
         <div class="balance-card">
             <small>Checking Balance</small>
             <div class="balance-amt" id="checking-val">$0.00</div>
-            <small>Rate: <span id="int-chk-display">0</span>%</small>
+            <div class="rate-badge">Annual Rate: <span id="int-chk-display">0</span>%</div>
         </div>
         <div class="balance-card">
             <small>Savings Balance</small>
             <div class="balance-amt" id="savings-val">$0.00</div>
-            <small>Rate: <span id="int-sav-display">0</span>%</small>
+            <div class="rate-badge">Annual Rate: <span id="int-sav-display">0</span>%</div>
         </div>
 
-        <button class="btn-history" id="vault-btn" onclick="toggleHistory(true)">📜 View Full History</button>
+        <button class="btn-history" onclick="toggleHistory(true)">📜 View Full History Vault</button>
 
         <div id="linnea-controls" class="hidden">
             <h3>Manage Money</h3>
@@ -96,8 +112,8 @@
             <div class="admin-section">
                 <h3>Weekly Allowance</h3>
                 <div class="row">
-                    <div class="col"><label>Chk $</label><input type="number" id="auto-chk" step="0.01" onblur="this.value = parseFloat(this.value).toFixed(2)"></div>
-                    <div class="col"><label>Sav $</label><input type="number" id="auto-sav" step="0.01" onblur="this.value = parseFloat(this.value).toFixed(2)"></div>
+                    <div class="col"><label>Chk $</label><input type="number" id="auto-chk" step="0.01"></div>
+                    <div class="col"><label>Sav $</label><input type="number" id="auto-sav" step="0.01"></div>
                 </div>
                 <button class="btn-secondary" onclick="updateAutoDeposit()">Save Allowance</button>
             </div>
@@ -122,7 +138,7 @@
 
 <div id="history-page" class="hidden">
     <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom:10px;">
-        <h3 style="margin:0;">History Vault</h3>
+        <h3 style="margin:0;">Transaction Vault</h3>
         <button class="btn-logout" style="background:#ff7675; color:white; padding:5px 12px;" onclick="toggleHistory(false)">Close</button>
     </div>
     
@@ -131,13 +147,13 @@
             <select id="sort-by" onchange="renderHistory()"><option value="newest">Newest</option><option value="high">Highest $</option></select>
         </div>
         <div class="col"><label>User</label>
-            <select id="filter-user" onchange="renderHistory()"><option value="all">All</option><option value="Dad">Dad</option><option value="Linnea">Linnea</option></select>
+            <select id="filter-user" onchange="renderHistory()"><option value="all">All Users</option><option value="Dad">Dad</option><option value="Linnea">Linnea</option></select>
         </div>
         <div class="col"><label>Account</label>
-            <select id="filter-acct" onchange="renderHistory()"><option value="all">All</option><option value="Chk">Checking</option><option value="Sav">Savings</option></select>
+            <select id="filter-acct" onchange="renderHistory()"><option value="all">Both</option><option value="Chk">Checking</option><option value="Sav">Savings</option></select>
         </div>
         <div class="col"><label>Type</label>
-            <select id="filter-type" onchange="renderHistory()"><option value="all">Both</option><option value="credit">Credit</option><option value="debit">Debit</option></select>
+            <select id="filter-type" onchange="renderHistory()"><option value="all">All</option><option value="credit">Credit</option><option value="debit">Debit</option></select>
         </div>
     </div>
 
@@ -229,7 +245,7 @@
         const c = parseFloat(document.getElementById('instant-chk').value) || 0;
         const s = parseFloat(document.getElementById('instant-sav').value) || 0;
         const n = document.getElementById('dad-note').value.trim();
-        if (c === 0 && s === 0 || !n) { alert("Amount and Comment Required!"); return; }
+        if ((c === 0 && s === 0) || !n) { alert("Amount and Comment Required!"); return; }
         if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
         if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
         document.getElementById('instant-chk').value = ''; document.getElementById('instant-sav').value = ''; document.getElementById('dad-note').value = '';
