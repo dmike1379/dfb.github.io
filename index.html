@@ -45,7 +45,6 @@
         .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f9f9f9; padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #eee; }
         .filter-grid select { margin-bottom: 0; font-size: 11px; padding: 6px; height: 35px; }
         
-        /* 3-COLUMN LEDGER */
         .ledger-row { display: grid; grid-template-columns: 55px 1fr 85px; gap: 10px; padding: 12px 0; border-bottom: 1px solid #f2f2f2; font-size: 0.75rem; align-items: center; }
         .acct-tag { font-weight: bold; text-align: center; background: #dfe6e9; border-radius: 4px; padding: 4px; font-size: 9px; color: #2d3436; }
         .amt-pos { color: #2ecc71; font-weight: bold; text-align: right; }
@@ -56,11 +55,11 @@
 <body>
 
 <div class="container">
-    <img src="images/banner.png" class="header-banner" alt="Family Bank Banner" onerror="this.style.display='none'">
+    <img src="images/banner.png" class="header-banner" alt="Banner" onerror="this.style.display='none'">
 
     <div id="login-screen">
         <div class="logo-container">
-            <img src="images/logo.png" class="bank-logo" alt="Bank Logo" onerror="this.style.display='none'">
+            <img src="images/logo.png" class="bank-logo" alt="Logo" onerror="this.style.display='none'">
             <h2>Family Bank</h2>
         </div>
         <select id="user-select">
@@ -149,7 +148,7 @@
             <select id="sort-by" onchange="renderHistory()"><option value="newest">Newest</option><option value="high">Highest $</option></select>
         </div>
         <div class="col"><label>User</label>
-            <select id="filter-user" onchange="renderHistory()"><option value="all">Everyone</option><option value="Dad">Dad</option><option value="Linnea">Linnea</option></select>
+            <select id="filter-user" onchange="renderHistory()"><option value="all">Everyone</option><option value="Dad">Dad</option><option value="Linnea">Linnea</option><option value="Bank">Bank</option></select>
         </div>
         <div class="col"><label>Account</label>
             <select id="filter-acct" onchange="renderHistory()"><option value="all">All Accts</option><option value="Chk">Checking</option><option value="Sav">Savings</option></select>
@@ -201,7 +200,11 @@
 
         let logs = (state.history || []).filter(h => {
             const matchUser = userFilter === 'all' || h.user === userFilter;
-            const matchAcct = acctFilter === 'all' || (h.note && h.note.includes(`(${acctFilter})`)) || (h.note && h.note.includes(`To ${acctFilter}`));
+            // Robust check for account type in the note
+            const isSav = h.note.includes('(Sav)') || h.note.includes('To Sav') || h.note.includes('Interest (Sav)');
+            const isChk = h.note.includes('(Chk)') || h.note.includes('To Chk') || h.note.includes('Interest (Chk)') || (!isSav); // Default to Chk if not Sav
+
+            const matchAcct = acctFilter === 'all' || (acctFilter === 'Sav' && isSav) || (acctFilter === 'Chk' && isChk);
             const matchType = typeFilter === 'all' || (typeFilter === 'credit' ? h.amt >= 0 : h.amt < 0);
             return matchUser && matchAcct && matchType;
         });
@@ -210,10 +213,10 @@
         else if (sortVal === 'high') logs.sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
 
         list.innerHTML = logs.map(h => {
-            const acct = h.note.includes('(Sav)') || h.note.includes('To Sav') ? 'SAV' : 'CHK';
+            const acct = (h.note.includes('(Sav)') || h.note.includes('To Sav') || h.note.includes('Interest (Sav)')) ? 'SAV' : 'CHK';
             return `
             <div class="ledger-row">
-                <div class="acct-tag">${acct}</div>
+                <div class="acct-tag" style="background:${acct === 'SAV' ? '#d1f2eb' : '#dfe6e9'}">${acct}</div>
                 <div><span class="time-label">${h.date}</span><br><strong>${h.user}</strong>: ${h.note}</div>
                 <div class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}${fmt(Math.abs(h.amt))}</div>
             </div>`;
@@ -249,58 +252,74 @@
         const s = parseFloat(document.getElementById('instant-sav').value) || 0;
         const n = document.getElementById('dad-note').value.trim();
         if ((c === 0 && s === 0) || !n) { alert("Enter amount and a reason!"); return; }
-        if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
-        if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
-        document.getElementById('instant-chk').value = ''; document.getElementById('instant-sav').value = ''; document.getElementById('dad-note').value = '';
+        
+        if (c !== 0) { 
+            state.balances.checking += c; 
+            record("Dad", n + " (Chk)", c); 
+        }
+        if (s !== 0) { 
+            state.balances.savings += s; 
+            record("Dad", n + " (Sav)", s); 
+        }
+        
+        document.getElementById('instant-chk').value = ''; 
+        document.getElementById('instant-sav').value = ''; 
+        document.getElementById('dad-note').value = '';
         sync("Adjustment");
     }
 
     function updateAutoDeposit() {
         state.autoDeposit.checking = parseFloat(document.getElementById('auto-chk').value) || 0;
         state.autoDeposit.savings = parseFloat(document.getElementById('auto-sav').value) || 0;
-        sync("Allowance Update"); alert("Allowance rates updated.");
+        sync("Allowance Update"); alert("Allowance saved.");
     }
 
     function saveRatesOnly() {
         state.rates.checking = parseFloat(document.getElementById('set-int-chk').value) || 0;
         state.rates.savings = parseFloat(document.getElementById('set-int-sav').value) || 0;
-        sync("Rates Update"); alert("Interest rates saved.");
+        sync("Rates Update"); alert("Rates saved.");
     }
 
     function applyInterestNow() {
         const cE = state.balances.checking * (state.rates.checking / 100 / 12);
         const sE = state.balances.savings * (state.rates.savings / 100 / 12);
-        state.balances.checking += cE; state.balances.savings += sE;
-        record("Bank", "Interest (Chk)", cE); record("Bank", "Interest (Sav)", sE);
-        sync("Interest Run"); alert("One month of interest added.");
+        state.balances.checking += cE; 
+        state.balances.savings += sE;
+        record("Bank", "Interest (Chk)", cE); 
+        record("Bank", "Interest (Sav)", sE);
+        sync("Interest Run"); alert("Interest added.");
     }
 
     function transferToSavings() {
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Check your balance and provide a note!"); return; }
-        state.balances.checking -= a; state.balances.savings += a;
+        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
+        state.balances.checking -= a; 
+        state.balances.savings += a;
         record("Linnea", "To Sav: " + n, -a);
-        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
+        document.getElementById('trans-amt').value = ''; 
+        document.getElementById('trans-note').value = '';
         sync("Transfer");
     }
 
     function withdraw() {
         const a = parseFloat(document.getElementById('trans-amt').value);
         const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Check your balance and provide a note!"); return; }
-        state.balances.checking -= a; record("Linnea", n, -a);
-        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
+        if (!n || a <= 0 || state.balances.checking < a) { alert("Invalid amount or note."); return; }
+        state.balances.checking -= a; 
+        record("Linnea", n + " (Chk)", -a);
+        document.getElementById('trans-amt').value = ''; 
+        document.getElementById('trans-note').value = '';
         sync("Withdrawal");
     }
 
     function changePinPrompt(u) {
-        const p = prompt("Enter a new 4-digit PIN:");
-        if (p && p.length === 4) { state.pins[u] = p; sync("PIN Update"); alert("PIN successfully changed."); }
+        const p = prompt("New 4-digit PIN:");
+        if (p && p.length === 4) { state.pins[u] = p; sync("PIN Update"); }
     }
 
     function adminResetPin() {
-        state.pins.Linnea = "0000"; sync("PIN Reset"); alert("Linnea's PIN reset to 0000");
+        state.pins.Linnea = "0000"; sync("PIN Reset"); alert("Linnea reset to 0000");
     }
 
     load();
