@@ -330,7 +330,22 @@
     .split-display { display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: 600; margin-bottom: 4px; }
     .split-display .chk-pct { color: var(--primary); }
     .split-display .sav-pct { color: var(--secondary); }
-    input[type=range] { padding: 0; border: none; border-radius: 0; box-shadow: none; accent-color: var(--primary); margin-bottom: 6px; height: 20px; }
+    /* Range slider — needs its own complete override of the global input rule */
+    input[type=range] {
+      padding: 0 !important;
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      background: transparent !important;
+      accent-color: var(--primary);
+      margin-bottom: 10px !important;
+      height: 36px !important;   /* Tall enough to tap easily on mobile */
+      width: 100%;
+      cursor: pointer;
+      appearance: auto;
+      -webkit-appearance: auto;
+      outline: none;
+    }
 
     /* ================================================================
        [CSS-HISTORY-DRAWER]
@@ -767,12 +782,18 @@
 
         <!-- Payout split slider -->
         <label class="field-label">Payout Split</label>
-        <div class="split-display">
-          <span class="chk-pct">Checking: <span id="split-chk-label">100</span>%</span>
-          <span class="sav-pct">Savings: <span id="split-sav-label">0</span>%</span>
+        <div class="split-display" style="margin-bottom:8px;">
+          <span class="chk-pct" style="font-size:0.85rem;">💵 Checking: <strong><span id="split-chk-label">100</span>%</strong></span>
+          <span class="sav-pct" style="font-size:0.85rem;">🏦 Savings: <strong><span id="split-sav-label">0</span>%</strong></span>
         </div>
         <input type="range" id="chore-split" min="0" max="100" value="100"
-               oninput="updateSplitLabel()">
+               oninput="updateSplitLabel()"
+               style="width:100%; height:36px; cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--muted); margin-top:2px; margin-bottom:8px;">
+          <span>← All Savings</span>
+          <span>50 / 50</span>
+          <span>All Checking →</span>
+        </div>
 
         <!-- Option to let child choose their own split -->
         <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
