@@ -563,6 +563,30 @@
     <button class="btn btn-ghost" style="margin-bottom:4px;"
             onclick="openHistory()">📜 Transaction History</button>
 
+    <!-- Chore waiting banner — shown to child when available chores exist -->
+    <div id="chore-waiting-banner" class="hidden" style="
+      background: linear-gradient(135deg, #fef3c7, #fde68a);
+      border: 1.5px solid var(--warning);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+    " onclick="switchTab('child','chores'); document.getElementById('chore-waiting-banner').classList.add('hidden');">
+      <span style="font-size:1.6rem;">📋</span>
+      <div style="flex:1;">
+        <div style="font-weight:700; font-size:0.9rem; color:#92400e;" id="chore-banner-title">
+          You have chores waiting!
+        </div>
+        <div style="font-size:0.75rem; color:#a16207; margin-top:2px;">
+          Tap here to see your chores and earn money 💰
+        </div>
+      </div>
+      <span style="color:#92400e; font-size:1rem;">›</span>
+    </div>
+
     <!-- ── CHILD PANEL (Linnea / any child role user) ────────── -->
     <div id="child-panel" class="hidden">
 
@@ -1501,6 +1525,7 @@ function attemptLogin() {
   } else {
     document.getElementById("child-panel").classList.remove("hidden");
     renderChildChores();
+    showChoreWaitingBanner();
   }
 
   renderBalances();
@@ -2129,7 +2154,20 @@ function approveChore(choreId) {
       state.balances.savings  += savAmt;
       if (chkAmt > 0) recordTransaction("Bank", "Chore: " + chore.name + " (Chk)", chkAmt);
       if (savAmt > 0) recordTransaction("Bank", "Chore: " + chore.name + " (Sav)", savAmt);
-      chore.status = "approved";
+
+      // Auto-reset: one-time chores are removed; repeating chores go straight
+      // back to available — no action needed from Linnea.
+      if (chore.schedule === "once") {
+        state.chores = state.chores.filter(c => c.id !== choreId);
+      } else {
+        Object.assign(chore, {
+          status:      "available",
+          completedBy: null,
+          completedAt: null,
+          denialNote:  null
+        });
+      }
+
       syncToCloud("Chore Approved");
       showToast("Approved! " + fmt(chore.amount) + " deposited. 🎉", "success");
       renderParentChores();
@@ -2153,8 +2191,17 @@ function denyChore(choreId) {
     confirmText:  "Deny",
     confirmClass: "btn-danger",
     onConfirm:    (reason) => {
-      chore.status     = "denied";
-      chore.denialNote = reason || "";
+      // Auto-reset: one-time chores removed, repeating chores go back to available
+      if (chore.schedule === "once") {
+        state.chores = state.chores.filter(c => c.id !== choreId);
+      } else {
+        Object.assign(chore, {
+          status:      "available",
+          completedBy: null,
+          completedAt: null,
+          denialNote:  null
+        });
+      }
       syncToCloud("Chore Denied");
       showToast("Chore denied.", "error");
       renderParentChores();
@@ -2442,6 +2489,39 @@ function changeAdminPin() {
       showToast("Admin PIN updated.", "success");
     }
   });
+}
+
+
+// ================================================================
+// [CHORE-BANNER] — Chore waiting banner for child login
+// ================================================================
+
+/** Show the amber banner when child has available chores waiting */
+function showChoreWaitingBanner() {
+  const available = state.chores.filter(c =>
+    !c.paused &&
+    c.status !== "pending" &&
+    c.status !== "approved" &&
+    c.status !== "denied" &&
+    (!c.endDate || c.endDate >= todayStr())
+  );
+
+  const banner = document.getElementById("chore-waiting-banner");
+  if (!banner) return;
+
+  if (available.length === 0) {
+    banner.classList.add("hidden");
+    return;
+  }
+
+  const title = document.getElementById("chore-banner-title");
+  if (title) {
+    title.textContent = available.length === 1
+      ? "You have 1 chore waiting!"
+      : "You have " + available.length + " chores waiting!";
+  }
+
+  banner.classList.remove("hidden");
 }
 
 
