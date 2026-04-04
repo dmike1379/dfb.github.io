@@ -509,13 +509,34 @@
       <p class="page-subtitle" id="bank-tagline-display">Your money, your future.</p>
     </div>
 
-    <label class="field-label" for="user-select">Who are you?</label>
-    <select id="user-select"><!-- Populated by JS from state.users --></select>
+    <label class="field-label" for="username-input">Your Name</label>
+    <div style="position:relative;">
+      <input type="text" id="username-input" placeholder="e.g. Linnea or Dad"
+             autocomplete="off" autocapitalize="words" spellcheck="false"
+             style="padding-right:70px;">
+      <button id="not-you-btn" onclick="clearRememberedUser()" class="hidden" style="
+        position:absolute; right:10px; top:50%; transform:translateY(-50%);
+        background:none; border:none; color:var(--primary); font-size:0.72rem;
+        font-family:var(--font); font-weight:600; cursor:pointer; padding:4px 0;
+        width:auto; margin:0;
+      ">Not you?</button>
+    </div>
 
-    <label class="field-label" for="pin-input">Enter your PIN</label>
+    <label class="field-label" for="pin-input">PIN</label>
     <input type="password" id="pin-input" placeholder="••••"
            maxlength="4" inputmode="numeric" autocomplete="off">
     <div class="field-msg" id="pin-error"></div>
+
+    <!-- Remember Me -->
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+      <input type="checkbox" id="remember-me"
+             style="width:auto;margin:0;padding:0;border:none;box-shadow:none;accent-color:var(--primary);"
+             onchange="onRememberMeChange()">
+      <label for="remember-me"
+             style="font-size:0.78rem; color:var(--muted); font-weight:500; margin:0; cursor:pointer;">
+        Remember me on this device
+      </label>
+    </div>
 
     <button class="btn btn-primary" onclick="attemptLogin()">🔐 Log In</button>
 
@@ -1043,17 +1064,21 @@
 ============================================================ -->
 <script>
 
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE — LINE 1  ▼▼▼    ║
+// ╚══════════════════════════════════════════════════════════════════╝
+const API_URL = "https://script.google.com/macros/s/AKfycbyRtRf2M1GGsPhgcc5IH_w0GztN8Zo5qvcXmeFk6yJ9fTVWxInR5mssqOKki8XeltJJkA/exec";
+// ╔══════════════════════════════════════════════════════════════════╗
+// ║  ▲▲▲  THAT'S THE ONLY LINE YOU NEED TO CHANGE ON REDEPLOY ▲▲▲ ║
+// ╚══════════════════════════════════════════════════════════════════╝
+
+
 // ================================================================
-// [CONFIG] — One place to configure the app before deployment.
+// [CONFIG] — App configuration and default branding.
 // The Admin panel writes new values into state.config and syncs
 // them to the Google Sheet, overriding these defaults at runtime.
+// API_URL is defined above and used throughout — do not redefine it.
 // ================================================================
-
-/**
- * ▼ REQUIRED: Update this URL every time you redeploy the Apps Script.
- *   Go to Apps Script → Deploy → Manage Deployments → copy Web App URL.
- */
-const API_URL = "https://script.google.com/macros/s/AKfycbyRtRf2M1GGsPhgcc5IH_w0GztN8Zo5qvcXmeFk6yJ9fTVWxInR5mssqOKki8XeltJJkA/exec";
 
 /**
  * Default branding and settings.
@@ -1326,8 +1351,8 @@ async function loadFromCloud() {
 
       pendingTransactions = [];
       applyBranding();
-      populateUserDropdown();
       populateHistoryUserFilter();
+      restoreRememberedUser();
       setStatus("ready", "Connected ✓");
     } else {
       setStatus("error", "Unexpected data — check API URL in [CONFIG]");
@@ -1421,16 +1446,12 @@ function renderBalances() {
   document.getElementById("rate-sav-display").textContent = state.rates.savings  || 0;
 }
 
-/** Build the user login dropdown from state.users */
+/** populateUserDropdown — kept for backwards compat but login now uses text field */
 function populateUserDropdown() {
-  const sel = document.getElementById("user-select");
-  sel.innerHTML = "";
-  // Exclude any admin-role users from the main login dropdown
-  state.users.filter(u => state.roles[u] !== "admin").forEach(u => {
-    const opt = document.createElement("option");
-    opt.value = u; opt.textContent = u;
-    sel.appendChild(opt);
-  });
+  // Login screen now uses a free-text name field + Remember Me.
+  // This function still runs on load to populate the history user filter.
+  populateHistoryUserFilter();
+  restoreRememberedUser();
 }
 
 /** Add per-user options to the History filter dropdown */
@@ -1490,20 +1511,29 @@ function switchTab(panelPrefix, tabName) {
 // [LOGIN] — Login screen and PIN management
 // ================================================================
 
-/** Attempt to log in with the selected user and entered PIN */
+/** Attempt to log in with the typed username and entered PIN */
 function attemptLogin() {
   clearFieldError("pin-input", "pin-error");
-  const user = document.getElementById("user-select").value;
-  const pin  = document.getElementById("pin-input").value;
+  const userRaw = document.getElementById("username-input").value.trim();
+  const pin     = document.getElementById("pin-input").value;
 
-  if (!state.pins[user]) {
-    showFieldError("pin-input", "pin-error", "User not found.");
+  // Case-insensitive name match against known users
+  const user = state.users.find(u => u.toLowerCase() === userRaw.toLowerCase());
+
+  if (!user || !state.pins[user]) {
+    showFieldError("pin-input", "pin-error",
+      "Name not recognised. Check spelling — it's case-insensitive.");
     return;
   }
   if (state.pins[user] !== pin) {
     showFieldError("pin-input", "pin-error", "Incorrect PIN. Please try again.");
     document.getElementById("pin-input").value = "";
     return;
+  }
+
+  // Save to localStorage if Remember Me is checked
+  if (document.getElementById("remember-me").checked) {
+    try { localStorage.setItem("fb_remembered_user", user); } catch(e) {}
   }
 
   currentUser = user;
@@ -2493,6 +2523,67 @@ function changeAdminPin() {
 
 
 // ================================================================
+// [REMEMBER-ME] — localStorage-based name recall per device
+// ================================================================
+
+/**
+ * On load, check localStorage for a saved username.
+ * If found, pre-fill the name field and show "Not you?" link.
+ * The PIN is NEVER saved — always typed fresh.
+ */
+function restoreRememberedUser() {
+  try {
+    const saved = localStorage.getItem("fb_remembered_user");
+    if (!saved) return;
+
+    // Only restore if the saved name is still a valid user
+    const stillValid = state.users.find(u => u.toLowerCase() === saved.toLowerCase());
+    if (!stillValid) {
+      localStorage.removeItem("fb_remembered_user");
+      return;
+    }
+
+    const nameInput = document.getElementById("username-input");
+    const rememberChk = document.getElementById("remember-me");
+    const notYouBtn = document.getElementById("not-you-btn");
+
+    if (nameInput)    nameInput.value   = stillValid;
+    if (rememberChk)  rememberChk.checked = true;
+    if (notYouBtn)    notYouBtn.classList.remove("hidden");
+
+    // Focus PIN field directly since name is already filled
+    setTimeout(() => {
+      const pinInput = document.getElementById("pin-input");
+      if (pinInput) pinInput.focus();
+    }, 400);
+
+  } catch(e) {
+    // localStorage not available (private mode, etc.) — fail silently
+  }
+}
+
+/** Called when the name input changes — hide "Not you?" if user edits manually */
+function onRememberMeChange() {
+  // If they uncheck remember me, clear the saved value immediately
+  if (!document.getElementById("remember-me").checked) {
+    try { localStorage.removeItem("fb_remembered_user"); } catch(e) {}
+    document.getElementById("not-you-btn").classList.add("hidden");
+  }
+}
+
+/** Clear the remembered user and reset the login form */
+function clearRememberedUser() {
+  try { localStorage.removeItem("fb_remembered_user"); } catch(e) {}
+  const nameInput  = document.getElementById("username-input");
+  const rememberChk = document.getElementById("remember-me");
+  const notYouBtn  = document.getElementById("not-you-btn");
+  if (nameInput)   { nameInput.value = ""; nameInput.focus(); }
+  if (rememberChk) rememberChk.checked = false;
+  if (notYouBtn)   notYouBtn.classList.add("hidden");
+}
+
+
+// ================================================================
 // [CHORE-BANNER] — Chore waiting banner for child login
 // ================================================================
 
@@ -2535,7 +2626,12 @@ populateMonthlyDays();
 /** Set initial split label */
 updateSplitLabel();
 
-/** Enter key submits login */
+/** Enter on name field moves focus to PIN */
+document.getElementById("username-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("pin-input").focus();
+});
+
+/** Enter on PIN field submits login */
 document.getElementById("pin-input").addEventListener("keydown", e => {
   if (e.key === "Enter") attemptLogin();
 });
