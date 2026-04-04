@@ -2340,7 +2340,7 @@ function editChore(choreId) {
   const formTitle = document.getElementById("chore-form-title");
   if (formTitle) formTitle.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  showToast("Editing "" + chore.name + "" — make changes and tap Save.", "info", 4000);
+  showToast('Editing "' + chore.name + '" — make changes and tap Save.', 'info', 4000);
 }
 
 /** Cancel editing and reset form back to create mode */
