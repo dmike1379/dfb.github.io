@@ -1,314 +1,2421 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Family Bank</title>
-    <link rel="icon" type="image/png" href="images/icon.png">
-    <link rel="apple-touch-icon" href="images/icon.png">
-    <meta name="theme-color" content="#4a90e2">
-    <style>
-        :root { --primary: #4a90e2; --secondary: #2ecc71; --bg: #f8f9fa; }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { font-family: sans-serif; background: var(--bg); display: flex; justify-content: center; padding: 10px; margin: 0; touch-action: manipulation; }
-        .container { background: white; padding: 1.5rem; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 450px; position: relative; overflow: hidden; }
-        .hidden { display: none !important; }
-        
-        .header-banner { width: calc(100% + 3rem); margin: -1.5rem -1.5rem 15px -1.5rem; display: block; border-bottom: 2px solid #eee; }
-        .logo-container { text-align: center; margin-bottom: 15px; }
-        .bank-logo { width: 100px; height: auto; margin: 0 auto; display: block; }
-        
-        h2, h3 { color: #333; text-align: center; margin-top: 0; }
-        .balance-card { background: #f0f4f8; padding: 12px; border-radius: 10px; margin-bottom: 8px; text-align: center; border: 1px solid #e1e8ed; }
-        .balance-amt { font-size: 1.6rem; font-weight: bold; color: var(--primary); }
-        .rate-badge { font-size: 0.7rem; color: #7f8c8d; font-weight: bold; margin-top: 4px; }
-        
-        input, select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; font-size: 16px; outline: none; background: white; }
-        button { width: 100%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; margin-top: 10px; font-size: 16px; transition: transform 0.1s; }
-        button:active { transform: scale(0.98); }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-secondary { background: var(--secondary); color: white; }
-        .btn-history { background: #34495e; color: white; margin-bottom: 15px; }
-        .btn-deposit { background: #f39c12; color: white; }
-        .btn-interest { background: #9b59b6; color: white; }
-        .btn-logout { background: #eee; color: #666; font-size: 0.8rem; width: auto; }
-        
-        .admin-section { border-top: 2px dashed #eee; margin-top: 20px; padding-top: 20px; }
-        .row { display: flex; gap: 8px; }
-        .col { flex: 1; }
-        label { font-size: 0.7rem; color: #666; font-weight: bold; display: block; margin-bottom: 2px; text-transform: uppercase; }
-        
-        #history-page { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 1000; padding: 15px; overflow-y: auto; }
-        .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f9f9f9; padding: 10px; border-radius: 10px; margin-bottom: 15px; border: 1px solid #eee; }
-        .filter-grid select { margin-bottom: 0; font-size: 11px; padding: 6px; height: 35px; }
-        
-        .ledger-row { display: grid; grid-template-columns: 55px 1fr 85px; gap: 10px; padding: 12px 0; border-bottom: 1px solid #f2f2f2; font-size: 0.75rem; align-items: center; }
-        .acct-tag { font-weight: bold; text-align: center; background: #dfe6e9; border-radius: 4px; padding: 4px; font-size: 9px; color: #2d3436; }
-        .amt-pos { color: #2ecc71; font-weight: bold; text-align: right; }
-        .amt-neg { color: #e74c3c; font-weight: bold; text-align: right; }
-        .time-label { color: #aaa; font-size: 0.6rem; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║              FAMILY BANK v2 — index.html                        ║
+  ║              Frontend Single-Page Application                    ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║  QUICK NAVIGATION (search these labels to jump to each section) ║
+  ║                                                                  ║
+  ║  [CONFIG]     → Runtime config & API URL (~line 640)            ║
+  ║  [STATE]      → App state object (~line 675)                    ║
+  ║  [UTILS]      → Formatting helpers (~line 695)                  ║
+  ║  [MODAL]      → In-app modal/dialog system (~line 720)          ║
+  ║  [TOAST]      → Slide-in notification banner (~line 800)        ║
+  ║  [LOAD]       → Data loading & cloud sync (~line 820)           ║
+  ║  [RENDER]     → Balance display & UI updates (~line 890)        ║
+  ║  [LOGIN]      → Login & PIN logic (~line 960)                   ║
+  ║  [LINNEA]     → Kid actions: withdraw, transfer (~line 1030)    ║
+  ║  [DAD]        → Parent actions: adjust, rates, allowance        ║
+  ║                 (~line 1110)                                     ║
+  ║  [CHORES]     → Full chore system (~line 1210)                  ║
+  ║  [HISTORY]    → Transaction history & filters (~line 1430)      ║
+  ║  [ADMIN]      → Admin panel: branding, users (~line 1490)       ║
+  ║  [INIT]       → App startup (~line 1640)                        ║
+  ╚══════════════════════════════════════════════════════════════════╝
+  -->
+
+  <title>Family Bank</title>
+  <link rel="icon" type="image/png" href="images/icon.png">
+  <link rel="apple-touch-icon" href="images/icon.png">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    /* ================================================================
+       [CSS-VARS] DESIGN TOKENS
+       All colors are set here and controlled by the Admin panel at
+       runtime via document.documentElement.style.setProperty().
+       To change defaults before first deploy, edit the values below.
+    ================================================================ */
+    :root {
+      --primary:        #2563eb;   /* Brand blue  — buttons, checking card        */
+      --primary-dark:   #1d4ed8;   /* Darker shade for hover/gradient             */
+      --secondary:      #10b981;   /* Green       — savings card, deposits        */
+      --secondary-dark: #059669;   /* Darker shade for hover/gradient             */
+      --danger:         #ef4444;   /* Red         — withdrawals, errors, denial   */
+      --warning:        #f59e0b;   /* Amber       — adjustments, pending chores   */
+      --purple:         #8b5cf6;   /* Purple      — interest actions              */
+      --bg:             #f1f5f9;   /* Page background                             */
+      --surface:        #ffffff;   /* Card / container background                 */
+      --border:         #e2e8f0;   /* Subtle dividers                             */
+      --text:           #1e293b;   /* Primary text                                */
+      --muted:          #64748b;   /* Labels, secondary text                      */
+      --radius:         14px;      /* Default border radius                       */
+      --shadow:         0 4px 32px rgba(0,0,0,0.09);
+      --font:           'DM Sans', sans-serif;
+      --font-mono:      'DM Mono', monospace;
+    }
+
+    /* ================================================================
+       [CSS-RESET]
+    ================================================================ */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      margin: 0;
+      padding: 10px 8px 60px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      touch-action: manipulation;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ================================================================
+       [CSS-CONTAINER]
+    ================================================================ */
+    .app-card {
+      width: 100%;
+      max-width: 460px;
+      background: var(--surface);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .banner-img {
+      width: 100%;
+      display: block;
+      max-height: 130px;
+      object-fit: cover;
+      border-bottom: 1px solid var(--border);
+    }
+    .screen { padding: 22px 20px; }
+    .hidden { display: none !important; }
+
+    /* ================================================================
+       [CSS-TYPOGRAPHY]
+    ================================================================ */
+    h2 { font-size: 1.35rem; font-weight: 700; margin: 0 0 4px; text-align: center; color: var(--text); }
+    h3 { font-size: 0.95rem; font-weight: 700; margin: 0 0 14px; color: var(--text); }
+    .page-subtitle { font-size: 0.78rem; color: var(--muted); text-align: center; margin: 0 0 22px; }
+    .field-label {
+      display: block;
+      font-size: 0.67rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 5px;
+    }
+
+    /* ================================================================
+       [CSS-LOGO]
+    ================================================================ */
+    .logo-wrap { text-align: center; padding: 6px 0 14px; }
+    .logo-img { width: 78px; height: 78px; object-fit: contain; display: block; margin: 0 auto 10px; border-radius: 16px; }
+
+    /* ================================================================
+       [CSS-BALANCE-CARDS]
+    ================================================================ */
+    .balance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+    .balance-card {
+      border-radius: var(--radius);
+      padding: 16px 12px;
+      color: white;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .balance-card::before {
+      content: '';
+      position: absolute;
+      top: -40%; left: -20%;
+      width: 60%; height: 140%;
+      background: rgba(255,255,255,0.12);
+      transform: rotate(-20deg);
+      pointer-events: none;
+    }
+    .balance-card.checking  { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); }
+    .balance-card.savings   { background: linear-gradient(135deg, var(--secondary) 0%, var(--secondary-dark) 100%); }
+    .bc-label  { font-size: 0.62rem; font-weight: 600; opacity: 0.85; letter-spacing: 0.06em; text-transform: uppercase; }
+    .bc-amount { font-size: 1.45rem; font-weight: 700; font-family: var(--font-mono); margin: 5px 0 3px; letter-spacing: -0.02em; }
+    .bc-rate   { font-size: 0.58rem; opacity: 0.78; font-weight: 500; }
+
+    /* ================================================================
+       [CSS-DIVIDERS]
+    ================================================================ */
+    .section-block { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+
+    /* ================================================================
+       [CSS-FORMS]
+    ================================================================ */
+    input, select, textarea {
+      width: 100%;
+      padding: 11px 13px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 15px;
+      font-family: var(--font);
+      color: var(--text);
+      background: var(--surface);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      margin-bottom: 10px;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+    }
+    input.input-error { border-color: var(--danger) !important; box-shadow: 0 0 0 3px rgba(239,68,68,0.1) !important; }
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 32px;
+    }
+    textarea { resize: vertical; min-height: 70px; }
+
+    /* Inline validation messages below form fields */
+    .field-msg { font-size: 0.73rem; font-weight: 500; margin: -7px 0 10px; padding: 0 2px; display: none; }
+    .field-msg.error   { display: block; color: var(--danger); }
+    .field-msg.success { display: block; color: var(--secondary); }
+    .field-msg.info    { display: block; color: var(--primary); }
+
+    .row { display: flex; gap: 10px; }
+    .col { flex: 1; min-width: 0; }
+
+    /* ================================================================
+       [CSS-BUTTONS]
+    ================================================================ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      width: 100%;
+      padding: 13px 16px;
+      border: none;
+      border-radius: 10px;
+      font-family: var(--font);
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, filter 0.15s;
+      margin-top: 6px;
+      letter-spacing: 0.01em;
+    }
+    .btn:active { transform: scale(0.975); filter: brightness(0.95); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary   { background: var(--primary);   color: #fff; }
+    .btn-secondary { background: var(--secondary); color: #fff; }
+    .btn-warning   { background: var(--warning);   color: #fff; }
+    .btn-danger    { background: var(--danger);    color: #fff; }
+    .btn-purple    { background: var(--purple);    color: #fff; }
+    .btn-ghost     { background: var(--bg);        color: var(--muted); }
+    .btn-outline   { background: transparent; border: 1.5px solid var(--border); color: var(--text); }
+    .btn-sm        { padding: 8px 14px; font-size: 0.78rem; width: auto; margin-top: 0; border-radius: 8px; }
+    .btn-full-ghost {
+      background: none; border: none; color: var(--muted);
+      font-size: 0.8rem; font-family: var(--font);
+      cursor: pointer; width: 100%; margin-top: 8px;
+      padding: 10px; border-radius: 8px; font-weight: 600;
+    }
+    .btn-full-ghost:active { background: var(--bg); }
+
+    /* Top bar: welcome message + logout */
+    .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .welcome-text { font-weight: 700; font-size: 1rem; }
+    .btn-logout {
+      background: var(--bg); border: none; color: var(--muted);
+      font-size: 0.75rem; font-family: var(--font); font-weight: 600;
+      cursor: pointer; padding: 7px 12px; border-radius: 8px;
+    }
+
+    /* ================================================================
+       [CSS-TABS]
+    ================================================================ */
+    .tab-bar {
+      display: flex;
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 4px;
+      gap: 3px;
+      margin: 14px 0 18px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 9px 4px;
+      border: none;
+      border-radius: 7px;
+      font-family: var(--font);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: transparent;
+      color: var(--muted);
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .tab-btn.active { background: var(--surface); color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Notification badge on tab buttons */
+    .notif-badge {
+      background: var(--danger); color: white;
+      font-size: 0.58rem; font-weight: 700;
+      padding: 2px 5px; border-radius: 10px;
+      margin-left: 3px; display: inline-block;
+    }
+
+    /* ================================================================
+       [CSS-CHORE-CARDS]
+    ================================================================ */
+    .chore-card {
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .chore-card.state-pending  { border-color: var(--warning);   background: #fffbeb; }
+    .chore-card.state-approved { border-color: var(--secondary); background: #f0fdf4; }
+    .chore-card.state-denied   { border-color: var(--danger);    background: #fef2f2; opacity: 0.75; }
+
+    .chore-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+    .chore-name   { font-weight: 700; font-size: 0.9rem; }
+    .chore-amount { font-family: var(--font-mono); font-weight: 600; font-size: 0.9rem; color: var(--secondary); }
+    .chore-meta   { font-size: 0.7rem; color: var(--muted); margin-bottom: 10px; line-height: 1.6; }
+
+    .status-badge { display: inline-block; font-size: 0.63rem; font-weight: 700; padding: 3px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge-available { background: #dbeafe; color: #1d4ed8; }
+    .badge-pending   { background: #fef3c7; color: #92400e; }
+    .badge-approved  { background: #d1fae5; color: #065f46; }
+    .badge-denied    { background: #fee2e2; color: #991b1b; }
+    .badge-paused    { background: var(--bg); color: var(--muted); }
+
+    .approval-banner {
+      background: linear-gradient(135deg, #fffbeb, #fef3c7);
+      border: 1.5px solid var(--warning);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 16px;
+    }
+    .approval-banner h3 { color: #92400e; }
+
+    /* Split slider */
+    .split-display { display: flex; justify-content: space-between; font-size: 0.75rem; font-weight: 600; margin-bottom: 4px; }
+    .split-display .chk-pct { color: var(--primary); }
+    .split-display .sav-pct { color: var(--secondary); }
+    input[type=range] { padding: 0; border: none; border-radius: 0; box-shadow: none; accent-color: var(--primary); margin-bottom: 6px; height: 20px; }
+
+    /* ================================================================
+       [CSS-HISTORY-DRAWER]
+    ================================================================ */
+    .history-drawer {
+      position: fixed; inset: 0;
+      background: var(--surface);
+      z-index: 300;
+      overflow-y: auto;
+      padding: 16px;
+      transform: translateY(100%);
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .history-drawer.open { transform: translateY(0); }
+    .drawer-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-bottom: 14px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
+    }
+    .filter-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      background: var(--bg); padding: 10px; border-radius: 10px; margin-bottom: 14px;
+    }
+    .filter-grid select { margin-bottom: 0; font-size: 11px; padding: 7px 28px 7px 8px; }
+    .filter-grid .field-label { font-size: 0.6rem; margin-bottom: 3px; }
+
+    /* Running totals bar */
+    .summary-bar { display: flex; gap: 8px; margin-bottom: 14px; }
+    .summary-chip { flex: 1; background: var(--bg); border-radius: 10px; padding: 10px; text-align: center; font-size: 0.63rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+    .chip-val { display: block; font-size: 0.92rem; font-family: var(--font-mono); font-weight: 700; margin-top: 3px; }
+    .chip-val.pos { color: var(--secondary); }
+    .chip-val.neg { color: var(--danger); }
+
+    /* Ledger rows */
+    .ledger-row { display: grid; grid-template-columns: 40px 1fr 90px; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); align-items: center; }
+    .acct-pill { font-size: 8px; font-weight: 700; text-align: center; padding: 5px 4px; border-radius: 6px; background: var(--bg); color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+    .acct-pill.sav   { background: #d1fae5; color: #065f46; }
+    .acct-pill.chore { background: #fef3c7; color: #92400e; }
+    .ledger-date { font-size: 0.6rem; color: var(--muted); display: block; margin-bottom: 1px; }
+    .ledger-who  { font-weight: 600; font-size: 0.78rem; }
+    .ledger-note { font-size: 0.72rem; color: var(--muted); }
+    .ledger-amt  { font-family: var(--font-mono); font-weight: 700; font-size: 0.85rem; text-align: right; }
+    .ledger-amt.pos { color: var(--secondary); }
+    .ledger-amt.neg { color: var(--danger); }
+
+    /* ================================================================
+       [CSS-MODAL] In-app confirmation dialog
+    ================================================================ */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      z-index: 500;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding: 0 8px 8px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      backdrop-filter: blur(2px);
+    }
+    .modal-overlay.open { opacity: 1; pointer-events: all; }
+    .modal-box {
+      background: var(--surface);
+      border-radius: 20px;
+      padding: 24px 20px 20px;
+      width: 100%; max-width: 440px;
+      transform: translateY(20px);
+      transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .modal-overlay.open .modal-box { transform: translateY(0); }
+    .modal-icon  { font-size: 2rem; text-align: center; margin-bottom: 10px; display: block; }
+    .modal-title { font-size: 1.05rem; font-weight: 700; text-align: center; margin: 0 0 6px; }
+    .modal-body  { font-size: 0.85rem; color: var(--muted); text-align: center; margin: 0 0 16px; line-height: 1.55; }
+    .modal-detail {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      font-size: 0.82rem;
+      line-height: 1.8;
+    }
+    .detail-row { display: flex; justify-content: space-between; }
+    .detail-label { color: var(--muted); }
+    .detail-val   { font-weight: 600; font-family: var(--font-mono); }
+    .modal-btns   { display: flex; gap: 10px; }
+    .modal-btns .btn { flex: 1; margin-top: 0; }
+
+    /* ================================================================
+       [CSS-TOAST] Slide-in notification
+    ================================================================ */
+    .toast {
+      position: fixed;
+      top: 16px; left: 50%;
+      transform: translateX(-50%) translateY(-80px);
+      background: var(--text); color: white;
+      padding: 12px 20px;
+      border-radius: 30px;
+      font-size: 0.82rem; font-weight: 600;
+      z-index: 999;
+      transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+      white-space: nowrap;
+      max-width: 90vw;
+      text-align: center;
+    }
+    .toast.show    { transform: translateX(-50%) translateY(0); }
+    .toast.success { background: var(--secondary); }
+    .toast.error   { background: var(--danger); }
+    .toast.info    { background: var(--primary); }
+
+    /* ================================================================
+       [CSS-STATUS] Connection status pill
+    ================================================================ */
+    .status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; color: var(--muted); font-weight: 500; padding: 6px 12px; background: var(--bg); border-radius: 20px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .status-dot.ready   { background: var(--secondary); }
+    .status-dot.error   { background: var(--danger); }
+    .status-dot.loading { background: var(--warning); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ================================================================
+       [CSS-ADMIN] Admin drawer
+    ================================================================ */
+    .admin-link-wrap { text-align: center; margin-top: 16px; }
+    .admin-link { font-size: 0.72rem; color: var(--primary); text-decoration: underline; cursor: pointer; background: none; border: none; font-family: var(--font); }
+
+    .admin-drawer {
+      position: fixed; inset: 0;
+      background: var(--surface);
+      z-index: 400;
+      overflow-y: auto;
+      padding: 16px;
+      transform: translateY(100%);
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .admin-drawer.open { transform: translateY(0); }
+
+    /* User rows in admin panel */
+    .user-row { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--bg); border-radius: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+    .user-role-badge { font-size: 0.62rem; font-weight: 700; padding: 3px 8px; border-radius: 20px; text-transform: uppercase; }
+    .role-parent { background: #dbeafe; color: #1d4ed8; }
+    .role-child  { background: #d1fae5; color: #065f46; }
+
+    /* Info / warning callout boxes */
+    .info-box    { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 12px 14px; font-size: 0.78rem; color: #1e40af; line-height: 1.55; margin-bottom: 12px; }
+    .warning-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 14px; font-size: 0.78rem; color: #92400e; line-height: 1.55; margin-bottom: 12px; }
+
+    /* Empty state */
+    .empty-state { text-align: center; color: var(--muted); font-size: 0.82rem; padding: 28px 0; }
+    .empty-icon  { font-size: 2rem; display: block; margin-bottom: 8px; }
+  </style>
 </head>
 <body>
 
-<div class="container">
-    <img src="images/banner.png" class="header-banner" onerror="this.style.display='none'">
+<!-- ── TOAST NOTIFICATION (slides in from top) ───────────────── -->
+<div class="toast" id="toast"></div>
 
-    <div id="login-screen">
-        <div class="logo-container">
-            <img src="images/logo.png" class="bank-logo" onerror="this.style.display='none'">
-            <h2>Family Bank</h2>
-        </div>
-        <select id="user-select"><option value="Linnea">Linnea</option><option value="Dad">Dad</option></select>
-        <input type="password" id="pin-input" placeholder="Enter PIN" maxlength="4" inputmode="numeric">
-        <button class="btn-primary" onclick="attemptLogin()">Login</button>
-        <p id="status-msg" style="text-align:center; font-size:10px; color:#999; margin-top:10px;">Connecting...</p>
+<!-- ── MAIN APP CARD ─────────────────────────────────────────── -->
+<div class="app-card">
+
+  <!-- Banner image — URL controlled by Admin panel -->
+  <img src="images/banner.png" class="banner-img" id="banner-img"
+       onerror="this.style.display='none'" alt="">
+
+  <!-- ============================================================
+       LOGIN SCREEN
+       Shown before any user is authenticated.
+  ============================================================ -->
+  <div class="screen" id="login-screen">
+
+    <div class="logo-wrap">
+      <img src="images/logo.png" class="logo-img" id="logo-img"
+           onerror="this.style.display='none'" alt="">
+      <h2 id="bank-name-display">Family Bank</h2>
+      <p class="page-subtitle" id="bank-tagline-display">Your money, your future.</p>
     </div>
 
-    <div id="main-interface" class="hidden">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <span id="welcome-msg" style="font-weight:bold"></span>
-            <button class="btn-logout" onclick="location.reload()">Logout</button>
-        </div>
+    <label class="field-label" for="user-select">Who are you?</label>
+    <select id="user-select"><!-- Populated by JS from state.users --></select>
 
-        <div class="balance-card">
-            <small>Checking Balance</small>
-            <div class="balance-amt" id="checking-val">$0.00</div>
-            <div class="rate-badge">Rate: <span id="int-chk-display">0</span>%</div>
-        </div>
-        <div class="balance-card">
-            <small>Savings Balance</small>
-            <div class="balance-amt" id="savings-val">$0.00</div>
-            <div class="rate-badge">Rate: <span id="int-sav-display">0</span>%</div>
-        </div>
+    <label class="field-label" for="pin-input">Enter your PIN</label>
+    <input type="password" id="pin-input" placeholder="••••"
+           maxlength="4" inputmode="numeric" autocomplete="off">
+    <div class="field-msg" id="pin-error"></div>
 
-        <button class="btn-history" onclick="load().then(() => toggleHistory(true))">📜 View Full History Vault</button>
+    <button class="btn btn-primary" onclick="attemptLogin()">🔐 Log In</button>
 
-        <div id="linnea-controls" class="hidden">
-            <h3>Manage Money</h3>
-            <input type="number" id="trans-amt" placeholder="Amount $0.00" step="0.01">
-            <input type="text" id="trans-note" placeholder="What is this for?">
-            <button class="btn-secondary" onclick="transferToSavings()">Move to Savings</button>
-            <button class="btn-primary" onclick="withdraw()">Withdraw Cash</button>
-            <button class="btn-logout" style="width:100%; margin-top:20px;" onclick="changePinPrompt('Linnea')">Change My PIN</button>
-        </div>
-
-        <div id="dad-controls" class="hidden">
-            <div class="admin-section" style="background: #fff9eb; padding: 10px; border-radius: 10px; border: 1px solid #f39c12;">
-                <h3>Instant Adjustment</h3>
-                <div class="row">
-                    <div class="col"><label>Chk $</label><input type="number" id="instant-chk" step="0.01"></div>
-                    <div class="col"><label>Sav $</label><input type="number" id="instant-sav" step="0.01"></div>
-                </div>
-                <input type="text" id="dad-note" placeholder="Reason (Required) *">
-                <button class="btn-deposit" onclick="multiInstantAdjust()">Apply Adjustments</button>
-            </div>
-
-            <div class="admin-section">
-                <h3>Weekly Allowance</h3>
-                <div class="row">
-                    <div class="col"><label>Chk $</label><input type="number" id="auto-chk" step="0.01"></div>
-                    <div class="col"><label>Sav $</label><input type="number" id="auto-sav" step="0.01"></div>
-                </div>
-                <button class="btn-secondary" onclick="updateAutoDeposit()">Save Allowance</button>
-            </div>
-
-            <div class="admin-section">
-                <h3>Annual Interest %</h3>
-                <div class="row">
-                    <div class="col"><label>Chk %</label><input type="number" id="set-int-chk" step="0.01"></div>
-                    <div class="col"><label>Sav %</label><input type="number" id="set-int-sav" step="0.01"></div>
-                </div>
-                <button class="btn-primary" onclick="saveRatesOnly()">Save Rates</button>
-                <button class="btn-interest" onclick="applyInterestNow()">Apply 1 Month Now</button>
-            </div>
-
-            <div class="admin-section">
-                <button class="btn-logout" style="width:100%;" onclick="changePinPrompt('Dad')">Change Dad PIN</button>
-                <button class="btn-logout" style="width:100%; margin-top:10px;" onclick="adminResetPin()">Reset Linnea PIN (0000)</button>
-            </div>
-        </div>
+    <div style="text-align:center; margin-top:14px;">
+      <span class="status-pill" id="status-pill">
+        <span class="status-dot loading" id="status-dot"></span>
+        <span id="status-text">Connecting to bank...</span>
+      </span>
     </div>
+
+    <!-- Hidden admin entry point — unobtrusive link at bottom -->
+    <div class="admin-link-wrap">
+      <button class="admin-link" onclick="openAdmin()">Admin Login</button>
+    </div>
+
+  </div><!-- /#login-screen -->
+
+
+  <!-- ============================================================
+       MAIN SCREEN
+       Shown after successful login. Role panels are shown/hidden
+       based on whether the user is a child or parent.
+  ============================================================ -->
+  <div class="screen hidden" id="main-screen">
+
+    <div class="top-bar">
+      <span class="welcome-text" id="welcome-msg">Hello!</span>
+      <button class="btn-logout" onclick="logout()">Logout</button>
+    </div>
+
+    <!-- Balance cards — visible to all logged-in users -->
+    <div class="balance-grid">
+      <div class="balance-card checking">
+        <div class="bc-label">Checking</div>
+        <div class="bc-amount" id="checking-val">$0.00</div>
+        <div class="bc-rate">APY: <span id="rate-chk-display">0</span>%</div>
+      </div>
+      <div class="balance-card savings">
+        <div class="bc-label">Savings</div>
+        <div class="bc-amount" id="savings-val">$0.00</div>
+        <div class="bc-rate">APY: <span id="rate-sav-display">0</span>%</div>
+      </div>
+    </div>
+
+    <button class="btn btn-ghost" style="margin-bottom:4px;"
+            onclick="openHistory()">📜 Transaction History</button>
+
+    <!-- ── CHILD PANEL (Linnea / any child role user) ────────── -->
+    <div id="child-panel" class="hidden">
+
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('child','money')">💵 Money</button>
+        <button class="tab-btn" onclick="switchTab('child','chores')">
+          ✅ My Chores
+          <span class="notif-badge hidden" id="child-chore-badge">0</span>
+        </button>
+      </div>
+
+      <!-- Money Tab -->
+      <div class="tab-panel active" id="child-tab-money">
+        <h3>Manage My Money</h3>
+
+        <label class="field-label">Amount</label>
+        <input type="number" id="child-amt" placeholder="$0.00" step="0.01" min="0">
+        <div class="field-msg" id="child-amt-msg"></div>
+
+        <label class="field-label">What is this for?</label>
+        <input type="text" id="child-note" placeholder="e.g. New shoes, saving up...">
+        <div class="field-msg" id="child-note-msg"></div>
+
+        <button class="btn btn-secondary" onclick="confirmTransfer()">🏦 Move to Savings</button>
+        <button class="btn btn-primary"   onclick="confirmWithdraw()">💸 Withdraw Cash</button>
+
+        <div class="section-block">
+          <button class="btn-full-ghost" onclick="changePinPrompt('child')">🔑 Change My PIN</button>
+        </div>
+      </div>
+
+      <!-- Chores Tab (child view) -->
+      <div class="tab-panel" id="child-tab-chores">
+        <div id="child-chore-notifications"></div>
+        <h3>My Chores</h3>
+        <div id="child-chore-list">
+          <div class="empty-state"><span class="empty-icon">🎉</span>No chores right now!</div>
+        </div>
+      </div>
+
+    </div><!-- /#child-panel -->
+
+
+    <!-- ── PARENT PANEL (Dad / any parent role user) ─────────── -->
+    <div id="parent-panel" class="hidden">
+
+      <div class="tab-bar">
+        <button class="tab-btn active" onclick="switchTab('parent','adjust')">💰 Adjust</button>
+        <button class="tab-btn" onclick="switchTab('parent','chores')">
+          ✅ Chores
+          <span class="notif-badge hidden" id="parent-chore-badge">0</span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('parent','settings')">⚙️ Settings</button>
+      </div>
+
+      <!-- Adjust Tab -->
+      <div class="tab-panel active" id="parent-tab-adjust">
+
+        <h3>Instant Adjustment</h3>
+        <div class="info-box">
+          Enter positive amounts to add money, negative (e.g. −10) to remove.
+          At least one account is required.
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="field-label">Checking $</label>
+            <input type="number" id="adj-chk" step="0.01" placeholder="0.00">
+          </div>
+          <div class="col">
+            <label class="field-label">Savings $</label>
+            <input type="number" id="adj-sav" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <label class="field-label">Reason (required)</label>
+        <input type="text" id="adj-note" placeholder="e.g. Birthday gift, chore bonus...">
+        <div class="field-msg" id="adj-msg"></div>
+        <button class="btn btn-warning" onclick="confirmAdjust()">⚡ Apply Adjustment</button>
+
+        <div class="section-block">
+          <h3>Apply Interest</h3>
+          <div class="info-box">Adds one month of interest to both accounts based on the current APY rates.</div>
+          <button class="btn btn-purple" onclick="confirmInterest()">📈 Apply 1 Month of Interest</button>
+        </div>
+
+        <div class="section-block">
+          <h3>PIN Management</h3>
+          <button class="btn-full-ghost" onclick="changePinPrompt('parent')">🔑 Change My PIN</button>
+          <button class="btn-full-ghost" onclick="confirmResetChildPin()">🔄 Reset Child PIN to 0000</button>
+        </div>
+
+      </div><!-- /#parent-tab-adjust -->
+
+      <!-- Chores Tab (parent view) -->
+      <div class="tab-panel" id="parent-tab-chores">
+
+        <!-- Pending approvals section — injected by renderParentChores() -->
+        <div id="parent-chore-approvals"></div>
+
+        <h3>➕ Create New Chore</h3>
+
+        <label class="field-label">Chore Name</label>
+        <input type="text" id="chore-name" placeholder="e.g. Vacuum living room">
+
+        <label class="field-label">Description (optional)</label>
+        <input type="text" id="chore-desc" placeholder="Any extra details...">
+
+        <div class="row">
+          <div class="col">
+            <label class="field-label">Reward $</label>
+            <input type="number" id="chore-amount" step="0.01" min="0.01" placeholder="5.00">
+          </div>
+          <div class="col">
+            <label class="field-label">Schedule</label>
+            <select id="chore-schedule" onchange="toggleMonthlyDay()">
+              <option value="once">One-time</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Bi-weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="chore-monthly-wrap" class="hidden">
+          <label class="field-label">Day of Month</label>
+          <select id="chore-monthly-day"><!-- Days 1–28 populated by JS --></select>
+        </div>
+
+        <!-- Payout split slider -->
+        <label class="field-label">Payout Split</label>
+        <div class="split-display">
+          <span class="chk-pct">Checking: <span id="split-chk-label">100</span>%</span>
+          <span class="sav-pct">Savings: <span id="split-sav-label">0</span>%</span>
+        </div>
+        <input type="range" id="chore-split" min="0" max="100" value="100"
+               oninput="updateSplitLabel()">
+
+        <!-- Option to let child choose their own split -->
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+          <input type="checkbox" id="chore-child-chooses"
+                 style="width:auto;margin:0;padding:0;border:none;box-shadow:none;accent-color:var(--primary);">
+          <label for="chore-child-chooses"
+                 style="font-size:0.8rem; color:var(--muted); font-weight:500; margin:0; cursor:pointer;">
+            Let child choose their own split
+          </label>
+        </div>
+
+        <div class="row">
+          <div class="col">
+            <label class="field-label">End Date (optional)</label>
+            <input type="date" id="chore-end-date">
+          </div>
+          <div class="col" style="display:flex; align-items:flex-end; padding-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="checkbox" id="chore-paused"
+                     style="width:auto;margin:0;padding:0;border:none;box-shadow:none;accent-color:var(--primary);">
+              <label for="chore-paused"
+                     style="font-size:0.8rem; color:var(--muted); font-weight:500; margin:0; cursor:pointer;">
+                Start paused
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-msg" id="chore-form-msg"></div>
+        <button class="btn btn-secondary" onclick="createChore()">✅ Add Chore</button>
+
+        <div class="section-block">
+          <h3>All Chores</h3>
+          <div id="parent-chore-list">
+            <div class="empty-state"><span class="empty-icon">📋</span>No chores yet.</div>
+          </div>
+        </div>
+
+      </div><!-- /#parent-tab-chores -->
+
+      <!-- Settings Tab -->
+      <div class="tab-panel" id="parent-tab-settings">
+
+        <h3>Weekly Allowance</h3>
+        <div class="info-box">Deposited automatically every Monday by the Google Apps Script trigger.</div>
+        <div class="row">
+          <div class="col">
+            <label class="field-label">Checking $</label>
+            <input type="number" id="allow-chk" step="0.01" placeholder="0.00">
+          </div>
+          <div class="col">
+            <label class="field-label">Savings $</label>
+            <input type="number" id="allow-sav" step="0.01" placeholder="0.00">
+          </div>
+        </div>
+        <button class="btn btn-secondary" onclick="saveAllowance()">💾 Save Allowance</button>
+
+        <div class="section-block">
+          <h3>Annual Interest Rates (APY)</h3>
+          <div class="info-box">Applied on the 1st of each month automatically, or manually from the Adjust tab.</div>
+          <div class="row">
+            <div class="col">
+              <label class="field-label">Checking %</label>
+              <input type="number" id="rate-chk" step="0.01" placeholder="0.00">
+            </div>
+            <div class="col">
+              <label class="field-label">Savings %</label>
+              <input type="number" id="rate-sav" step="0.01" placeholder="0.00">
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="saveRates()">💾 Save Rates</button>
+        </div>
+
+      </div><!-- /#parent-tab-settings -->
+
+    </div><!-- /#parent-panel -->
+
+  </div><!-- /#main-screen -->
+
+</div><!-- /.app-card -->
+
+
+<!-- ============================================================
+     HISTORY DRAWER
+     Slides up from bottom when "Transaction History" is tapped.
+============================================================ -->
+<div class="history-drawer" id="history-drawer">
+  <div class="drawer-header">
+    <h3 style="margin:0;">📜 Transaction History</h3>
+    <button class="btn btn-sm btn-ghost" onclick="closeHistory()">✕ Close</button>
+  </div>
+
+  <!-- Running totals -->
+  <div class="summary-bar">
+    <div class="summary-chip">Deposits<span class="chip-val pos" id="hist-in">$0.00</span></div>
+    <div class="summary-chip">Withdrawals<span class="chip-val neg" id="hist-out">$0.00</span></div>
+    <div class="summary-chip">Net<span class="chip-val" id="hist-net">$0.00</span></div>
+  </div>
+
+  <div class="filter-grid">
+    <div>
+      <span class="field-label">Sort</span>
+      <select id="f-sort" onchange="renderHistory()">
+        <option value="new">Newest First</option>
+        <option value="old">Oldest First</option>
+      </select>
+    </div>
+    <div>
+      <span class="field-label">User</span>
+      <select id="f-user" onchange="renderHistory()">
+        <option value="all">Everyone</option>
+        <option value="Bank">Bank</option>
+        <option value="System">System</option>
+      </select>
+    </div>
+    <div>
+      <span class="field-label">Account</span>
+      <select id="f-acct" onchange="renderHistory()">
+        <option value="all">All Accounts</option>
+        <option value="chk">Checking</option>
+        <option value="sav">Savings</option>
+      </select>
+    </div>
+    <div>
+      <span class="field-label">Type</span>
+      <select id="f-type" onchange="renderHistory()">
+        <option value="all">All Types</option>
+        <option value="pos">Deposits</option>
+        <option value="neg">Withdrawals</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="ledger-list">
+    <div class="empty-state"><span class="empty-icon">🏦</span>No transactions yet.</div>
+  </div>
 </div>
 
-<div id="history-page" class="hidden">
-    <div style="display:flex; justify-content: space-between; align-items:center; border-bottom: 2px solid #eee; padding-bottom:10px;">
-        <h3 style="margin:0;">Transaction Vault</h3>
-        <button class="btn-logout" onclick="toggleHistory(false)">Close</button>
+
+<!-- ============================================================
+     ADMIN DRAWER
+     Accessible only via the hidden "Admin Login" link.
+============================================================ -->
+<div class="admin-drawer" id="admin-drawer">
+  <div class="drawer-header">
+    <h3 style="margin:0;">⚙️ Admin Panel</h3>
+    <button class="btn btn-sm btn-ghost" onclick="closeAdmin()">✕ Close</button>
+  </div>
+
+  <!-- Admin PIN entry -->
+  <div id="admin-login-section">
+    <div class="info-box">Enter the Admin PIN to access bank configuration.</div>
+    <label class="field-label">Admin PIN</label>
+    <input type="password" id="admin-pin-input" placeholder="••••" maxlength="4" inputmode="numeric">
+    <div class="field-msg" id="admin-pin-error">Incorrect Admin PIN.</div>
+    <button class="btn btn-primary" onclick="attemptAdminLogin()">🔐 Unlock Admin</button>
+  </div>
+
+  <!-- Admin settings — revealed after correct PIN -->
+  <div id="admin-settings-section" class="hidden">
+
+    <h3>🏦 Bank Branding</h3>
+
+    <label class="field-label">Bank Name</label>
+    <input type="text" id="admin-bank-name" placeholder="Family Bank">
+
+    <label class="field-label">Tagline</label>
+    <input type="text" id="admin-bank-tagline" placeholder="Your money, your future.">
+
+    <label class="field-label">Primary Color (buttons, checking card)</label>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <input type="color" id="admin-color-primary" value="#2563eb"
+             style="width:50px;height:40px;padding:2px;border-radius:8px;cursor:pointer;margin:0;border:1.5px solid var(--border);"
+             oninput="previewColor('primary',this.value)">
+      <span style="font-size:0.78rem; color:var(--muted);">Affects buttons, links, checking card</span>
     </div>
-    
-    <div class="filter-grid" style="margin-top:15px;">
-        <div><label>Sort</label><select id="sort-filter" onchange="renderHistory()"><option value="new">Newest</option><option value="old">Oldest</option></select></div>
-        <div><label>User</label><select id="user-filter" onchange="renderHistory()"><option value="all">Everyone</option><option value="Linnea">Linnea</option><option value="Dad">Dad</option><option value="Bank">Bank</option></select></div>
-        <div><label>Account</label><select id="acct-filter" onchange="renderHistory()"><option value="all">All Accts</option><option value="chk">Checking</option><option value="sav">Savings</option></select></div>
-        <div><label>Type</label><select id="type-filter" onchange="renderHistory()"><option value="all">All Types</option><option value="pos">Deposits</option><option value="neg">Expenses</option></select></div>
+
+    <label class="field-label">Secondary Color (savings, deposits)</label>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <input type="color" id="admin-color-secondary" value="#10b981"
+             style="width:50px;height:40px;padding:2px;border-radius:8px;cursor:pointer;margin:0;border:1.5px solid var(--border);"
+             oninput="previewColor('secondary',this.value)">
+      <span style="font-size:0.78rem; color:var(--muted);">Affects savings card, deposit amounts</span>
     </div>
-    
-    <div id="full-ledger-list"></div>
+
+    <div class="section-block">
+      <h3>🖼️ Images</h3>
+      <div class="info-box">
+        Host images anywhere (Imgur, GitHub, Google Drive) and paste the direct URL.
+        For GitHub Pages, you can also replace files in the <code>images/</code> folder directly.
+      </div>
+      <label class="field-label">Banner Image URL</label>
+      <input type="url" id="admin-img-banner" placeholder="https://...banner.png">
+      <label class="field-label">Logo Image URL</label>
+      <input type="url" id="admin-img-logo" placeholder="https://...logo.png">
+      <label class="field-label">Favicon/Icon URL</label>
+      <input type="url" id="admin-img-icon" placeholder="https://...icon.png">
+    </div>
+
+    <div class="section-block">
+      <h3>🌐 Regional Settings</h3>
+      <label class="field-label">Timezone (for transaction timestamps)</label>
+      <select id="admin-timezone">
+        <option value="GMT-5">Eastern (GMT-5)</option>
+        <option value="GMT-6">Central (GMT-6)</option>
+        <option value="GMT-7">Mountain (GMT-7)</option>
+        <option value="GMT-8">Pacific (GMT-8)</option>
+        <option value="GMT-4">Atlantic (GMT-4)</option>
+        <option value="GMT+0">UTC</option>
+        <option value="GMT+1">UK (GMT+1)</option>
+        <option value="GMT+2">Central Europe (GMT+2)</option>
+      </select>
+    </div>
+
+    <div class="section-block">
+      <h3>📧 Email Addresses</h3>
+      <div class="info-box">
+        Update the matching values in <code>Code.gs</code> (PARENT_EMAIL and CHILD_EMAIL) to match.
+      </div>
+      <label class="field-label">Parent Email (monthly statements + chore alerts)</label>
+      <input type="email" id="admin-email-parent" placeholder="parent@email.com">
+      <label class="field-label">Child Email (chore approval/denial notifications)</label>
+      <input type="email" id="admin-email-child" placeholder="child@email.com">
+    </div>
+
+    <div class="section-block">
+      <h3>👥 User Management</h3>
+      <div id="admin-user-list"></div>
+
+      <div style="background:var(--bg); border-radius:var(--radius); padding:14px; margin-top:12px;">
+        <h3 style="margin-bottom:12px;">Add New User</h3>
+        <label class="field-label">Display Name</label>
+        <input type="text" id="new-user-name" placeholder="e.g. Emma">
+        <label class="field-label">Role</label>
+        <select id="new-user-role">
+          <option value="child">Child (manage money + chores)</option>
+          <option value="parent">Parent (adjust + manage chores)</option>
+        </select>
+        <label class="field-label">Initial PIN (4 digits)</label>
+        <input type="password" id="new-user-pin" maxlength="4" inputmode="numeric" placeholder="0000">
+        <div class="field-msg" id="new-user-msg"></div>
+        <button class="btn btn-secondary" onclick="addUser()">➕ Add User</button>
+      </div>
+    </div>
+
+    <div class="section-block">
+      <h3>🔑 Admin PIN</h3>
+      <button class="btn-full-ghost" onclick="changeAdminPin()">Change Admin PIN</button>
+    </div>
+
+    <div class="section-block">
+      <button class="btn btn-primary" onclick="saveAdminSettings()">💾 Save All Settings</button>
+    </div>
+
+  </div><!-- /#admin-settings-section -->
+</div><!-- /#admin-drawer -->
+
+
+<!-- ============================================================
+     MODAL OVERLAY
+     All in-app confirmation dialogs render here.
+     JS writes content dynamically via openModal().
+============================================================ -->
+<div class="modal-overlay" id="modal-overlay" onclick="handleOverlayClick(event)">
+  <div class="modal-box" id="modal-box">
+    <span class="modal-icon"  id="modal-icon">⚠️</span>
+    <h2 class="modal-title"   id="modal-title">Are you sure?</h2>
+    <p  class="modal-body"    id="modal-body"></p>
+    <div class="modal-detail hidden" id="modal-detail"></div>
+    <div class="modal-btns"   id="modal-btns">
+      <button class="btn btn-ghost"    onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary"  id="modal-confirm-btn" onclick="fireModalConfirm()">Confirm</button>
+    </div>
+  </div>
 </div>
 
+
+<!-- ============================================================
+     [SCRIPT] ALL JAVASCRIPT
+     Each section is labeled to match the navigation header above.
+============================================================ -->
 <script>
-    const API_URL = "https://script.google.com/macros/s/AKfycbyRhQhQImqox0AGUKdgQCKyg_dC2kkfIFUAxq3izc1x5zzuvOIYfly4eFSzfr9VX99JpA/exec";
-    
-    let state = { pins: { Dad: "1234", Linnea: "0000" }, balances: { checking: 0, savings: 0 }, rates: { checking: 0, savings: 0 }, autoDeposit: { checking: 0, savings: 0 }, history: [] };
-    let tempHistory = []; 
 
-    function fmt(val) { return "$" + (parseFloat(val) || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+// ================================================================
+// [CONFIG] — One place to configure the app before deployment.
+// The Admin panel writes new values into state.config and syncs
+// them to the Google Sheet, overriding these defaults at runtime.
+// ================================================================
 
-    async function load() {
-        try {
-            const response = await fetch(API_URL);
-            const data = await response.json();
-            if (data && data.pins) { 
-                state = data; 
-                if (!state.history) state.history = [];
-                tempHistory = []; 
-                document.getElementById('status-msg').innerText = "System Ready"; 
-                render(); 
-            }
-        } catch(e) { document.getElementById('status-msg').innerText = "Cloud Error"; }
-    }
+/**
+ * ▼ REQUIRED: Update this URL every time you redeploy the Apps Script.
+ *   Go to Apps Script → Deploy → Manage Deployments → copy Web App URL.
+ */
+const API_URL = "https://script.google.com/macros/s/AKfycbyRhQhQImqox0AGUKdgQCKyg_dC2kkfIFUAxq3izc1x5zzuvOIYfly4eFSzfr9VX99JpA/exec";
 
-    function render() {
-        document.getElementById('checking-val').innerText = fmt(state.balances.checking);
-        document.getElementById('savings-val').innerText = fmt(state.balances.savings);
-        document.getElementById('int-chk-display').innerText = state.rates.checking || 0;
-        document.getElementById('int-sav-display').innerText = state.rates.savings || 0;
-        document.getElementById('set-int-chk').value = state.rates.checking || 0;
-        document.getElementById('set-int-sav').value = state.rates.savings || 0;
-        document.getElementById('auto-chk').value = (state.autoDeposit.checking || 0).toFixed(2);
-        document.getElementById('auto-sav').value = (state.autoDeposit.savings || 0).toFixed(2);
-    }
+/**
+ * Default branding and settings.
+ * These are merged with whatever comes back from the Google Sheet.
+ * If a key exists in the sheet's config, the sheet value wins.
+ */
+const DEFAULT_CONFIG = {
+  bankName:        "Family Bank",           // Displayed in header and emails
+  tagline:         "Your money, your future.",
+  colorPrimary:    "#2563eb",               // Hex color — checking card + buttons
+  colorSecondary:  "#10b981",               // Hex color — savings card + deposits
+  imgBanner:       "images/banner.png",     // Top banner image path or URL
+  imgLogo:         "images/logo.png",       // Logo image path or URL
+  imgIcon:         "images/icon.png",       // Browser tab icon path or URL
+  timezone:        "GMT-5",                 // Used in Code.gs for timestamp formatting
+  emailParent:     "",                      // Gets emailed monthly statements + chore alerts
+  emailChild:      "",                      // Gets emailed chore approval/denial notices
+  adminPin:        "9999"                   // ← CHANGE THIS before first deployment
+};
 
-    function toggleHistory(show) {
-        document.getElementById('history-page').classList.toggle('hidden', !show);
-        if (show) renderHistory();
-    }
 
-    function renderHistory() {
-        const list = document.getElementById('full-ledger-list');
-        const sort = document.getElementById('sort-filter').value;
-        const userF = document.getElementById('user-filter').value;
-        const acctF = document.getElementById('acct-filter').value;
-        const typeF = document.getElementById('type-filter').value;
+// ================================================================
+// [STATE] — The full application state object.
+//
+// This mirrors what is stored in Sheet1 cell A1 as stringified JSON.
+// state.history is populated from the Ledger tab on each load —
+// it is NOT stored in A1 (too large; see Code.gs for details).
+// ================================================================
 
-        let filtered = [...state.history].filter(h => {
-            const noteLower = h.note.toLowerCase();
-            const isSav = (noteLower.includes('(sav)') || noteLower.includes('to sav') || noteLower.includes('interest (sav)'));
-            if (userF !== 'all' && h.user !== userF) return false;
-            if (acctF === 'chk' && isSav) return false;
-            if (acctF === 'sav' && !isSav) return false;
-            if (typeF === 'pos' && h.amt < 0) return false;
-            if (typeF === 'neg' && h.amt >= 0) return false;
-            return true;
+let state = {
+  config:      { ...DEFAULT_CONFIG },
+  pins:        {},                // { "Linnea": "1234", "Dad": "0000" }
+  roles:       {},                // { "Linnea": "child", "Dad": "parent" }
+  users:       [],                // ["Linnea", "Dad"] — order controls dropdown
+  balances:    { checking: 0, savings: 0 },
+  rates:       { checking: 0, savings: 0 },
+  autoDeposit: { checking: 0, savings: 0 },
+  chores:      [],                // Array of chore objects — see createChore() for shape
+  history:     []                 // Populated from Ledger on load — not saved to A1
+};
+
+let currentUser = null;   // e.g. "Linnea"
+let currentRole = null;   // "child" | "parent"
+
+// Transactions queued to send on the next sync POST
+let pendingTransactions = [];
+
+// The function to call when a modal's Confirm button is clicked
+let modalCallback = null;
+
+
+// ================================================================
+// [UTILS] — Formatting and small helpers
+// ================================================================
+
+/** Format a number as a USD dollar string. e.g. fmt(1234.5) → "$1,234.50" */
+function fmt(val) {
+  return "$" + (parseFloat(val) || 0).toLocaleString("en-US", {
+    minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+}
+
+/** Return today's date as a YYYY-MM-DD string (for end-date comparisons) */
+function todayStr() {
+  return new Date().toISOString().split("T")[0];
+}
+
+/** Format a Date object as a human-readable timestamp */
+function fmtDate(d) {
+  return d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" })
+    + " " + d.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit" });
+}
+
+/** Shade a hex color lighter or darker. percent: positive = lighter, negative = darker */
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.replace("#",""), 16);
+  const r = Math.max(0, Math.min(255, (num >> 16) + Math.round(2.55 * percent)));
+  const g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + Math.round(2.55 * percent)));
+  const b = Math.max(0, Math.min(255, (num & 0xff) + Math.round(2.55 * percent)));
+  return "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** Show an inline error below a form field */
+function showFieldError(inputId, msgId, message) {
+  const inp = document.getElementById(inputId);
+  const msg = document.getElementById(msgId);
+  if (inp) inp.classList.add("input-error");
+  if (msg) { msg.className = "field-msg error"; msg.textContent = message; }
+}
+
+/** Clear an inline field error */
+function clearFieldError(inputId, msgId) {
+  const inp = document.getElementById(inputId);
+  const msg = document.getElementById(msgId);
+  if (inp) inp.classList.remove("input-error");
+  if (msg) { msg.className = "field-msg"; msg.textContent = ""; }
+}
+
+
+// ================================================================
+// [MODAL] — In-app confirmation and input dialogs.
+//
+// openModal(opts) replaces browser alert() and confirm().
+// openInputModal(opts) adds a text/password input field inside.
+// ================================================================
+
+/**
+ * Open a confirmation modal.
+ *
+ * @param {object} opts
+ *   opts.icon         — emoji shown large above title
+ *   opts.title        — bold heading text
+ *   opts.body         — descriptive paragraph (muted)
+ *   opts.detail       — plain object { "Label": "Value" } shown in a summary box
+ *   opts.confirmText  — confirm button label (default "Confirm")
+ *   opts.confirmClass — confirm button CSS class (default "btn-primary")
+ *   opts.cancelText   — cancel button label (default "Cancel")
+ *   opts.hideCancel   — if true, hide the Cancel button
+ *   opts.onConfirm    — function called when user clicks Confirm
+ */
+function openModal(opts) {
+  document.getElementById("modal-icon").textContent  = opts.icon  || "⚠️";
+  document.getElementById("modal-title").textContent = opts.title || "Are you sure?";
+  document.getElementById("modal-body").textContent  = opts.body  || "";
+
+  // Build the key/value detail summary box
+  const detailEl = document.getElementById("modal-detail");
+  if (opts.detail && Object.keys(opts.detail).length > 0) {
+    detailEl.innerHTML = Object.entries(opts.detail)
+      .map(([label, val]) => `
+        <div class="detail-row">
+          <span class="detail-label">${label}</span>
+          <span class="detail-val">${val}</span>
+        </div>`
+      ).join("");
+    detailEl.classList.remove("hidden");
+  } else {
+    detailEl.innerHTML = "";
+    detailEl.classList.add("hidden");
+  }
+
+  // Configure buttons
+  const confirmBtn = document.getElementById("modal-confirm-btn");
+  confirmBtn.textContent = opts.confirmText  || "Confirm";
+  confirmBtn.className   = "btn " + (opts.confirmClass || "btn-primary");
+
+  const cancelBtn = document.getElementById("modal-btns").querySelector(".btn-ghost");
+  cancelBtn.textContent   = opts.cancelText || "Cancel";
+  cancelBtn.style.display = opts.hideCancel ? "none" : "";
+
+  modalCallback = opts.onConfirm || null;
+  document.getElementById("modal-overlay").classList.add("open");
+}
+
+/**
+ * Open a modal that contains an input field.
+ * Used for PIN changes and chore denial reasons.
+ *
+ * @param {object} opts — same as openModal() plus:
+ *   opts.inputType   — "text" | "password" (default "text")
+ *   opts.inputAttrs  — extra HTML attributes string for the input
+ */
+function openInputModal(opts) {
+  const detailEl = document.getElementById("modal-detail");
+  detailEl.innerHTML = `
+    <input type="${opts.inputType || "text"}"
+           id="modal-dynamic-input"
+           ${opts.inputAttrs || ""}
+           style="width:100%; margin-bottom:0;">`;
+  detailEl.classList.remove("hidden");
+
+  document.getElementById("modal-icon").textContent  = opts.icon  || "✏️";
+  document.getElementById("modal-title").textContent = opts.title || "";
+  document.getElementById("modal-body").textContent  = opts.body  || "";
+
+  const confirmBtn = document.getElementById("modal-confirm-btn");
+  confirmBtn.textContent = opts.confirmText  || "OK";
+  confirmBtn.className   = "btn " + (opts.confirmClass || "btn-primary");
+
+  document.getElementById("modal-btns").querySelector(".btn-ghost").style.display = "";
+
+  modalCallback = () => {
+    const val = document.getElementById("modal-dynamic-input")?.value || "";
+    if (opts.onConfirm) opts.onConfirm(val);
+  };
+
+  document.getElementById("modal-overlay").classList.add("open");
+  setTimeout(() => document.getElementById("modal-dynamic-input")?.focus(), 200);
+}
+
+/** Close the modal without doing anything */
+function closeModal() {
+  document.getElementById("modal-overlay").classList.remove("open");
+  modalCallback = null;
+}
+
+/** Called when the Confirm button is clicked */
+function fireModalConfirm() {
+  closeModal();
+  if (typeof modalCallback === "function") modalCallback();
+}
+
+/** Close modal if user taps outside the modal box */
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById("modal-overlay")) closeModal();
+}
+
+
+// ================================================================
+// [TOAST] — Slide-in notification banner at top of screen
+// ================================================================
+
+let toastTimer = null;
+
+/**
+ * Show a toast notification.
+ * @param {string} message
+ * @param {"success"|"error"|"info"|""} type
+ * @param {number} duration  — milliseconds before it hides (default 3200)
+ */
+function showToast(message, type = "", duration = 3200) {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.className   = "toast " + type + " show";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), duration);
+}
+
+
+// ================================================================
+// [LOAD] — Cloud data loading and sync
+// ================================================================
+
+/**
+ * Load the full app state from the Google Apps Script API.
+ * Called on page load and after every sync write.
+ */
+async function loadFromCloud() {
+  setStatus("loading", "Connecting to bank...");
+  try {
+    // Cache-bust the request so we always get fresh data
+    const res  = await fetch(API_URL + "?t=" + Date.now());
+    const data = await res.json();
+
+    if (data && data.balances) {
+      // Merge cloud data into local state
+      state = {
+        ...state,
+        ...data,
+        config:  { ...DEFAULT_CONFIG, ...(data.config || {}) },
+        history: data.history || [],
+        chores:  data.chores  || []
+      };
+
+      // Backwards compatibility: build users/roles from pins if missing
+      if (!state.users || state.users.length === 0) {
+        state.users = Object.keys(state.pins || { Linnea:"1234", Dad:"0000" });
+      }
+      if (!state.roles || Object.keys(state.roles).length === 0) {
+        state.roles = {};
+        state.users.forEach(u => {
+          state.roles[u] = (u === "Dad") ? "parent" : "child";
         });
+      }
 
-        if (sort === 'new') filtered.reverse();
-
-        list.innerHTML = filtered.map(h => {
-            const noteLower = h.note.toLowerCase();
-            const isSav = (noteLower.includes('(sav)') || noteLower.includes('to sav') || noteLower.includes('interest (sav)'));
-            return `
-            <div class="ledger-row">
-                <div class="acct-tag">${isSav ? 'SAV' : 'CHK'}</div>
-                <div><span class="time-label">${h.date}</span><br><strong>${h.user}</strong>: ${h.note}</div>
-                <div class="${h.amt >= 0 ? 'amt-pos' : 'amt-neg'}">${h.amt >= 0 ? '+' : ''}${fmt(h.amt)}</div>
-            </div>`;
-        }).join('') || '<p style="text-align:center;color:#999;margin-top:20px;">No transactions in Ledger.</p>';
+      pendingTransactions = [];
+      applyBranding();
+      populateUserDropdown();
+      populateHistoryUserFilter();
+      setStatus("ready", "Connected ✓");
+    } else {
+      setStatus("error", "Unexpected data — check API URL in [CONFIG]");
     }
+  } catch (err) {
+    setStatus("error", "Could not connect — check your internet connection");
+    console.error("[Family Bank] Load error:", err);
+  }
+}
 
-    function record(user, note, amt) {
-        const now = new Date();
-        const dateStr = now.toLocaleDateString() + " " + now.toLocaleTimeString([], {hour: 'numeric', minute:'2-digit'});
-        
-        // SYNC FIX: Push to both for instant UI feedback AND remote sync
-        tempHistory.push({ date: dateStr, user: user, note: note, amt: amt });
-        state.history.push({ date: dateStr, user: user, note: note, amt: amt }); 
+/**
+ * POST the current state back to Google Sheets.
+ * @param {string} action  — human-readable label for this operation (logged to Ledger)
+ */
+async function syncToCloud(action) {
+  renderBalances();
+
+  // Build the payload — strip history (lives in Ledger tab, not A1)
+  const payload = { ...state, tempTransactions: pendingTransactions, lastAction: action };
+  delete payload.history;
+
+  pendingTransactions = [];
+
+  try {
+    await fetch(API_URL, { method: "POST", mode: "no-cors", body: JSON.stringify(payload) });
+    // Reload from cloud after a short delay so the ledger reflects new rows
+    setTimeout(loadFromCloud, 1800);
+  } catch (err) {
+    console.error("[Family Bank] Sync error:", err);
+    showToast("Sync error — your change may not have saved!", "error", 5000);
+  }
+}
+
+/**
+ * Record a transaction in the pending queue (to be synced on next POST).
+ * Also pushes to state.history for immediate local display.
+ *
+ * @param {string} user  — who performed the action
+ * @param {string} note  — description (used to detect Savings vs Checking in Code.gs)
+ * @param {number} amt   — positive = deposit, negative = withdrawal
+ */
+function recordTransaction(user, note, amt) {
+  const entry = { date: fmtDate(new Date()), user, note, amt };
+  pendingTransactions.push(entry);
+  state.history.push(entry);
+}
+
+
+// ================================================================
+// [RENDER] — UI update functions
+// ================================================================
+
+/** Apply branding config (name, colors, images) to the DOM */
+function applyBranding() {
+  const cfg = state.config;
+
+  // Text labels
+  document.getElementById("bank-name-display").textContent    = cfg.bankName || "Family Bank";
+  document.getElementById("bank-tagline-display").textContent = cfg.tagline  || "";
+  document.title = cfg.bankName || "Family Bank";
+
+  // CSS variables — controls every colored element in the app
+  document.documentElement.style.setProperty("--primary",        cfg.colorPrimary   || "#2563eb");
+  document.documentElement.style.setProperty("--primary-dark",   shadeColor(cfg.colorPrimary   || "#2563eb", -20));
+  document.documentElement.style.setProperty("--secondary",      cfg.colorSecondary || "#10b981");
+  document.documentElement.style.setProperty("--secondary-dark", shadeColor(cfg.colorSecondary || "#10b981", -20));
+
+  // Images
+  const bannerEl = document.getElementById("banner-img");
+  const logoEl   = document.getElementById("logo-img");
+  if (cfg.imgBanner && bannerEl) { bannerEl.src = cfg.imgBanner; bannerEl.style.display = ""; }
+  if (cfg.imgLogo   && logoEl)   { logoEl.src   = cfg.imgLogo;   logoEl.style.display   = ""; }
+}
+
+/** Live color preview from Admin panel color pickers */
+function previewColor(which, val) {
+  if (which === "primary") {
+    document.documentElement.style.setProperty("--primary",      val);
+    document.documentElement.style.setProperty("--primary-dark", shadeColor(val, -20));
+  } else {
+    document.documentElement.style.setProperty("--secondary",      val);
+    document.documentElement.style.setProperty("--secondary-dark", shadeColor(val, -20));
+  }
+}
+
+/** Update balance cards and rate badges from current state */
+function renderBalances() {
+  document.getElementById("checking-val").textContent     = fmt(state.balances.checking);
+  document.getElementById("savings-val").textContent      = fmt(state.balances.savings);
+  document.getElementById("rate-chk-display").textContent = state.rates.checking || 0;
+  document.getElementById("rate-sav-display").textContent = state.rates.savings  || 0;
+}
+
+/** Build the user login dropdown from state.users */
+function populateUserDropdown() {
+  const sel = document.getElementById("user-select");
+  sel.innerHTML = "";
+  // Exclude any admin-role users from the main login dropdown
+  state.users.filter(u => state.roles[u] !== "admin").forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u; opt.textContent = u;
+    sel.appendChild(opt);
+  });
+}
+
+/** Add per-user options to the History filter dropdown */
+function populateHistoryUserFilter() {
+  const sel = document.getElementById("f-user");
+  // Remove any previously added user options
+  sel.querySelectorAll(".dynamic-user-opt").forEach(o => o.remove());
+  // Insert user names before "Bank" and "System"
+  const insertBefore = sel.querySelector("option[value='Bank']");
+  state.users.forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u; opt.textContent = u; opt.className = "dynamic-user-opt";
+    sel.insertBefore(opt, insertBefore);
+  });
+}
+
+/** Update the connection status pill on the login screen */
+function setStatus(type, text) {
+  document.getElementById("status-dot").className  = "status-dot " + type;
+  document.getElementById("status-text").textContent = text;
+}
+
+/** Update chore notification badges on tabs */
+function updateChoreBadges() {
+  // For child: count available (not pending, not paused, not expired)
+  const availableCount = state.chores.filter(c =>
+    !c.paused &&
+    c.status !== "pending" &&
+    (!c.endDate || c.endDate >= todayStr())
+  ).length;
+
+  // For parent: count pending approval
+  const pendingCount = state.chores.filter(c => c.status === "pending").length;
+
+  const childBadge  = document.getElementById("child-chore-badge");
+  const parentBadge = document.getElementById("parent-chore-badge");
+  if (childBadge)  { childBadge.textContent  = availableCount; childBadge.classList.toggle("hidden",  availableCount === 0); }
+  if (parentBadge) { parentBadge.textContent = pendingCount;   parentBadge.classList.toggle("hidden", pendingCount === 0); }
+}
+
+/** Show the correct role tab panel and hide all others */
+function switchTab(panelPrefix, tabName) {
+  const panelEl = document.getElementById(panelPrefix + "-panel");
+  if (!panelEl) return;
+  panelEl.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  panelEl.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  const targetPanel = document.getElementById(panelPrefix + "-tab-" + tabName);
+  if (targetPanel) targetPanel.classList.add("active");
+  // Activate the matching tab button
+  panelEl.querySelectorAll(".tab-btn").forEach(b => {
+    if (b.getAttribute("onclick")?.includes("'" + tabName + "'")) b.classList.add("active");
+  });
+}
+
+
+// ================================================================
+// [LOGIN] — Login screen and PIN management
+// ================================================================
+
+/** Attempt to log in with the selected user and entered PIN */
+function attemptLogin() {
+  clearFieldError("pin-input", "pin-error");
+  const user = document.getElementById("user-select").value;
+  const pin  = document.getElementById("pin-input").value;
+
+  if (!state.pins[user]) {
+    showFieldError("pin-input", "pin-error", "User not found.");
+    return;
+  }
+  if (state.pins[user] !== pin) {
+    showFieldError("pin-input", "pin-error", "Incorrect PIN. Please try again.");
+    document.getElementById("pin-input").value = "";
+    return;
+  }
+
+  currentUser = user;
+  currentRole = state.roles[user] || "child";
+
+  // Switch screens
+  document.getElementById("login-screen").classList.add("hidden");
+  document.getElementById("main-screen").classList.remove("hidden");
+  document.getElementById("welcome-msg").textContent = "Hi, " + user + "! 👋";
+
+  // Show correct role panel
+  document.getElementById("child-panel").classList.add("hidden");
+  document.getElementById("parent-panel").classList.add("hidden");
+
+  if (currentRole === "parent") {
+    document.getElementById("parent-panel").classList.remove("hidden");
+    renderParentSettings();
+    renderParentChores();
+  } else {
+    document.getElementById("child-panel").classList.remove("hidden");
+    renderChildChores();
+  }
+
+  renderBalances();
+  updateChoreBadges();
+}
+
+/** Log out — reloads the page which resets all state */
+function logout() { location.reload(); }
+
+/**
+ * Prompt to change a PIN via the input modal.
+ * @param {"child"|"parent"} who
+ */
+function changePinPrompt(who) {
+  const targetUser = (who === "parent")
+    ? currentUser
+    : state.users.find(u => state.roles[u] === "child") || currentUser;
+
+  openInputModal({
+    icon:        "🔑",
+    title:       "New PIN for " + targetUser,
+    body:        "Enter a new 4-digit PIN.",
+    inputType:   "password",
+    inputAttrs:  'maxlength="4" inputmode="numeric" placeholder="••••" autocomplete="new-password"',
+    confirmText: "Save PIN",
+    onConfirm:   (val) => {
+      if (!val || val.length !== 4 || !/^\d{4}$/.test(val)) {
+        showToast("PIN must be exactly 4 digits.", "error");
+        return;
+      }
+      state.pins[targetUser] = val;
+      syncToCloud("PIN Update");
+      showToast("PIN updated for " + targetUser + ".", "success");
     }
+  });
+}
 
-    function attemptLogin() {
-        const u = document.getElementById('user-select').value;
-        const p = document.getElementById('pin-input').value;
-        if (state.pins[u] === p) {
-            document.getElementById('login-screen').classList.add('hidden');
-            document.getElementById('main-interface').classList.remove('hidden');
-            document.getElementById('welcome-msg').innerText = "Hello, " + u;
-            document.getElementById(u === 'Dad' ? 'dad-controls' : 'linnea-controls').classList.remove('hidden');
-            render();
-        } else { alert("Incorrect PIN"); }
+/** Confirm and reset a child user's PIN to 0000 */
+function confirmResetChildPin() {
+  const childUser = state.users.find(u => state.roles[u] === "child") || "Child";
+  openModal({
+    icon:         "🔄",
+    title:        "Reset " + childUser + "'s PIN?",
+    body:         "Their PIN will be reset to 0000. They should change it after next login.",
+    confirmText:  "Reset PIN",
+    confirmClass: "btn-danger",
+    onConfirm:    () => {
+      state.pins[childUser] = "0000";
+      syncToCloud("PIN Reset");
+      showToast(childUser + "'s PIN reset to 0000.", "success");
     }
+  });
+}
 
-    async function sync(action) {
-        render();
-        const payload = { ...state, tempTransactions: tempHistory, lastAction: action };
-        tempHistory = [];
-        try { 
-            await fetch(API_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) }); 
-            // Refresh logic ensures the local view matches the sheet exactly after writing
-            setTimeout(load, 1500);
-        } catch(e) {}
+
+// ================================================================
+// [LINNEA] — Actions for the child user role
+// ================================================================
+
+/** Validate the child's money form. Returns true if valid. */
+function validateChildForm() {
+  let ok = true;
+  clearFieldError("child-amt",  "child-amt-msg");
+  clearFieldError("child-note", "child-note-msg");
+
+  const amt  = parseFloat(document.getElementById("child-amt").value);
+  const note = document.getElementById("child-note").value.trim();
+
+  if (!amt || amt <= 0) {
+    showFieldError("child-amt", "child-amt-msg", "Please enter a valid amount greater than $0."); ok = false;
+  }
+  if (!note) {
+    showFieldError("child-note", "child-note-msg", "Please describe what this is for."); ok = false;
+  }
+  return ok;
+}
+
+/** Open confirmation modal for a Savings transfer */
+function confirmTransfer() {
+  if (!validateChildForm()) return;
+  const amt  = parseFloat(document.getElementById("child-amt").value);
+  const note = document.getElementById("child-note").value.trim();
+
+  if (amt > state.balances.checking) {
+    showFieldError("child-amt", "child-amt-msg",
+      "Not enough in checking! Your balance is " + fmt(state.balances.checking) + ".");
+    return;
+  }
+
+  openModal({
+    icon:         "🏦",
+    title:        "Move to Savings?",
+    body:         "This moves money from checking to savings. You can always move it back by asking.",
+    detail: {
+      "Amount":            fmt(amt),
+      "For":               note,
+      "Checking After":    fmt(state.balances.checking - amt),
+      "Savings After":     fmt(state.balances.savings + amt)
+    },
+    confirmText:  "Move It",
+    confirmClass: "btn-secondary",
+    onConfirm:    () => {
+      state.balances.checking -= amt;
+      state.balances.savings  += amt;
+      recordTransaction(currentUser, "To Savings: " + note + " (Sav)", -amt);
+      document.getElementById("child-amt").value  = "";
+      document.getElementById("child-note").value = "";
+      syncToCloud("Transfer");
+      showToast(fmt(amt) + " moved to savings! 💚", "success");
     }
+  });
+}
 
-    function multiInstantAdjust() {
-        const c = parseFloat(document.getElementById('instant-chk').value) || 0;
-        const s = parseFloat(document.getElementById('instant-sav').value) || 0;
-        const n = document.getElementById('dad-note').value.trim();
-        if ((c === 0 && s === 0) || !n) { alert("Enter amount and reason!"); return; }
-        if (c !== 0) { state.balances.checking += c; record("Dad", n + " (Chk)", c); }
-        if (s !== 0) { state.balances.savings += s; record("Dad", n + " (Sav)", s); }
-        document.getElementById('instant-chk').value = ''; document.getElementById('instant-sav').value = ''; document.getElementById('dad-note').value = '';
-        sync("Adjustment");
+/** Open confirmation modal for a cash withdrawal */
+function confirmWithdraw() {
+  if (!validateChildForm()) return;
+  const amt  = parseFloat(document.getElementById("child-amt").value);
+  const note = document.getElementById("child-note").value.trim();
+
+  if (amt > state.balances.checking) {
+    showFieldError("child-amt", "child-amt-msg",
+      "You only have " + fmt(state.balances.checking) + " in checking. You can't withdraw more than that.");
+    return;
+  }
+
+  openModal({
+    icon:         "💸",
+    title:        "Withdraw " + fmt(amt) + "?",
+    body:         "Remember to take the same amount from the real Chase account!",
+    detail: {
+      "Amount":         fmt(amt),
+      "For":            note,
+      "Checking After": fmt(state.balances.checking - amt)
+    },
+    confirmText:  "Withdraw",
+    confirmClass: "btn-danger",
+    onConfirm:    () => {
+      state.balances.checking -= amt;
+      recordTransaction(currentUser, note + " (Chk)", -amt);
+      document.getElementById("child-amt").value  = "";
+      document.getElementById("child-note").value = "";
+      syncToCloud("Withdrawal");
+      showToast("Withdrew " + fmt(amt) + " from checking.", "success");
     }
+  });
+}
 
-    function updateAutoDeposit() {
-        state.autoDeposit.checking = parseFloat(document.getElementById('auto-chk').value) || 0;
-        state.autoDeposit.savings = parseFloat(document.getElementById('auto-sav').value) || 0;
-        sync("Allowance Update"); alert("Allowance saved.");
+
+// ================================================================
+// [DAD] — Actions for the parent user role
+// ================================================================
+
+/** Populate the Settings tab with current rates and allowance values */
+function renderParentSettings() {
+  document.getElementById("rate-chk").value  = state.rates.checking       || 0;
+  document.getElementById("rate-sav").value  = state.rates.savings        || 0;
+  document.getElementById("allow-chk").value = (state.autoDeposit.checking || 0).toFixed(2);
+  document.getElementById("allow-sav").value = (state.autoDeposit.savings  || 0).toFixed(2);
+}
+
+/** Validate and open confirmation modal for an instant adjustment */
+function confirmAdjust() {
+  const chk  = parseFloat(document.getElementById("adj-chk").value) || 0;
+  const sav  = parseFloat(document.getElementById("adj-sav").value) || 0;
+  const note = document.getElementById("adj-note").value.trim();
+  const msgEl = document.getElementById("adj-msg");
+  msgEl.className = "field-msg";
+
+  if (chk === 0 && sav === 0) {
+    msgEl.className = "field-msg error";
+    msgEl.textContent = "Enter an amount for at least one account.";
+    return;
+  }
+  if (!note) {
+    msgEl.className = "field-msg error";
+    msgEl.textContent = "A reason is required.";
+    return;
+  }
+
+  // Build a full summary for the confirmation modal
+  const detail = { "Reason": note };
+  if (chk !== 0) {
+    detail["Checking Change"] = (chk > 0 ? "+" : "") + fmt(chk);
+    detail["Checking After"]  = fmt(state.balances.checking + chk);
+  }
+  if (sav !== 0) {
+    detail["Savings Change"] = (sav > 0 ? "+" : "") + fmt(sav);
+    detail["Savings After"]  = fmt(state.balances.savings + sav);
+  }
+
+  openModal({
+    icon:         "⚡",
+    title:        "Apply Adjustment?",
+    body:         "Review the details below before confirming.",
+    detail:       detail,
+    confirmText:  "Apply",
+    confirmClass: "btn-warning",
+    onConfirm:    () => {
+      if (chk !== 0) { state.balances.checking += chk; recordTransaction("Dad", note + " (Chk)", chk); }
+      if (sav !== 0) { state.balances.savings  += sav; recordTransaction("Dad", note + " (Sav)", sav); }
+      document.getElementById("adj-chk").value  = "";
+      document.getElementById("adj-sav").value  = "";
+      document.getElementById("adj-note").value = "";
+      syncToCloud("Adjustment");
+      showToast("Adjustment applied! ⚡", "success");
     }
+  });
+}
 
-    function saveRatesOnly() {
-        state.rates.checking = parseFloat(document.getElementById('set-int-chk').value) || 0;
-        state.rates.savings = parseFloat(document.getElementById('set-int-sav').value) || 0;
-        sync("Rates Update"); alert("Rates saved.");
+/** Confirm and apply one month of interest to both accounts */
+function confirmInterest() {
+  const earnedChk = state.balances.checking * (state.rates.checking / 100 / 12);
+  const earnedSav = state.balances.savings  * (state.rates.savings  / 100 / 12);
+
+  if (earnedChk === 0 && earnedSav === 0) {
+    showToast("Both rates are 0%. Set rates in the Settings tab first.", "info");
+    return;
+  }
+
+  openModal({
+    icon:  "📈",
+    title: "Apply 1 Month of Interest?",
+    body:  "This adds interest to both accounts based on current APY rates.",
+    detail: {
+      "Checking APY":      state.rates.checking + "%",
+      "Checking Earned":   "+" + fmt(earnedChk),
+      "Savings APY":       state.rates.savings  + "%",
+      "Savings Earned":    "+" + fmt(earnedSav),
+      "Total Interest":    "+" + fmt(earnedChk + earnedSav)
+    },
+    confirmText:  "Apply Interest",
+    confirmClass: "btn-purple",
+    onConfirm:    () => {
+      state.balances.checking += earnedChk;
+      state.balances.savings  += earnedSav;
+      if (earnedChk > 0) recordTransaction("Bank", "Interest (Chk)", earnedChk);
+      if (earnedSav > 0) recordTransaction("Bank", "Interest (Sav)", earnedSav);
+      syncToCloud("Interest Run");
+      showToast("Interest applied! 📈", "success");
     }
+  });
+}
 
-    function applyInterestNow() {
-        const cE = state.balances.checking * (state.rates.checking / 100 / 12);
-        const sE = state.balances.savings * (state.rates.savings / 100 / 12);
-        state.balances.checking += cE; state.balances.savings += sE;
-        record("Bank", "Interest (Chk)", cE); record("Bank", "Interest (Sav)", sE);
-        sync("Interest Run"); alert("Interest added.");
+/** Save weekly allowance amounts */
+function saveAllowance() {
+  state.autoDeposit.checking = parseFloat(document.getElementById("allow-chk").value) || 0;
+  state.autoDeposit.savings  = parseFloat(document.getElementById("allow-sav").value) || 0;
+  syncToCloud("Allowance Update");
+  showToast("Allowance settings saved.", "success");
+}
+
+/** Save interest rates */
+function saveRates() {
+  state.rates.checking = parseFloat(document.getElementById("rate-chk").value) || 0;
+  state.rates.savings  = parseFloat(document.getElementById("rate-sav").value) || 0;
+  renderBalances();
+  syncToCloud("Rates Update");
+  showToast("Interest rates saved.", "success");
+}
+
+
+// ================================================================
+// [CHORES] — Full chore management system
+//
+// CHORE OBJECT SHAPE:
+// {
+//   id:            string  — unique ID e.g. "chore_1712345678"
+//   name:          string  — display name
+//   description:   string  — optional longer description
+//   amount:        number  — dollar reward
+//   schedule:      "once" | "daily" | "weekly" | "biweekly" | "monthly"
+//   monthlyDay:    number | null  — 1–28, only used when schedule === "monthly"
+//   splitChk:      number  — 0–100, percentage of reward going to Checking
+//   childChooses:  boolean — if true, child sets their own split when completing
+//   paused:        boolean — if true, hidden from child
+//   endDate:       string | null  — YYYY-MM-DD, chore disappears after this date
+//   status:        "available" | "pending" | "approved" | "denied"
+//   completedBy:   string | null
+//   completedAt:   string | null
+//   denialNote:    string | null
+//   createdAt:     string
+// }
+// ================================================================
+
+/** Populate the day-of-month dropdown (1–28) for monthly chores */
+function populateMonthlyDays() {
+  const sel = document.getElementById("chore-monthly-day");
+  if (!sel || sel.options.length > 0) return;
+  const suffix = { 1:"st",2:"nd",3:"rd" };
+  for (let d = 1; d <= 28; d++) {
+    const opt = document.createElement("option");
+    opt.value = d;
+    opt.textContent = d + (suffix[d] || "th") + " of the month";
+    sel.appendChild(opt);
+  }
+}
+
+/** Show or hide the monthly day picker based on schedule selection */
+function toggleMonthlyDay() {
+  const sched = document.getElementById("chore-schedule").value;
+  document.getElementById("chore-monthly-wrap").classList.toggle("hidden", sched !== "monthly");
+}
+
+/** Update split % labels as the slider moves */
+function updateSplitLabel() {
+  const pct = parseInt(document.getElementById("chore-split").value);
+  document.getElementById("split-chk-label").textContent = pct;
+  document.getElementById("split-sav-label").textContent = 100 - pct;
+}
+
+/** Human-readable schedule label for display in chore cards */
+function scheduleLabel(sched, monthlyDay) {
+  const labels = { once:"One-time", daily:"Daily", weekly:"Weekly", biweekly:"Bi-weekly" };
+  return labels[sched] || ("Monthly, day " + monthlyDay);
+}
+
+/** Create a new chore from the parent form and add it to state */
+function createChore() {
+  const msgEl = document.getElementById("chore-form-msg");
+  msgEl.className = "field-msg";
+
+  const name         = document.getElementById("chore-name").value.trim();
+  const desc         = document.getElementById("chore-desc").value.trim();
+  const amount       = parseFloat(document.getElementById("chore-amount").value);
+  const schedule     = document.getElementById("chore-schedule").value;
+  const splitChk     = parseInt(document.getElementById("chore-split").value);
+  const childChooses = document.getElementById("chore-child-chooses").checked;
+  const paused       = document.getElementById("chore-paused").checked;
+  const endDate      = document.getElementById("chore-end-date").value || null;
+  const monthlyDay   = schedule === "monthly"
+    ? parseInt(document.getElementById("chore-monthly-day").value) : null;
+
+  // Validation
+  if (!name) {
+    msgEl.className = "field-msg error"; msgEl.textContent = "Chore name is required."; return;
+  }
+  if (!amount || amount <= 0) {
+    msgEl.className = "field-msg error"; msgEl.textContent = "Enter a valid reward amount."; return;
+  }
+
+  const chore = {
+    id:           "chore_" + Date.now(),
+    name, desc, amount, schedule, monthlyDay, splitChk, childChooses, paused, endDate,
+    status:       "available",
+    completedBy:  null,
+    completedAt:  null,
+    denialNote:   null,
+    createdAt:    fmtDate(new Date())
+  };
+
+  state.chores.push(chore);
+  syncToCloud("Chore Created");
+  showToast("\"" + name + "\" added!", "success");
+
+  // Reset the form
+  ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id => {
+    document.getElementById(id).value = "";
+  });
+  document.getElementById("chore-schedule").value = "once";
+  document.getElementById("chore-split").value = 100;
+  document.getElementById("chore-child-chooses").checked = false;
+  document.getElementById("chore-paused").checked = false;
+  document.getElementById("chore-monthly-wrap").classList.add("hidden");
+  updateSplitLabel();
+
+  renderParentChores();
+  renderChildChores();
+  updateChoreBadges();
+}
+
+/** Render the child's chore list (available chores + notification cards) */
+function renderChildChores() {
+  const listEl   = document.getElementById("child-chore-list");
+  const notifEl  = document.getElementById("child-chore-notifications");
+  if (!listEl) return;
+
+  // Notification cards for recently approved/denied chores
+  const decisions = state.chores.filter(c =>
+    (c.status === "approved" || c.status === "denied") && c.completedBy === currentUser
+  );
+
+  if (notifEl) {
+    notifEl.innerHTML = decisions.map(c => `
+      <div class="chore-card ${c.status === "approved" ? "state-approved" : "state-denied"}">
+        <div class="chore-card-header">
+          <span class="chore-name">${c.status === "approved" ? "✅" : "❌"} ${c.name}</span>
+          <span class="chore-amount">${fmt(c.amount)}</span>
+        </div>
+        <div class="chore-meta">
+          ${c.status === "approved"
+            ? "Great work! " + fmt(c.amount) + " has been added to your account."
+            : "Not approved. " + (c.denialNote ? "Reason: " + c.denialNote : "")}
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="dismissChoreNotif('${c.id}')">
+          Dismiss
+        </button>
+      </div>`
+    ).join("") || "";
+  }
+
+  // Available chores (not paused, not expired, not pending approval)
+  const available = state.chores.filter(c =>
+    !c.paused &&
+    c.status !== "pending" &&
+    c.status !== "approved" &&
+    c.status !== "denied" &&
+    (!c.endDate || c.endDate >= todayStr())
+  );
+
+  if (available.length === 0) {
+    listEl.innerHTML = `<div class="empty-state">
+      <span class="empty-icon">🎉</span>No chores available right now!
+    </div>`;
+    return;
+  }
+
+  listEl.innerHTML = available.map(c => {
+    const splitText = c.childChooses
+      ? "You choose your split"
+      : c.splitChk === 100 ? "All to Checking"
+      : c.splitChk === 0   ? "All to Savings"
+      : c.splitChk + "% Checking / " + (100 - c.splitChk) + "% Savings";
+
+    return `
+    <div class="chore-card">
+      <div class="chore-card-header">
+        <span class="chore-name">${c.name}</span>
+        <span class="chore-amount">${fmt(c.amount)}</span>
+      </div>
+      <div class="chore-meta">
+        📅 ${scheduleLabel(c.schedule, c.monthlyDay)}&nbsp;&nbsp;
+        💰 ${splitText}
+        ${c.desc ? "<br>📝 " + c.desc : ""}
+        ${c.endDate ? "<br>⏰ Expires: " + c.endDate : ""}
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="markChoreComplete('${c.id}')">
+        ✋ Mark as Complete
+      </button>
+    </div>`;
+  }).join("");
+}
+
+/**
+ * Dismiss an approved/denied chore notification.
+ * One-time chores are removed; repeating chores reset to available.
+ */
+function dismissChoreNotif(choreId) {
+  const idx = state.chores.findIndex(c => c.id === choreId);
+  if (idx === -1) return;
+  const chore = state.chores[idx];
+
+  if (chore.schedule === "once") {
+    state.chores.splice(idx, 1);  // Permanently remove one-time chores
+  } else {
+    // Reset repeating chore back to available for next cycle
+    Object.assign(chore, { status:"available", completedBy:null, completedAt:null, denialNote:null });
+  }
+
+  syncToCloud("Chore Dismissed");
+  renderChildChores();
+  updateChoreBadges();
+}
+
+/**
+ * Child marks a chore as complete.
+ * If childChooses is true, shows a split slider in the modal first.
+ */
+function markChoreComplete(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+
+  if (chore.childChooses) {
+    // Open modal with an injected split slider
+    openModal({
+      icon:         "✅",
+      title:        "Mark \"" + chore.name + "\" Complete?",
+      body:         "You earned " + fmt(chore.amount) + ". Choose how to split it before submitting.",
+      detail:       {},
+      confirmText:  "Submit for Approval",
+      confirmClass: "btn-secondary",
+      onConfirm:    () => {
+        const sliderEl = document.getElementById("modal-split-slider");
+        const chkPct   = sliderEl ? parseInt(sliderEl.value) : chore.splitChk;
+        submitChoreComplete(choreId, chkPct);
+      }
+    });
+
+    // Inject the split slider into the modal's detail box
+    setTimeout(() => {
+      const detailEl = document.getElementById("modal-detail");
+      const pct = chore.splitChk;
+      detailEl.innerHTML = `
+        <div class="split-display">
+          <span class="chk-pct">Checking: <span id="msc-chk">${pct}</span>%</span>
+          <span class="sav-pct">Savings: <span id="msc-sav">${100-pct}</span>%</span>
+        </div>
+        <input type="range" id="modal-split-slider" min="0" max="100" value="${pct}"
+          oninput="document.getElementById('msc-chk').textContent=this.value;
+                   document.getElementById('msc-sav').textContent=100-parseInt(this.value);">
+        <p style="font-size:0.73rem;color:var(--muted);margin:6px 0 0;text-align:center;">
+          Drag to set your split
+        </p>`;
+      detailEl.classList.remove("hidden");
+    }, 60);
+
+  } else {
+    // Standard confirmation
+    const splitText = chore.splitChk === 100 ? "All to Checking"
+      : chore.splitChk === 0 ? "All to Savings"
+      : chore.splitChk + "% Checking / " + (100 - chore.splitChk) + "% Savings";
+
+    openModal({
+      icon:         "✅",
+      title:        "Mark \"" + chore.name + "\" Complete?",
+      body:         "Your parent will review and confirm. Money is added once approved.",
+      detail:       { "Reward": fmt(chore.amount), "Split": splitText },
+      confirmText:  "Yes, I Did It! ✋",
+      confirmClass: "btn-secondary",
+      onConfirm:    () => submitChoreComplete(choreId, chore.splitChk)
+    });
+  }
+}
+
+/** Update the chore status to "pending" and queue a sync */
+function submitChoreComplete(choreId, chkPct) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+  chore.status      = "pending";
+  chore.completedBy = currentUser;
+  chore.completedAt = fmtDate(new Date());
+  chore.splitChk    = chkPct;  // Save child's chosen split
+
+  syncToCloud("Chore Submitted");
+  showToast("Submitted for approval! 🎉 Your parent will review it.", "success", 4000);
+  renderChildChores();
+  updateChoreBadges();
+}
+
+/** Render parent's chore view: pending approvals + full chore list */
+function renderParentChores() {
+  // ── Pending approvals banner ───────────────────────────────
+  const approvalsEl = document.getElementById("parent-chore-approvals");
+  const pending     = state.chores.filter(c => c.status === "pending");
+
+  approvalsEl.innerHTML = pending.length > 0 ? `
+    <div class="approval-banner">
+      <h3>⏳ Pending Approval (${pending.length})</h3>
+      ${pending.map(c => `
+        <div class="chore-card state-pending">
+          <div class="chore-card-header">
+            <span class="chore-name">${c.name}</span>
+            <span class="chore-amount">${fmt(c.amount)}</span>
+          </div>
+          <div class="chore-meta">
+            Completed by <strong>${c.completedBy}</strong> at ${c.completedAt}<br>
+            Split: ${c.splitChk}% Checking / ${100 - c.splitChk}% Savings
+            ${c.desc ? "<br>📝 " + c.desc : ""}
+          </div>
+          <div class="row" style="gap:8px;">
+            <button class="btn btn-secondary btn-sm col" onclick="approveChore('${c.id}')">✅ Approve</button>
+            <button class="btn btn-danger btn-sm col"    onclick="denyChore('${c.id}')">❌ Deny</button>
+          </div>
+        </div>`
+      ).join("")}
+    </div>` : "";
+
+  // ── Full chore list (with pause / delete) ──────────────────
+  const listEl = document.getElementById("parent-chore-list");
+  if (!listEl) return;
+
+  if (state.chores.length === 0) {
+    listEl.innerHTML = `<div class="empty-state"><span class="empty-icon">📋</span>No chores yet.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = state.chores.map(c => {
+    const badge = c.paused         ? `<span class="status-badge badge-paused">Paused</span>`
+      : c.status === "pending"     ? `<span class="status-badge badge-pending">Awaiting Approval</span>`
+      : c.status === "approved"    ? `<span class="status-badge badge-approved">Approved</span>`
+      : c.status === "denied"      ? `<span class="status-badge badge-denied">Denied</span>`
+      :                              `<span class="status-badge badge-available">Active</span>`;
+
+    return `
+    <div class="chore-card">
+      <div class="chore-card-header">
+        <span class="chore-name">${c.name}</span>
+        <span class="chore-amount">${fmt(c.amount)}</span>
+      </div>
+      <div class="chore-meta">
+        ${badge}&nbsp; 📅 ${scheduleLabel(c.schedule, c.monthlyDay)}<br>
+        💰 ${c.splitChk}% Chk / ${100 - c.splitChk}% Sav${c.childChooses ? " (child chooses)" : ""}
+        ${c.endDate ? "<br>⏰ Ends: " + c.endDate : ""}
+        ${c.desc ? "<br>📝 " + c.desc : ""}
+      </div>
+      <div class="row" style="gap:8px; margin-top:4px;">
+        <button class="btn btn-ghost btn-sm" onclick="togglePauseChore('${c.id}')">
+          ${c.paused ? "▶️ Resume" : "⏸️ Pause"}
+        </button>
+        <button class="btn btn-danger btn-sm" onclick="deleteChore('${c.id}')">🗑️ Delete</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/** Approve a pending chore — deposits money to checking/savings */
+function approveChore(choreId) {
+  const chore  = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+  const chkAmt = chore.amount * (chore.splitChk / 100);
+  const savAmt = chore.amount * ((100 - chore.splitChk) / 100);
+
+  openModal({
+    icon:  "✅",
+    title: "Approve \"" + chore.name + "\"?",
+    body:  "This deposits the reward into " + chore.completedBy + "'s account right now.",
+    detail: {
+      "Total Reward": fmt(chore.amount),
+      "→ Checking":   fmt(chkAmt),
+      "→ Savings":    fmt(savAmt),
+      "Completed By": chore.completedBy
+    },
+    confirmText:  "Approve & Pay",
+    confirmClass: "btn-secondary",
+    onConfirm:    () => {
+      state.balances.checking += chkAmt;
+      state.balances.savings  += savAmt;
+      if (chkAmt > 0) recordTransaction("Bank", "Chore: " + chore.name + " (Chk)", chkAmt);
+      if (savAmt > 0) recordTransaction("Bank", "Chore: " + chore.name + " (Sav)", savAmt);
+      chore.status = "approved";
+      syncToCloud("Chore Approved");
+      showToast("Approved! " + fmt(chore.amount) + " deposited. 🎉", "success");
+      renderParentChores();
+      renderChildChores();
+      updateChoreBadges();
     }
+  });
+}
 
-    function transferToSavings() {
-        const a = parseFloat(document.getElementById('trans-amt').value);
-        const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Check balance or note."); return; }
-        state.balances.checking -= a; state.balances.savings += a;
-        record("Linnea", "To Sav: " + n, -a);
-        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
-        sync("Transfer");
+/** Deny a pending chore with an optional reason */
+function denyChore(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+
+  openInputModal({
+    icon:         "❌",
+    title:        "Deny \"" + chore.name + "\"?",
+    body:         "Optionally leave a reason. The child will see this note.",
+    inputType:    "text",
+    inputAttrs:   'placeholder="Reason (optional)"',
+    confirmText:  "Deny",
+    confirmClass: "btn-danger",
+    onConfirm:    (reason) => {
+      chore.status     = "denied";
+      chore.denialNote = reason || "";
+      syncToCloud("Chore Denied");
+      showToast("Chore denied.", "error");
+      renderParentChores();
+      renderChildChores();
+      updateChoreBadges();
     }
+  });
+}
 
-    function withdraw() {
-        const a = parseFloat(document.getElementById('trans-amt').value);
-        const n = document.getElementById('trans-note').value.trim();
-        if (!n || a <= 0 || state.balances.checking < a) { alert("Check balance or note."); return; }
-        state.balances.checking -= a; record("Linnea", n + " (Chk)", -a);
-        document.getElementById('trans-amt').value = ''; document.getElementById('trans-note').value = '';
-        sync("Withdrawal");
+/** Toggle a chore's paused state */
+function togglePauseChore(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+  chore.paused = !chore.paused;
+  syncToCloud(chore.paused ? "Chore Paused" : "Chore Resumed");
+  showToast("Chore " + (chore.paused ? "paused." : "resumed."), "info");
+  renderParentChores();
+  renderChildChores();
+  updateChoreBadges();
+}
+
+/** Delete a chore permanently after confirmation */
+function deleteChore(choreId) {
+  const chore = state.chores.find(c => c.id === choreId);
+  if (!chore) return;
+  openModal({
+    icon:         "🗑️",
+    title:        "Delete \"" + chore.name + "\"?",
+    body:         "This cannot be undone. The chore will be permanently removed.",
+    confirmText:  "Delete",
+    confirmClass: "btn-danger",
+    onConfirm:    () => {
+      state.chores = state.chores.filter(c => c.id !== choreId);
+      syncToCloud("Chore Deleted");
+      showToast("Chore deleted.", "info");
+      renderParentChores();
+      renderChildChores();
+      updateChoreBadges();
     }
+  });
+}
 
-    function changePinPrompt(u) {
-        const p = prompt("New 4-digit PIN:");
-        if (p && p.length === 4) { state.pins[u] = p; sync("PIN Update"); }
+
+// ================================================================
+// [HISTORY] — Transaction history drawer
+// ================================================================
+
+/** Open the history drawer */
+function openHistory() {
+  renderHistory();
+  document.getElementById("history-drawer").classList.add("open");
+}
+
+/** Close the history drawer */
+function closeHistory() {
+  document.getElementById("history-drawer").classList.remove("open");
+}
+
+/** Render filtered, sorted history and running totals */
+function renderHistory() {
+  const sort  = document.getElementById("f-sort").value;
+  const fUser = document.getElementById("f-user").value;
+  const fAcct = document.getElementById("f-acct").value;
+  const fType = document.getElementById("f-type").value;
+
+  let rows = [...state.history];
+
+  // Apply filters
+  rows = rows.filter(h => {
+    const n = (h.note || "").toLowerCase();
+    const isSav = n.includes("(sav)") || n.includes("to savings") || n.includes("to sav") || n.includes("interest (sav)");
+    if (fUser !== "all" && h.user !== fUser)   return false;
+    if (fAcct === "chk" && isSav)              return false;
+    if (fAcct === "sav" && !isSav)             return false;
+    if (fType === "pos" && h.amt < 0)          return false;
+    if (fType === "neg" && h.amt >= 0)         return false;
+    return true;
+  });
+
+  if (sort === "new") rows = rows.reverse();
+
+  // Running totals
+  const totalIn  = rows.filter(r => r.amt > 0).reduce((s, r) => s + r.amt, 0);
+  const totalOut = rows.filter(r => r.amt < 0).reduce((s, r) => s + r.amt, 0);
+  const net      = totalIn + totalOut;
+
+  document.getElementById("hist-in").textContent  = "+" + fmt(totalIn);
+  document.getElementById("hist-out").textContent = fmt(totalOut);
+  document.getElementById("hist-net").textContent = (net >= 0 ? "+" : "") + fmt(net);
+  document.getElementById("hist-net").className   = "chip-val " + (net >= 0 ? "pos" : "neg");
+
+  const listEl = document.getElementById("ledger-list");
+  if (rows.length === 0) {
+    listEl.innerHTML = `<div class="empty-state"><span class="empty-icon">🔍</span>No transactions match these filters.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = rows.map(h => {
+    const n = (h.note || "").toLowerCase();
+    const isSav   = n.includes("(sav)") || n.includes("to savings") || n.includes("to sav") || n.includes("interest (sav)");
+    const isChore = n.includes("chore:");
+    const pillCls = isChore ? "acct-pill chore" : isSav ? "acct-pill sav" : "acct-pill";
+    const pillTxt = isChore ? "CHORE" : isSav ? "SAV" : "CHK";
+
+    return `<div class="ledger-row">
+      <div class="${pillCls}">${pillTxt}</div>
+      <div>
+        <span class="ledger-date">${h.date}</span>
+        <span class="ledger-who">${h.user}</span>
+        <span class="ledger-note"> — ${h.note}</span>
+      </div>
+      <div class="ledger-amt ${h.amt >= 0 ? "pos" : "neg"}">
+        ${h.amt >= 0 ? "+" : ""}${fmt(h.amt)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+
+// ================================================================
+// [ADMIN] — Admin panel: branding, user management, config
+// ================================================================
+
+/** Open the admin drawer (shows the PIN entry form) */
+function openAdmin() {
+  document.getElementById("admin-login-section").classList.remove("hidden");
+  document.getElementById("admin-settings-section").classList.add("hidden");
+  document.getElementById("admin-pin-input").value = "";
+  document.getElementById("admin-pin-error").className = "field-msg";
+  document.getElementById("admin-drawer").classList.add("open");
+}
+
+/** Close the admin drawer */
+function closeAdmin() {
+  document.getElementById("admin-drawer").classList.remove("open");
+}
+
+/** Verify admin PIN and show the settings panel */
+function attemptAdminLogin() {
+  const pin   = document.getElementById("admin-pin-input").value;
+  const errEl = document.getElementById("admin-pin-error");
+
+  if (pin !== (state.config.adminPin || DEFAULT_CONFIG.adminPin)) {
+    errEl.className = "field-msg error";
+    return;
+  }
+
+  errEl.className = "field-msg";
+  document.getElementById("admin-login-section").classList.add("hidden");
+  document.getElementById("admin-settings-section").classList.remove("hidden");
+  populateAdminForm();
+  renderAdminUsers();
+}
+
+/** Fill admin form fields with current config values */
+function populateAdminForm() {
+  const cfg = state.config;
+  document.getElementById("admin-bank-name").value       = cfg.bankName       || "";
+  document.getElementById("admin-bank-tagline").value    = cfg.tagline        || "";
+  document.getElementById("admin-color-primary").value   = cfg.colorPrimary   || "#2563eb";
+  document.getElementById("admin-color-secondary").value = cfg.colorSecondary || "#10b981";
+  document.getElementById("admin-img-banner").value      = cfg.imgBanner      || "";
+  document.getElementById("admin-img-logo").value        = cfg.imgLogo        || "";
+  document.getElementById("admin-img-icon").value        = cfg.imgIcon        || "";
+  document.getElementById("admin-timezone").value        = cfg.timezone       || "GMT-5";
+  document.getElementById("admin-email-parent").value    = cfg.emailParent    || "";
+  document.getElementById("admin-email-child").value     = cfg.emailChild     || "";
+}
+
+/** Render the user list in the admin panel */
+function renderAdminUsers() {
+  const el = document.getElementById("admin-user-list");
+  if (!el) return;
+  el.innerHTML = state.users.map(u => {
+    const role = state.roles[u] || "child";
+    return `<div class="user-row">
+      <div style="flex:1;">
+        <strong>${u}</strong>
+        <span class="user-role-badge ${role === "parent" ? "role-parent" : "role-child"}">
+          ${role.charAt(0).toUpperCase() + role.slice(1)}
+        </span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="adminResetUserPin('${u}')">Reset PIN</button>
+      ${state.users.length > 1
+        ? `<button class="btn btn-danger btn-sm" onclick="adminRemoveUser('${u}')">Remove</button>`
+        : ""}
+    </div>`;
+  }).join("");
+}
+
+/** Reset any user's PIN to 0000 from the admin panel */
+function adminResetUserPin(username) {
+  openModal({
+    icon:         "🔄",
+    title:        "Reset " + username + "'s PIN?",
+    body:         "Their PIN will be set to 0000.",
+    confirmText:  "Reset",
+    confirmClass: "btn-danger",
+    onConfirm:    () => {
+      state.pins[username] = "0000";
+      syncToCloud("Admin PIN Reset");
+      showToast(username + "'s PIN reset to 0000.", "success");
     }
+  });
+}
 
-    function adminResetPin() {
-        state.pins.Linnea = "0000"; sync("PIN Reset"); alert("Linnea reset to 0000");
+/** Remove a user from the app (admin only) */
+function adminRemoveUser(username) {
+  openModal({
+    icon:         "⚠️",
+    title:        "Remove " + username + "?",
+    body:         "This removes the user login. Their transaction history will remain in the ledger.",
+    confirmText:  "Remove",
+    confirmClass: "btn-danger",
+    onConfirm:    () => {
+      state.users  = state.users.filter(u => u !== username);
+      delete state.pins[username];
+      delete state.roles[username];
+      populateUserDropdown();
+      renderAdminUsers();
+      syncToCloud("User Removed");
+      showToast(username + " removed.", "info");
     }
+  });
+}
 
-    load();
+/** Add a new user from the admin form */
+function addUser() {
+  const name  = document.getElementById("new-user-name").value.trim();
+  const role  = document.getElementById("new-user-role").value;
+  const pin   = document.getElementById("new-user-pin").value;
+  const msgEl = document.getElementById("new-user-msg");
+  msgEl.className = "field-msg";
+
+  if (!name) { msgEl.className = "field-msg error"; msgEl.textContent = "Name is required."; return; }
+  if (state.users.includes(name)) { msgEl.className = "field-msg error"; msgEl.textContent = "A user named \"" + name + "\" already exists."; return; }
+  if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) { msgEl.className = "field-msg error"; msgEl.textContent = "PIN must be exactly 4 digits."; return; }
+
+  state.users.push(name);
+  state.pins[name]  = pin;
+  state.roles[name] = role;
+
+  populateUserDropdown();
+  renderAdminUsers();
+  syncToCloud("User Added");
+  showToast("\"" + name + "\" added!", "success");
+
+  document.getElementById("new-user-name").value = "";
+  document.getElementById("new-user-pin").value  = "";
+}
+
+/** Save all admin branding settings and sync to cloud */
+function saveAdminSettings() {
+  state.config.bankName       = document.getElementById("admin-bank-name").value.trim()    || "Family Bank";
+  state.config.tagline        = document.getElementById("admin-bank-tagline").value.trim() || "";
+  state.config.colorPrimary   = document.getElementById("admin-color-primary").value;
+  state.config.colorSecondary = document.getElementById("admin-color-secondary").value;
+  state.config.imgBanner      = document.getElementById("admin-img-banner").value.trim()   || "images/banner.png";
+  state.config.imgLogo        = document.getElementById("admin-img-logo").value.trim()     || "images/logo.png";
+  state.config.imgIcon        = document.getElementById("admin-img-icon").value.trim()     || "images/icon.png";
+  state.config.timezone       = document.getElementById("admin-timezone").value;
+  state.config.emailParent    = document.getElementById("admin-email-parent").value.trim();
+  state.config.emailChild     = document.getElementById("admin-email-child").value.trim();
+
+  applyBranding();
+  syncToCloud("Admin Settings Updated");
+  showToast("All settings saved! 💾", "success");
+}
+
+/** Change the admin PIN via input modal */
+function changeAdminPin() {
+  openInputModal({
+    icon:        "🔑",
+    title:       "New Admin PIN",
+    body:        "Enter a new 4-digit admin PIN.",
+    inputType:   "password",
+    inputAttrs:  'maxlength="4" inputmode="numeric" placeholder="••••"',
+    confirmText: "Save",
+    onConfirm:   (val) => {
+      if (!val || val.length !== 4 || !/^\d{4}$/.test(val)) {
+        showToast("Admin PIN must be exactly 4 digits.", "error"); return;
+      }
+      state.config.adminPin = val;
+      syncToCloud("Admin PIN Changed");
+      showToast("Admin PIN updated.", "success");
+    }
+  });
+}
+
+
+// ================================================================
+// [INIT] — App startup
+// ================================================================
+
+/** Pre-populate monthly day dropdown */
+populateMonthlyDays();
+
+/** Set initial split label */
+updateSplitLabel();
+
+/** Enter key submits login */
+document.getElementById("pin-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") attemptLogin();
+});
+
+/** Enter key submits admin login */
+document.getElementById("admin-pin-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") attemptAdminLogin();
+});
+
+/** Load data from the cloud on page load */
+loadFromCloud();
+
 </script>
 </body>
 </html>
