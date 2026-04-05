@@ -519,26 +519,96 @@
 </div>
 
 <script>
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE — LINE 1  ▼▼▼    ║
-// ╚══════════════════════════════════════════════════════════════════╝
-const API_URL = "https://script.google.com/macros/s/AKfycbyswg-Ws0knSqi1wM7g7F5WauQ5EMd1yM6FgNe2sMAVzrP5cSm7I6XidjWj-MKQhsq3AQ/exec";
-// ╔══════════════════════════════════════════════════════════════════╗
-// ║  ▲▲▲  THAT IS THE ONLY LINE YOU NEED TO CHANGE ON REDEPLOY ▲▲▲║
-// ╚══════════════════════════════════════════════════════════════════╝
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║                   FAMILY BANK — index.html                           ║
+// ║              Frontend Configuration & Setup Block                     ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+//
+// HOW TO DEPLOY:
+//   1. Edit the ★ CONFIGURATION block below to match your family
+//   2. Upload this file to your GitHub Pages repo root
+//   3. That's it! All other settings live in the in-app Admin panel.
+//
+// HOW TO REDEPLOY after a Code.gs update:
+//   1. Get the new Web App URL from Google Apps Script (Deploy → Manage)
+//   2. Paste it into API_URL below — that is the only line that changes
+//   3. Re-upload this file to GitHub
+//
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║                      ★ CONFIGURATION ★                               ║
+// ║     Edit this block. Nothing else in this file needs to change        ║
+// ║     for a basic family setup.                                         ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
 
+// ------------------------------------------------------------------
+// STEP 1 — GOOGLE APPS SCRIPT URL
+// Paste your Web App URL here every time you redeploy Code.gs.
+// Get it from: Apps Script → Deploy → Manage Deployments → copy URL
+// ------------------------------------------------------------------
+const API_URL = "https://script.google.com/macros/s/AKfycbyswg-Ws0knSqi1wM7g7F5WauQ5EMd1yM6FgNe2sMAVzrP5cSm7I6XidjWj-MKQhsq3AQ/exec"; // ← PASTE URL HERE
+
+// ------------------------------------------------------------------
+// STEP 2 — BANK IDENTITY
+// Shown on the login screen and throughout the app.
+// These are startup defaults — you can also change them in Admin panel.
+// ------------------------------------------------------------------
+const CFG_BANK_NAME    = "Family Bank";              // ← Your bank name
+const CFG_BANK_TAGLINE = "Your money, your future."; // ← Shown under name
+
+// ------------------------------------------------------------------
+// STEP 3 — BRAND COLORS
+// Primary = buttons, checking card, links.
+// Secondary = savings card, deposit amounts, success states.
+// Use any hex color code. Change anytime in the Admin panel too.
+// ------------------------------------------------------------------
+const CFG_COLOR_PRIMARY   = "#2563eb"; // ← Blue  (checking / buttons)
+const CFG_COLOR_SECONDARY = "#10b981"; // ← Green (savings / deposits)
+
+// ------------------------------------------------------------------
+// STEP 4 — TIMEZONE (for display only — server timezone set in Code.gs)
+// Choices: "GMT-8" "GMT-7" "GMT-6" "GMT-5" "GMT-4" "GMT+0" "GMT+1" "GMT+2"
+// ------------------------------------------------------------------
+const CFG_TIMEZONE = "GMT-5"; // ← Eastern. Change to your timezone.
+
+// ------------------------------------------------------------------
+// STEP 5 — ADMIN PANEL PIN
+// The Admin panel is hidden — accessed via a small link at the bottom
+// of the login screen. Change this after your first login.
+// ------------------------------------------------------------------
+const CFG_ADMIN_PIN = "9999"; // ← Change this! Used to access Admin panel.
+
+// ------------------------------------------------------------------
+// STEP 6 — IMAGES (optional)
+// By default the app looks for images/banner.png, images/logo.png,
+// images/icon.png in your GitHub repo. If missing they are hidden.
+// You can also paste full URLs to hosted images here instead.
+// ------------------------------------------------------------------
+const CFG_IMG_BANNER = "images/banner.png"; // ← Top banner image
+const CFG_IMG_LOGO   = "images/logo.png";   // ← Logo on login screen
+const CFG_IMG_ICON   = "images/icon.png";   // ← App icon (home screen)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║           END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE         ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// Internal defaults object — built from config constants above
 const DEFAULT_CONFIG = {
-  bankName:"Family Bank", tagline:"Your money, your future.",
-  colorPrimary:"#2563eb", colorSecondary:"#10b981",
-  imgBanner:"images/banner.png", imgLogo:"images/logo.png", imgIcon:"images/icon.png",
-  timezone:"GMT-5", emailParent:"", emailChildren:{},
-  adminPin:"9999"
+  bankName:       CFG_BANK_NAME,
+  tagline:        CFG_BANK_TAGLINE,
+  colorPrimary:   CFG_COLOR_PRIMARY,
+  colorSecondary: CFG_COLOR_SECONDARY,
+  imgBanner:      CFG_IMG_BANNER,
+  imgLogo:        CFG_IMG_LOGO,
+  imgIcon:        CFG_IMG_ICON,
+  timezone:       CFG_TIMEZONE,
+  adminPin:       CFG_ADMIN_PIN,
+  emails:         {}
 };
 
 // ================================================================
-// STATE
+// STATE — internal runtime state (do not edit)
 // state.children["Linnea"] = { balances, rates, autoDeposit, chores }
-// state.history is per-child, loaded from Ledger filtered by child name
+// state.history is per-child, loaded from Ledger on each fetch
 // ================================================================
 let state = {
   config: {...DEFAULT_CONFIG},
