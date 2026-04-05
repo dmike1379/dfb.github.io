@@ -418,6 +418,31 @@
             </div>
           </div>
         </div>
+        <div class="row">
+          <div class="col">
+            <label class="field-label">📅 Calendar Reminder Time</label>
+            <select id="chore-reminder-time">
+              <option value="6">6:00 AM</option>
+              <option value="7">7:00 AM</option>
+              <option value="8" selected>8:00 AM</option>
+              <option value="9">9:00 AM</option>
+              <option value="10">10:00 AM</option>
+              <option value="11">11:00 AM</option>
+              <option value="12">12:00 PM (Noon)</option>
+              <option value="13">1:00 PM</option>
+              <option value="14">2:00 PM</option>
+              <option value="15">3:00 PM (After school)</option>
+              <option value="16">4:00 PM</option>
+              <option value="17">5:00 PM</option>
+              <option value="18">6:00 PM (Evening)</option>
+              <option value="19">7:00 PM</option>
+              <option value="20">8:00 PM</option>
+            </select>
+          </div>
+          <div class="col" style="display:flex;align-items:flex-end;padding-bottom:10px;">
+            <div style="font-size:.7rem;color:var(--muted);line-height:1.5;">Only used if calendar notifications are enabled in Admin.</div>
+          </div>
+        </div>
         <div class="field-msg" id="chore-form-msg"></div>
         <div class="row" style="gap:8px;">
           <button class="btn btn-secondary" id="chore-submit-btn" onclick="createChore()" style="flex:1;">✅ Add Chore</button>
@@ -605,7 +630,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbwtckfNI0ev3oGNNSDaXk-D7SGtjjlhrXsF6Mq6aq-zyZk8xdQKJhuB_rN-ruQWXYBIFg/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbx723QDKgrw4gglQa9kEy4hvpInBj4aIdOWFQXkGjPRFZo_4u0o8g_XaG2vjALU5AgXlg/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -1323,18 +1348,20 @@ function createChore(){
   const monthlyDay=schedule==="monthly"?document.getElementById("chore-monthly-day").value:null;
   const weekday=(schedule==="weekly"||schedule==="biweekly")?parseInt(document.getElementById("chore-weekday").value):null;
   const onceDate=schedule==="once"?document.getElementById("chore-once-date").value||null:null;
+  const reminderHour=parseInt(document.getElementById("chore-reminder-time").value)||8;
   if(!name){msgEl.className="field-msg error";msgEl.textContent="Chore name is required.";return;}
   if(!amount||amount<=0){msgEl.className="field-msg error";msgEl.textContent="Enter a valid reward amount.";return;}
   const data=getChildData(activeChild);
   if(editingChoreId){
     const ex=data.chores.find(c=>c.id===editingChoreId);
-    if(ex)Object.assign(ex,{name,desc,amount,schedule,monthlyDay,weekday,onceDate,splitChk,childChooses,paused,endDate});
+    if(ex)Object.assign(ex,{name,desc,amount,schedule,monthlyDay,weekday,onceDate,reminderHour,splitChk,childChooses,paused,endDate});
     editingChoreId=null;setChoreFormMode("create");syncToCloud("Chore Edited");showToast("Chore updated! ✏️","success");
   }else{
-    data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,onceDate,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date())});
+    data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,onceDate,reminderHour,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date())});
     syncToCloud("Chore Created");showToast('"'+name+'" added! 📋',"success");
   }
   ["chore-name","chore-desc","chore-amount","chore-end-date","chore-once-date"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-child-chooses").checked=false;
@@ -1359,6 +1386,7 @@ function editChore(choreId){
   document.getElementById("chore-paused").checked=!!chore.paused;
   document.getElementById("chore-end-date").value=chore.endDate||"";
   document.getElementById("chore-once-date").value=chore.onceDate||"";
+  document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
   onScheduleChange();
   if(chore.schedule==="monthly"&&chore.monthlyDay)document.getElementById("chore-monthly-day").value=chore.monthlyDay;
   if((chore.schedule==="weekly"||chore.schedule==="biweekly")&&chore.weekday!==undefined)document.getElementById("chore-weekday").value=String(chore.weekday);
@@ -1372,6 +1400,7 @@ function cancelChoreEdit(){
   ["chore-name","chore-desc","chore-amount","chore-end-date","chore-once-date"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
+  document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-child-chooses").checked=false;
   document.getElementById("chore-paused").checked=false;
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
