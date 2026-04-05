@@ -464,8 +464,10 @@
     </div>
     <div class="section-block">
       <h3>📧 Email Addresses</h3>
-      <label class="field-label">Parent Email</label><input type="email" id="admin-email-parent" placeholder="parent@email.com">
-      <label class="field-label">Child Emails (comma separated)</label><input type="text" id="admin-email-children" placeholder="child1@email.com, child2@email.com">
+      <div class="info-box">Each user gets their own email address. Used for monthly statements, chore alerts, allowance deposits, and Sunday reminders.</div>
+      <div id="admin-email-fields">
+        <!-- Populated dynamically by renderAdminEmails() -->
+      </div>
     </div>
     <div class="section-block">
       <h3>👥 User Management</h3>
@@ -520,7 +522,7 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  ▼▼▼  PASTE YOUR GOOGLE APPS SCRIPT URL HERE — LINE 1  ▼▼▼    ║
 // ╚══════════════════════════════════════════════════════════════════╝
-const API_URL = "https://script.google.com/macros/s/AKfycbzpWIQt6KVidxPea2lYYXdkt6nP-DogKI-L2alb13aRCXcuU4W9B8UThu_y7wmzmqu7vQ/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbz1hXCPec6lugtT3HoqYH--fJWVb0uA1cQn34_B_K3AJAIZ-VkirANDUyOls0XGh0OC/exec";
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  ▲▲▲  THAT IS THE ONLY LINE YOU NEED TO CHANGE ON REDEPLOY ▲▲▲║
 // ╚══════════════════════════════════════════════════════════════════╝
@@ -1499,10 +1501,22 @@ function populateAdminForm() {
   document.getElementById("admin-img-logo").value=cfg.imgLogo||"";
   document.getElementById("admin-img-icon").value=cfg.imgIcon||"";
   document.getElementById("admin-timezone").value=cfg.timezone||"GMT-5";
-  document.getElementById("admin-email-parent").value=cfg.emailParent||"";
-  // emailChildren is a map {name:email} — display as comma list
-  const childEmails=Object.values(cfg.emailChildren||{}).join(", ");
-  document.getElementById("admin-email-children").value=childEmails;
+  renderAdminEmails();
+}
+function renderAdminEmails() {
+  if(!state.config.emails) state.config.emails={};
+  const emails=state.config.emails;
+  const container=document.getElementById("admin-email-fields");
+  if(!container) return;
+  container.innerHTML=state.users.map(u=>{
+    const role=state.roles[u]||"child";
+    const roleLabel=role==="parent"?"👤 Parent":"👦 Child";
+    const val=emails[u]||"";
+    return '<div style="margin-bottom:12px;">'
+      +'<label class="field-label">'+u+' <span style="font-size:.65rem;color:var(--muted);font-weight:500;">'+roleLabel+'</span></label>'
+      +'<input type="email" id="admin-email-'+u+'" value="'+val+'" placeholder="'+u.toLowerCase()+'@email.com">'
+      +'</div>';
+  }).join("");
 }
 function renderAdminUsers() {
   const el=document.getElementById("admin-user-list");
@@ -1534,8 +1548,11 @@ function addUser() {
   if(state.users.includes(name)){msgEl.className="field-msg error";msgEl.textContent='A user named "'+name+'" already exists.';return;}
   if(!pin||pin.length!==4||!/^\d{4}$/.test(pin)){msgEl.className="field-msg error";msgEl.textContent="PIN must be exactly 4 digits.";return;}
   state.users.push(name); state.pins[name]=pin; state.roles[name]=role;
-  if(role==="child") getChildData(name); // Initialise child data object
+  if(role==="child") getChildData(name);
+  if(!state.config.emails) state.config.emails={};
+  state.config.emails[name]="";
   renderAdminUsers();
+  renderAdminEmails();
   syncToCloud("User Added");
   showToast('"'+name+'" added!',"success");
   document.getElementById("new-user-name").value="";
@@ -1550,13 +1567,12 @@ function saveAdminSettings() {
   state.config.imgLogo=document.getElementById("admin-img-logo").value.trim()||"images/logo.png";
   state.config.imgIcon=document.getElementById("admin-img-icon").value.trim()||"images/icon.png";
   state.config.timezone=document.getElementById("admin-timezone").value;
-  state.config.emailParent=document.getElementById("admin-email-parent").value.trim();
-  // Parse comma-separated child emails — match to child user names by order
-  const childEmailsRaw=document.getElementById("admin-email-children").value;
-  const childEmailList=childEmailsRaw.split(",").map(e=>e.trim()).filter(Boolean);
-  const childNames=getChildNames();
-  state.config.emailChildren={};
-  childNames.forEach((n,i)=>{ if(childEmailList[i]) state.config.emailChildren[n]=childEmailList[i]; });
+  // Save per-user emails from individual input fields
+  if(!state.config.emails) state.config.emails={};
+  state.users.forEach(u=>{
+    const el=document.getElementById("admin-email-"+u);
+    if(el) state.config.emails[u]=el.value.trim();
+  });
   applyBranding();
   syncToCloud("Admin Settings Updated");
   showToast("All settings saved! 💾","success");
