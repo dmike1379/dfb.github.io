@@ -518,9 +518,16 @@
       </select>
     </div>
     <div class="section-block">
-      <h3>📧 Email Addresses</h3>
-      <div class="info-box">Each user gets their own email for personalized notifications.</div>
-      <div id="admin-email-fields"></div>
+      <h3>🔔 Notifications Per Child</h3>
+      <div class="info-box">Set each child's email address and choose how they receive chore notifications. Calendar integration requires a shared Google Calendar — see setup instructions below.</div>
+      <div id="admin-notify-fields"></div>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;font-size:.75rem;color:#92400e;margin-top:12px;line-height:1.7;">
+        <strong>📅 Calendar Setup (one-time per child):</strong><br>
+        1. In Google Calendar create a new calendar — name it "[Child]'s Chores"<br>
+        2. Share it with the child's email — "See all event details"<br>
+        3. Go to Settings → find Calendar ID (ends in @group.calendar.google.com)<br>
+        4. Paste the Calendar ID above and save
+      </div>
     </div>
     <div class="section-block">
       <h3>👥 User Management</h3>
@@ -534,6 +541,7 @@
         <input type="password" id="new-user-pin" maxlength="4" inputmode="numeric" placeholder="0000">
         <label class="field-label">Email Address</label>
         <input type="email" id="new-user-email" placeholder="their@email.com">
+
         <div class="field-msg" id="new-user-msg"></div>
         <button class="btn btn-secondary" onclick="addUser()">➕ Add User</button>
       </div>
@@ -597,7 +605,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbyeqgwV38oGWh7PMGN5yzBWim4m2uea5KAAu4-Maeu-tJwKb8LWot3cgqyuyxeVY200DQ/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbwtckfNI0ev3oGNNSDaXk-D7SGtjjlhrXsF6Mq6aq-zyZk8xdQKJhuB_rN-ruQWXYBIFg/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -1525,13 +1533,44 @@ function populateAdminForm(){
   document.getElementById("admin-timezone").value=cfg.timezone||CFG_TIMEZONE;
 }
 function renderAdminEmailFields(){
-  const el=document.getElementById("admin-email-fields");if(!el)return;
+  const el=document.getElementById("admin-notify-fields");
+  if(!el) return;
   const emails=state.config.emails||{};
-  el.innerHTML=state.users.map(u=>`
-    <div style="margin-bottom:10px;">
-      <label class="field-label">${u} (${state.roles[u]||"child"})</label>
-      <input type="email" id="email-field-${u}" placeholder="${u.toLowerCase()}@email.com" value="${emails[u]||""}" style="margin-bottom:0;">
-    </div>`).join("");
+  const calendars=state.config.calendars||{};
+  const notify=state.config.notify||{};
+  // Show all users for email; only children for calendar
+  const allUsers=state.users||[];
+  const children=getChildNames();
+  el.innerHTML=allUsers.map(u=>{
+    const role=state.roles[u]||"child";
+    const isChild=role==="child";
+    const nEmail=!!(notify[u]&&notify[u].email!==false);   // default ON
+    const nCal=!!(notify[u]&&notify[u].calendar===true);   // default OFF
+    return `
+    <div style="border:1.5px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:10px;">${u} <span style="font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:4px;background:${isChild?"#d1fae5;color:#065f46":"#dbeafe;color:#1d4ed8"};">${role.charAt(0).toUpperCase()+role.slice(1)}</span></div>
+      <label class="field-label">Email Address</label>
+      <input type="email" id="email-field-${u}" placeholder="${u.toLowerCase()}@email.com" value="${emails[u]||""}">
+      <div style="display:flex;gap:16px;margin-bottom:${isChild?"10px":"0"};">
+        <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="notify-email-${u}" ${nEmail?"checked":""} style="width:18px!important;height:18px!important;"> 📧 Email notifications
+        </label>
+        ${isChild?`<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="notify-cal-${u}" ${nCal?"checked":""} style="width:18px!important;height:18px!important;" onchange="toggleCalField('${u}')"> 📅 Calendar notifications
+        </label>`:""}
+      </div>
+      ${isChild?`<div id="cal-wrap-${u}" style="${nCal?"":"display:none;"}">
+        <label class="field-label">Calendar ID</label>
+        <input type="text" id="cal-field-${u}" placeholder="abc123@group.calendar.google.com" value="${calendars[u]||""}" style="font-size:13px;">
+      </div>`:""}
+    </div>`;
+  }).join("");
+}
+
+function toggleCalField(username){
+  const cb=document.getElementById("notify-cal-"+username);
+  const wrap=document.getElementById("cal-wrap-"+username);
+  if(wrap) wrap.style.display=cb&&cb.checked?"":"none";
 }
 function renderAdminUsers(){
   const el=document.getElementById("admin-user-list");if(!el)return;
@@ -1558,6 +1597,9 @@ function addUser(){
   state.users.push(name);state.pins[name]=pin;state.roles[name]=role;
   if(!state.config.emails)state.config.emails={};
   if(email)state.config.emails[name]=email;
+  if(!state.config.notify)state.config.notify={};
+  state.config.notify[name]={email:true,calendar:false};  // default: email ON, calendar OFF
+  if(!state.config.calendars)state.config.calendars={};
   if(role==="child")getChildData(name);
   renderAdminUsers();renderAdminEmailFields();syncToCloud("User Added");showToast('"'+name+'" added!',"success");
   document.getElementById("new-user-name").value="";document.getElementById("new-user-pin").value="";document.getElementById("new-user-email").value="";
@@ -1570,9 +1612,21 @@ function saveAdminSettings(){
   state.config.imgBanner=document.getElementById("admin-img-banner").value.trim()||CFG_IMG_BANNER;
   state.config.imgLogo=document.getElementById("admin-img-logo").value.trim()||CFG_IMG_LOGO;
   state.config.timezone=document.getElementById("admin-timezone").value;
-  // Save per-user emails
+  // Save per-user emails + notification prefs + calendar IDs
   if(!state.config.emails)state.config.emails={};
-  state.users.forEach(u=>{const el=document.getElementById("email-field-"+u);if(el)state.config.emails[u]=el.value.trim();});
+  if(!state.config.calendars)state.config.calendars={};
+  if(!state.config.notify)state.config.notify={};
+  state.users.forEach(u=>{
+    const emailEl=document.getElementById("email-field-"+u);
+    if(emailEl)state.config.emails[u]=emailEl.value.trim();
+    const nEmailEl=document.getElementById("notify-email-"+u);
+    const nCalEl=document.getElementById("notify-cal-"+u);
+    const calEl=document.getElementById("cal-field-"+u);
+    if(!state.config.notify[u])state.config.notify[u]={};
+    if(nEmailEl)state.config.notify[u].email=nEmailEl.checked;
+    if(nCalEl)state.config.notify[u].calendar=nCalEl.checked;
+    if(calEl&&calEl.value.trim())state.config.calendars[u]=calEl.value.trim();
+  });
   applyBranding();syncToCloud("Admin Settings Updated");showToast("All settings saved! 💾","success");
 }
 function changeAdminPin(){openInputModal({icon:"🔑",title:"New Admin PIN",body:"Enter a new 4-digit admin PIN.",inputType:"password",inputAttrs:'maxlength="4" inputmode="numeric" placeholder="••••"',confirmText:"Save",onConfirm:v=>{if(!v||v.length!==4||!/^\d{4}$/.test(v)){showToast("Admin PIN must be exactly 4 digits.","error");return;}state.config.adminPin=v;syncToCloud("Admin PIN Changed");showToast("Admin PIN updated.","success");}});}
