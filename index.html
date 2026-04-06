@@ -106,7 +106,6 @@
     .badge-pending{background:#fef3c7;color:#92400e}
     .badge-approved{background:#d1fae5;color:#065f46}
     .badge-denied{background:#fee2e2;color:#991b1b}
-    .badge-paused{background:var(--bg);color:var(--muted)}
     /* Chore cards (parent management view) */
     .chore-card{border:1.5px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px}
     .chore-card.state-pending{border-color:var(--warning);background:#fffbeb}
@@ -206,11 +205,22 @@
   <div style="font-size:.75rem;opacity:.8;margin-top:6px;">Your parent will confirm it.</div>
 </div>
 
+<!-- SPLASH SCREEN — shown while connecting, hidden once ready -->
+<div id="splash-screen" style="position:fixed;inset:0;background:#f1f5f9;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:20px;transition:opacity .4s ease;">
+  <img src="images/logo.png" id="splash-logo" style="width:90px;height:90px;object-fit:contain;border-radius:20px;box-shadow:0 8px 32px rgba(0,0,0,0.12);" onerror="this.style.display='none'" alt="">
+  <div style="font-family:var(--font);font-size:1.4rem;font-weight:800;color:var(--text);" id="splash-bank-name">Family Bank</div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <div style="width:8px;height:8px;border-radius:50%;background:var(--warning);animation:pulse 1s infinite;"></div>
+    <span style="font-family:var(--font);font-size:.82rem;color:var(--muted);font-weight:500;">Connecting to bank...</span>
+  </div>
+</div>
+
 <div class="app-card">
   <img src="images/banner.png" class="banner-img" id="banner-img" onerror="this.style.display='none'" alt="">
 
   <!-- LOGIN -->
   <div class="screen" id="login-screen">
+    <div id="login-form-wrap" style="opacity:0;transition:opacity .3s ease;">
     <div class="logo-wrap">
       <img src="images/logo.png" class="logo-img" id="logo-img" onerror="this.style.display='none'" alt="">
       <h2 id="bank-name-display">Family Bank</h2>
@@ -236,6 +246,7 @@
       </span>
     </div>
     <div class="admin-link-wrap"><button class="admin-link" onclick="openAdmin()">Admin Login</button></div>
+    </div><!-- end login-form-wrap -->
   </div>
 
   <!-- CHILD PICKER -->
@@ -411,12 +422,6 @@
         </div>
         <div class="row">
           <div class="col" id="chore-enddate-col"><label class="field-label">End Date (optional)</label><input type="date" id="chore-end-date"></div>
-          <div class="col" style="display:flex;align-items:flex-end;padding-bottom:10px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <input type="checkbox" id="chore-paused">
-              <label for="chore-paused" style="font-size:.8rem;color:var(--muted);font-weight:500;margin:0;cursor:pointer;">Start paused</label>
-            </div>
-          </div>
         </div>
         <div class="row">
           <div class="col">
@@ -853,7 +858,20 @@ function previewColor(which,val){
   if(which==="primary"){document.documentElement.style.setProperty("--primary",val);document.documentElement.style.setProperty("--primary-dark",shadeColor(val,-20));}
   else{document.documentElement.style.setProperty("--secondary",val);document.documentElement.style.setProperty("--secondary-dark",shadeColor(val,-20));}
 }
-function setStatus(type,text){document.getElementById("status-dot").className="status-dot "+type;document.getElementById("status-text").textContent=text;}
+function setStatus(type,text){
+  document.getElementById("status-dot").className="status-dot "+type;
+  document.getElementById("status-text").textContent=text;
+  // Dismiss splash and reveal login form once connected or errored
+  if(type==="ready"||type==="error"){
+    const splash=document.getElementById("splash-screen");
+    const form=document.getElementById("login-form-wrap");
+    if(splash){splash.style.opacity="0";setTimeout(()=>splash.style.display="none",400);}
+    if(form){setTimeout(()=>{form.style.opacity="1";},200);}
+    // Update splash bank name from loaded config
+    const sbn=document.getElementById("splash-bank-name");
+    if(sbn)sbn.textContent=state.config&&state.config.bankName?state.config.bankName:CFG_BANK_NAME;
+  }
+}
 
 function renderBalances(){
   const child=activeChild||currentUser;
@@ -1343,7 +1361,7 @@ function createChore(){
   const schedule=document.getElementById("chore-schedule").value;
   const splitChk=parseInt(document.getElementById("chore-split").value);
   const childChooses=document.getElementById("chore-child-chooses").checked;
-  const paused=document.getElementById("chore-paused").checked;
+  const paused=false; // pause feature removed
   const endDate=document.getElementById("chore-end-date").value||null;
   const monthlyDay=schedule==="monthly"?document.getElementById("chore-monthly-day").value:null;
   const weekday=(schedule==="weekly"||schedule==="biweekly")?parseInt(document.getElementById("chore-weekday").value):null;
@@ -1365,7 +1383,6 @@ function createChore(){
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-child-chooses").checked=false;
-  document.getElementById("chore-paused").checked=false;
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
   document.getElementById("chore-weekday-wrap").classList.add("hidden");
   document.getElementById("chore-once-wrap").classList.remove("hidden");
@@ -1383,7 +1400,6 @@ function editChore(choreId){
   document.getElementById("chore-schedule").value=chore.schedule||"once";
   document.getElementById("chore-split").value=chore.splitChk!==undefined?chore.splitChk:100;
   document.getElementById("chore-child-chooses").checked=!!chore.childChooses;
-  document.getElementById("chore-paused").checked=!!chore.paused;
   document.getElementById("chore-end-date").value=chore.endDate||"";
   document.getElementById("chore-once-date").value=chore.onceDate||"";
   document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
@@ -1402,7 +1418,6 @@ function cancelChoreEdit(){
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-child-chooses").checked=false;
-  document.getElementById("chore-paused").checked=false;
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
   document.getElementById("chore-weekday-wrap").classList.add("hidden");
   document.getElementById("chore-once-wrap").classList.remove("hidden");
@@ -1436,13 +1451,13 @@ function renderParentChores(){
   const listEl=document.getElementById("parent-chore-list");
   if(!chores.length){listEl.innerHTML='<div class="empty-state"><span class="empty-icon">📋</span>No chores yet.</div>';return;}
   listEl.innerHTML=chores.map(c=>{
-    const badge=c.paused?'<span class="status-badge badge-paused">Paused</span>':c.status==="pending"?'<span class="status-badge badge-pending">Awaiting Approval</span>':'<span class="status-badge badge-available">Active</span>';
+    const badge=c.status==="pending"?'<span class="status-badge badge-pending">Awaiting Approval</span>':'<span class="status-badge badge-available">Active</span>';
     return `<div class="chore-card">
       <div class="chore-card-header"><span class="chore-card-name">${c.name}</span><span class="chore-card-amount">${fmt(c.amount)}</span></div>
       <div class="chore-card-meta">${badge} 📅 ${scheduleLabel(c)}<br>💰 ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br>⏰ Ends: "+c.endDate:""}${c.desc?"<br>📝 "+c.desc:""}</div>
       <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
         <button class="btn btn-outline btn-sm" onclick="editChore('${c.id}')">✏️ Edit</button>
-        <button class="btn btn-ghost btn-sm" onclick="togglePauseChore('${c.id}')">${c.paused?"▶️ Resume":"⏸️ Pause"}</button>
+
         <button class="btn btn-danger btn-sm" onclick="deleteChore('${c.id}')">🗑️ Delete</button>
       </div>
     </div>`;
@@ -1482,11 +1497,7 @@ function denyChore(choreId){
       renderParentChores();renderChildChores();updateChoreBadges();
     }});
 }
-function togglePauseChore(choreId){
-  const data=getChildData(activeChild);const chore=data.chores.find(c=>c.id===choreId);if(!chore)return;
-  chore.paused=!chore.paused;syncToCloud(chore.paused?"Chore Paused":"Chore Resumed");showToast("Chore "+(chore.paused?"paused.":"resumed."),"info");
-  renderParentChores();renderChildChores();updateChoreBadges();
-}
+
 function deleteChore(choreId){
   const data=getChildData(activeChild);const chore=data.chores.find(c=>c.id===choreId);if(!chore)return;
   openModal({icon:"🗑️",title:'Delete "'+chore.name+'"?',body:"This cannot be undone.",confirmText:"Delete",confirmClass:"btn-danger",
