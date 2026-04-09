@@ -206,14 +206,24 @@
 </div>
 
 <!-- SPLASH SCREEN — shown while connecting, hidden once ready -->
-<div id="splash-screen" style="position:fixed;inset:0;background:#f1f5f9;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:20px;transition:opacity .4s ease;">
-  <img src="images/logo.png" id="splash-logo" style="width:90px;height:90px;object-fit:contain;border-radius:20px;box-shadow:0 8px 32px rgba(0,0,0,0.12);" onerror="this.style.display='none'" alt="">
-  <div style="font-family:var(--font);font-size:1.4rem;font-weight:800;color:var(--text);" id="splash-bank-name">Family Bank</div>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <div style="width:8px;height:8px;border-radius:50%;background:var(--warning);animation:pulse 1s infinite;"></div>
-    <span style="font-family:var(--font);font-size:.82rem;color:var(--muted);font-weight:500;">Connecting to bank...</span>
+<div id="splash-screen" style="position:fixed;inset:0;background:linear-gradient(160deg,#f1f5f9 0%,#e8f0fe 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:0;transition:opacity .5s ease;">
+  <!-- Logo with spinning ring -->
+  <div style="position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;margin-bottom:24px;">
+    <svg style="position:absolute;inset:0;width:150px;height:150px;animation:spin 1.8s linear infinite;" viewBox="0 0 150 150">
+      <circle cx="75" cy="75" r="68" fill="none" stroke="#e2e8f0" stroke-width="5"/>
+      <circle cx="75" cy="75" r="68" fill="none" stroke="var(--primary)" stroke-width="5" stroke-linecap="round"
+        stroke-dasharray="120 310" stroke-dashoffset="0"/>
+    </svg>
+    <img src="images/logo.png" id="splash-logo" style="width:118px;height:118px;object-fit:contain;border-radius:22px;box-shadow:0 8px 32px rgba(0,0,0,0.13);position:relative;z-index:1;" onerror="this.style.display='none'" alt="">
+  </div>
+  <div style="font-family:var(--font);font-size:1.7rem;font-weight:800;color:var(--text);letter-spacing:-.02em;margin-bottom:8px;" id="splash-bank-name">Family Bank</div>
+  <div style="font-family:var(--font);font-size:1rem;color:var(--muted);font-weight:500;margin-bottom:28px;" id="splash-tagline">Your money, your future.</div>
+  <div style="display:flex;align-items:center;gap:10px;background:white;padding:10px 20px;border-radius:30px;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+    <div style="width:10px;height:10px;border-radius:50%;background:var(--warning);animation:pulse 1s infinite;flex-shrink:0;"></div>
+    <span style="font-family:var(--font);font-size:.88rem;color:var(--text);font-weight:600;" id="splash-status-text">Connecting to bank...</span>
   </div>
 </div>
+<style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>
 
 <div class="app-card">
   <img src="images/banner.png" class="banner-img" id="banner-img" onerror="this.style.display='none'" alt="">
@@ -375,7 +385,7 @@
         <label class="field-label">Description (optional)</label>
         <input type="text" id="chore-desc" placeholder="Any extra details...">
         <div class="row">
-          <div class="col"><label class="field-label">Reward $</label><input type="number" id="chore-amount" step="0.01" min="0.01" placeholder="5.00"></div>
+          <div class="col"><label class="field-label">Reward $</label><input type="number" id="chore-amount" step="0.01" min="0" placeholder="0.00"></div>
           <div class="col"><label class="field-label">Schedule</label>
             <select id="chore-schedule" onchange="onScheduleChange()">
               <option value="once">One-time</option>
@@ -635,7 +645,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbx9YtuboEaYkr9XYpGDX8Ae3MohMyYCWCAqwnJgQwVOqQLrdNQ3aXDJO2ZO8KFLEeZd3Q/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbz6nEonn1LQWxPzJUeo4m4hwaB7ChZqHmFJl16uugZ8oLMoYoRKuizY39_Jask1yMaj_A/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -730,6 +740,10 @@ function clearFieldError(iId,mId){const i=document.getElementById(iId),m=documen
 function getChildData(name){if(!state.children[name])state.children[name]={balances:{checking:0,savings:0},rates:{checking:0,savings:0},autoDeposit:{checking:0,savings:0},chores:[]};return state.children[name];}
 function getChildNames(){return(state.users||[]).filter(u=>(state.roles||{})[u]==="child");}
 function getParentNames(){return(state.users||[]).filter(u=>(state.roles||{})[u]==="parent");}
+function choreRewardsEnabled(childName){
+  const n=(state.config&&state.config.notify&&state.config.notify[childName||activeChild||currentUser])||{};
+  return n.choreRewards!==false; // default ON
+}
 
 // ================================================================
 // MIGRATION — v1 flat structure → per-child
@@ -869,7 +883,11 @@ function setStatus(type,text){
     if(form){setTimeout(()=>{form.style.opacity="1";},200);}
     // Update splash bank name from loaded config
     const sbn=document.getElementById("splash-bank-name");
+    const stag=document.getElementById("splash-tagline");
+    const sst=document.getElementById("splash-status-text");
     if(sbn)sbn.textContent=state.config&&state.config.bankName?state.config.bankName:CFG_BANK_NAME;
+    if(stag)stag.textContent=state.config&&state.config.tagline?state.config.tagline:CFG_BANK_TAGLINE;
+    if(sst)sst.textContent=type==="ready"?"Connected ✓":"Could not connect — check API URL";
   }
 }
 
@@ -893,11 +911,13 @@ function updateChoreBadges(){
   const child=activeChild||currentUser;
   if(!child)return;
   const chores=getChildData(child).chores||[];
-  const available=chores.filter(c=>!c.paused&&c.status==="available"&&(!c.endDate||c.endDate>=todayStr())).length;
+  // Child badge — only chores due TODAY
+  const dueToday=chores.filter(c=>c.status==="available"&&(!c.endDate||c.endDate>=todayStr())&&isDueToday(c)).length;
+  // Parent badge — pending approvals
   const pending=chores.filter(c=>c.status==="pending").length;
   const cb=document.getElementById("child-chore-badge");
   const pb=document.getElementById("parent-chore-badge");
-  if(cb){cb.textContent=available;cb.classList.toggle("hidden",available===0);}
+  if(cb){cb.textContent=dueToday;cb.classList.toggle("hidden",dueToday===0);}
   if(pb){pb.textContent=pending;pb.classList.toggle("hidden",pending===0);}
 }
 
@@ -1065,7 +1085,7 @@ function saveRates(){const data=getChildData(activeChild);data.rates.checking=pa
 // CHORES — CHILD VIEW (Mark's checklist design)
 // ================================================================
 // Tracks active chore filter tab — "today" | "week" | "all"
-let choreFilter = "all";
+let choreFilter = "today";
 
 function setChoreFilter(f){
   choreFilter=f;
@@ -1167,6 +1187,7 @@ function renderChildChores(){
   }
 
   const totalPossible=available.reduce((s,c)=>s+(parseFloat(c.amount)||0),0);
+  const showRew=choreRewardsEnabled(activeChild||currentUser);
 
   listEl.innerHTML=`
     <div style="display:flex;background:var(--bg);border-radius:10px;padding:4px;gap:3px;margin-bottom:14px;">
@@ -1176,7 +1197,7 @@ function renderChildChores(){
     </div>
     <div style="background:var(--bg);border-radius:10px;padding:8px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;font-size:.75rem;">
       <span style="color:var(--muted);font-weight:600;">${available.length} chore${available.length===1?"":"s"} available</span>
-      <span style="color:var(--secondary);font-weight:700;font-family:var(--mono);">Up to ${fmt(totalPossible)}</span>
+      ${showRew?`<span style="color:var(--secondary);font-weight:700;font-family:var(--mono);">Up to ${fmt(totalPossible)}</span>`:""}
     </div>
     <div id="chore-table-wrap"></div>
     <p style="font-size:.72rem;color:var(--muted);text-align:center;margin-top:8px;">Tap the checkbox when you've finished a chore ✓</p>`;
@@ -1206,9 +1227,10 @@ function renderChoreTable(){
     wrap.innerHTML=`<div class="empty-state"><span class="empty-icon">✅</span>${msg}</div>`;
     return;
   }
+  const showRewards=choreRewardsEnabled(activeChild||currentUser);
   wrap.innerHTML=`
     <table class="chore-table">
-      <thead><tr><th style="width:36px;"></th><th>Chore</th><th>Schedule</th><th style="text-align:right;">Earn</th></tr></thead>
+      <thead><tr><th style="width:36px;"></th><th>Chore</th><th>Schedule</th>${showRewards?`<th style="text-align:right;">Earn</th>`:""}</tr></thead>
       <tbody>
         ${filtered.map(c=>`
           <tr class="chore-row" id="chore-row-${c.id}">
@@ -1216,10 +1238,10 @@ function renderChoreTable(){
             <td class="chore-name-cell">
               ${c.name}${dueBadge(c)}
               ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
-              ${c.childChooses?`<div class="chore-desc-small">💰 You choose the split</div>`:`<div class="chore-desc-small">💰 ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`}
+              ${showRewards?(c.childChooses?`<div class="chore-desc-small">💰 You choose the split</div>`:`<div class="chore-desc-small">💰 ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`):""}
             </td>
             <td class="chore-schedule-cell">${scheduleLabel(c)}</td>
-            <td class="chore-amount-cell" id="chore-amt-${c.id}">${fmt(c.amount)}</td>
+            ${showRewards?`<td class="chore-amount-cell" id="chore-amt-${c.id}">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
           </tr>`).join("")}
       </tbody>
     </table>`;
@@ -1269,7 +1291,7 @@ function submitChoreCheck(choreId,chkPct){
   chore.status="pending";chore.completedBy=currentUser;chore.completedAt=fmtDate(new Date());chore.splitChk=chkPct;
 
   // Show earned popup
-  showEarnedPopup(chore.amount,chore.name);
+  if(choreRewardsEnabled(activeChild||currentUser)&&chore.amount>0) showEarnedPopup(chore.amount,chore.name);
 
   syncToCloud("Chore Submitted");
   updateChoreBadges();
@@ -1368,7 +1390,7 @@ function createChore(){
   const onceDate=schedule==="once"?document.getElementById("chore-once-date").value||null:null;
   const reminderHour=parseInt(document.getElementById("chore-reminder-time").value)||8;
   if(!name){msgEl.className="field-msg error";msgEl.textContent="Chore name is required.";return;}
-  if(!amount||amount<=0){msgEl.className="field-msg error";msgEl.textContent="Enter a valid reward amount.";return;}
+  if(amount===null||amount===undefined||isNaN(amount)||amount<0){msgEl.className="field-msg error";msgEl.textContent="Enter a valid reward amount (0 or more).";return;}
   const data=getChildData(activeChild);
   if(editingChoreId){
     const ex=data.chores.find(c=>c.id===editingChoreId);
@@ -1439,7 +1461,7 @@ function renderParentChores(){
       <h3>⏳ Awaiting Approval (${pending.length})</h3>
       ${pending.map(c=>`
         <div class="chore-card state-pending">
-          <div class="chore-card-header"><span class="chore-card-name">${c.name}</span><span class="chore-card-amount">${fmt(c.amount)}</span></div>
+          <div class="chore-card-header"><span class="chore-card-name">${c.name}</span><span class="chore-card-amount">${c.amount>0?fmt(c.amount):'<span style="color:var(--muted);font-size:.78rem;">No reward</span>'}</span></div>
           <div class="chore-card-meta">Completed by <strong>${c.completedBy}</strong> at ${c.completedAt}<br>Split: ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.desc?"<br>📝 "+c.desc:""}</div>
           <div class="row" style="gap:8px;">
             <button class="btn btn-secondary btn-sm col" onclick="approveChore('${c.id}')">✅ Approve</button>
@@ -1516,11 +1538,12 @@ function deleteChore(choreId){
 // ================================================================
 function showChoreWaitingBanner(){
   const data=getChildData(activeChild||currentUser);
-  const available=(data.chores||[]).filter(c=>!c.paused&&c.status==="available"&&(!c.endDate||c.endDate>=todayStr()));
+  // Only show banner for chores due TODAY
+  const dueToday=(data.chores||[]).filter(c=>c.status==="available"&&(!c.endDate||c.endDate>=todayStr())&&isDueToday(c));
   const banner=document.getElementById("chore-waiting-banner");if(!banner)return;
-  if(!available.length){banner.classList.add("hidden");return;}
+  if(!dueToday.length){banner.classList.add("hidden");return;}
   const title=document.getElementById("chore-banner-title");
-  if(title)title.textContent=available.length===1?"You have 1 chore waiting!":"You have "+available.length+" chores waiting!";
+  if(title)title.textContent=dueToday.length===1?"You have 1 chore due today!":"You have "+dueToday.length+" chores due today!";
   banner.classList.remove("hidden");
 }
 
@@ -1601,17 +1624,21 @@ function renderAdminEmailFields(){
     const isChild=role==="child";
     const nEmail=!!(notify[u]&&notify[u].email!==false);   // default ON
     const nCal=!!(notify[u]&&notify[u].calendar===true);   // default OFF
+    const nChoreRewards=!(notify[u]&&notify[u].choreRewards===false); // default ON
     return `
     <div style="border:1.5px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;">
       <div style="font-weight:700;font-size:.88rem;margin-bottom:10px;">${u} <span style="font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:4px;background:${isChild?"#d1fae5;color:#065f46":"#dbeafe;color:#1d4ed8"};">${role.charAt(0).toUpperCase()+role.slice(1)}</span></div>
       <label class="field-label">Email Address</label>
       <input type="email" id="email-field-${u}" placeholder="${u.toLowerCase()}@email.com" value="${emails[u]||""}">
-      <div style="display:flex;gap:16px;margin-bottom:${isChild?"10px":"0"};">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:${isChild?"10px":"0"};">
         <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
           <input type="checkbox" id="notify-email-${u}" ${nEmail?"checked":""} style="width:18px!important;height:18px!important;"> 📧 Email notifications
         </label>
         ${isChild?`<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
           <input type="checkbox" id="notify-cal-${u}" ${nCal?"checked":""} style="width:18px!important;height:18px!important;" onchange="toggleCalField('${u}')"> 📅 Calendar notifications
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="notify-chore-rewards-${u}" ${nChoreRewards?"checked":""} style="width:18px!important;height:18px!important;"> 💰 Show chore rewards
         </label>`:""}
       </div>
       ${isChild?`<div id="cal-wrap-${u}" style="${nCal?"":"display:none;"}">
@@ -1680,6 +1707,8 @@ function saveAdminSettings(){
     if(!state.config.notify[u])state.config.notify[u]={};
     if(nEmailEl)state.config.notify[u].email=nEmailEl.checked;
     if(nCalEl)state.config.notify[u].calendar=nCalEl.checked;
+    const nCrEl=document.getElementById("notify-chore-rewards-"+u);
+    if(nCrEl)state.config.notify[u].choreRewards=nCrEl.checked;
     if(calEl&&calEl.value.trim())state.config.calendars[u]=calEl.value.trim();
   });
   applyBranding();syncToCloud("Admin Settings Updated");showToast("All settings saved! 💾","success");
