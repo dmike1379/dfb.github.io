@@ -650,7 +650,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbz6TDuY4twaFnQ5uQW8wWPmEUBoL-GHHz-24OPwsrpdQSCJNh-mKGT0CF1BMA5JVixW5g/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbz6nEonn1LQWxPzJUeo4m4hwaB7ChZqHmFJl16uugZ8oLMoYoRKuizY39_Jask1yMaj_A/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -745,6 +745,11 @@ function clearFieldError(iId,mId){const i=document.getElementById(iId),m=documen
 function getChildData(name){if(!state.children[name])state.children[name]={balances:{checking:0,savings:0},rates:{checking:0,savings:0},autoDeposit:{checking:0,savings:0},chores:[]};return state.children[name];}
 function getChildNames(){return(state.users||[]).filter(u=>(state.roles||{})[u]==="child");}
 function getParentNames(){return(state.users||[]).filter(u=>(state.roles||{})[u]==="parent");}
+// Mirror of Code.gs buildEventTitle — used to pass exact calendar event titles
+function buildCalEventTitle(chore){
+  return "🏦 "+chore.name+" — Earn $"+(parseFloat(chore.amount)||0).toFixed(2);
+}
+
 function choreRewardsEnabled(childName){
   const n=(state.config&&state.config.notify&&state.config.notify[childName||activeChild||currentUser])||{};
   return n.choreRewards!==false; // default ON
@@ -842,6 +847,13 @@ async function syncToCloud(action){
   renderBalances();
   const payload={...state,tempTransactions:pendingTransactions,lastAction:action,activeChild:activeChild};
   delete payload.history;
+  // Strip calendar helper keys — these are temporary and must not persist
+  delete payload._deletedChoreId;
+  delete payload._deletedChoreTitle;
+  delete payload._approvedChoreId;
+  delete payload._approvedChoreTitle;
+  delete payload._approvedChoreSchedule;
+  delete payload._editedChoreId;
   pendingTransactions=[];
   try{
     await fetch(API_URL,{method:"POST",mode:"no-cors",body:JSON.stringify(payload)});
@@ -1443,7 +1455,11 @@ function createChore(){
   if(editingChoreId){
     const ex=data.chores.find(c=>c.id===editingChoreId);
     if(ex)Object.assign(ex,{name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,reminderHour,splitChk,childChooses,paused,endDate});
-    editingChoreId=null;setChoreFormMode("create");syncToCloud("Chore Edited");showToast("Chore updated! ✏️","success");
+    const editedId=ex?ex.id:null;
+    if(editedId)state._editedChoreId=editedId;
+    editingChoreId=null;setChoreFormMode("create");syncToCloud("Chore Edited");
+    delete state._editedChoreId;
+    showToast("Chore updated! ✏️","success");
   }else{
     data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,reminderHour,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date())});
     syncToCloud("Chore Created");showToast('"'+name+'" added! 📋',"success");
@@ -1553,10 +1569,12 @@ function approveChore(choreId){
       } else {
         Object.assign(chore,{status:"available",completedBy:null,completedAt:null,denialNote:null});
       }
-      state._approvedChoreName=chore.name;
+      state._approvedChoreId=chore.id;
+      state._approvedChoreTitle=buildCalEventTitle(chore); // legacy fallback
       state._approvedChoreSchedule=chore.schedule;
       syncToCloud("Chore Approved");
-      delete state._approvedChoreName;
+      delete state._approvedChoreId;
+      delete state._approvedChoreTitle;
       delete state._approvedChoreSchedule;
       showToast("Approved! "+fmt(chore.amount)+" deposited. 🎉","success");
       renderParentChores();renderChildChores();updateChoreBadges();
@@ -1578,10 +1596,12 @@ function deleteChore(choreId){
   const data=getChildData(activeChild);const chore=data.chores.find(c=>c.id===choreId);if(!chore)return;
   openModal({icon:"🗑️",title:'Delete "'+chore.name+'"?',body:"This cannot be undone.",confirmText:"Delete",confirmClass:"btn-danger",
     onConfirm:()=>{
-      state._deletedChoreName=chore.name;
+      state._deletedChoreId=chore.id;
+      state._deletedChoreTitle=buildCalEventTitle(chore); // legacy fallback
       data.chores=data.chores.filter(c=>c.id!==choreId);
       syncToCloud("Chore Deleted");
-      delete state._deletedChoreName;
+      delete state._deletedChoreId;
+      delete state._deletedChoreTitle;
       showToast("Chore deleted.","info");
       renderParentChores();renderChildChores();updateChoreBadges();
     }});
