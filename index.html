@@ -316,13 +316,11 @@
     </div>
 
     <button class="btn btn-ghost" style="margin-bottom:4px;" onclick="openHistory()">📜 Transaction History</button>
+    <button class="btn btn-ghost" style="margin-bottom:4px;" onclick="openNetWorthChart()">📈 Net Worth Chart</button>
 
     <!-- CHILD PANEL -->
     <div id="child-panel" class="hidden">
-      <div class="tab-bar">
-        <button class="tab-btn active" onclick="switchTab('child','money')">💵 Money</button>
-        <button class="tab-btn" onclick="switchTab('child','chores')">✅ Chores <span class="notif-badge hidden" id="child-chore-badge">0</span></button>
-      </div>
+      <div class="tab-bar" id="child-tab-bar"></div>
 
       <!-- Money tab -->
       <div class="tab-panel active" id="child-tab-money">
@@ -336,6 +334,17 @@
         <button class="btn btn-secondary" onclick="confirmTransfer()">🏦 Move to Savings</button>
         <button class="btn btn-primary" onclick="confirmWithdraw()">💸 Withdraw Cash</button>
         <div class="section-block">
+          <h3>🎯 Savings Goals</h3>
+          <div id="child-goals-list"></div>
+          <div style="margin-top:10px;">
+            <label class="field-label">Goal Name</label>
+            <input type="text" id="new-goal-name" placeholder="e.g. New game, bike...">
+            <label class="field-label">Target Amount $</label>
+            <input type="number" id="new-goal-amount" step="0.01" min="0.01" placeholder="50.00">
+            <button class="btn btn-secondary" onclick="addSavingsGoal()">➕ Add Goal</button>
+          </div>
+        </div>
+        <div class="section-block">
           <button class="btn-full-ghost" onclick="changePinPrompt('child')">🔑 Change My PIN</button>
         </div>
       </div>
@@ -343,6 +352,7 @@
       <!-- Chores tab — Mark's checklist design -->
       <div class="tab-panel" id="child-tab-chores">
         <div id="child-chore-notifications"></div>
+        <div id="chore-streaks-wrap"></div>
         <h3>My Chores</h3>
         <div id="child-chore-list"></div>
       </div>
@@ -374,13 +384,33 @@
           <button class="btn btn-purple" onclick="confirmInterest()">📈 Apply 1 Month of Interest</button>
         </div>
         <div class="section-block">
+          <h3>🎯 Savings Goals</h3>
+          <div id="child-goals-list"></div>
+          <div style="margin-top:10px;">
+            <label class="field-label">Goal Name</label>
+            <input type="text" id="new-goal-name" placeholder="e.g. New game, bike...">
+            <label class="field-label">Target Amount $</label>
+            <input type="number" id="new-goal-amount" step="0.01" min="0.01" placeholder="50.00">
+            <button class="btn btn-secondary" onclick="addSavingsGoal()">➕ Add Goal</button>
+          </div>
+        </div>
+        <div class="section-block">
+          <h3>🎯 Savings Goals for <span id="goals-child-name">Child</span></h3>
+          <div id="parent-goals-list"></div>
+          <div style="margin-top:10px;">
+            <label class="field-label">Goal Name</label>
+            <input type="text" id="parent-new-goal-name" placeholder="e.g. New game, bike...">
+            <label class="field-label">Target Amount $</label>
+            <input type="number" id="parent-new-goal-amount" step="0.01" min="0.01" placeholder="50.00">
+            <button class="btn btn-secondary" onclick="addParentSavingsGoal()">➕ Add Goal</button>
+          </div>
+        </div>
+        <div class="section-block">
           <h3>PIN Management</h3>
           <button class="btn-full-ghost" onclick="changePinPrompt('parent')">🔑 Change My PIN</button>
           <button class="btn-full-ghost" onclick="confirmResetChildPin()">🔄 Reset Child PIN to 0000</button>
         </div>
       </div>
-
-      <!-- Chores tab -->
       <div class="tab-panel" id="parent-tab-chores">
         <div id="parent-chore-approvals"></div>
         <h3 id="chore-form-title">➕ Create New Chore</h3>
@@ -432,7 +462,7 @@
         <input type="range" id="chore-split" min="0" max="100" value="100" oninput="updateSplitLabel()">
         <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--muted);margin-top:2px;margin-bottom:8px;"><span>← All Savings</span><span>50/50</span><span>All Checking →</span></div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-          <input type="checkbox" id="chore-child-chooses">
+          <input type="checkbox" id="chore-child-chooses" checked>
           <label for="chore-child-chooses" style="font-size:.8rem;color:var(--muted);font-weight:500;margin:0;cursor:pointer;">Let child choose their own split</label>
         </div>
         <div class="row">
@@ -494,6 +524,20 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- NET WORTH CHART DRAWER -->
+<div class="history-drawer" id="networth-drawer">
+  <div class="drawer-header">
+    <h3 style="margin:0;">📈 Net Worth Over Time</h3>
+    <button class="btn btn-sm btn-ghost" onclick="closeNetWorthChart()">✕ Close</button>
+  </div>
+  <div id="networth-chart-wrap" style="width:100%;overflow-x:auto;"></div>
+  <div class="summary-bar" style="margin-top:14px;">
+    <div class="summary-chip">Starting<span class="chip-val" id="nw-start">$0.00</span></div>
+    <div class="summary-chip">Current<span class="chip-val pos" id="nw-current">$0.00</span></div>
+    <div class="summary-chip">Growth<span class="chip-val pos" id="nw-growth">$0.00</span></div>
   </div>
 </div>
 
@@ -592,6 +636,24 @@
       </div>
     </div>
     <div class="section-block">
+      <h3>⏱️ Auto-Logout Timer</h3>
+      <div class="info-box">Automatically returns to login screen after inactivity. Set to 0 to disable.</div>
+      <label class="field-label">Minutes of inactivity before logout</label>
+      <select id="admin-autologout">
+        <option value="0">Disabled</option>
+        <option value="2">2 minutes</option>
+        <option value="5">5 minutes (recommended)</option>
+        <option value="10">10 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+      </select>
+    </div>
+    <div class="section-block">
+      <h3>👶 Child Tab Visibility</h3>
+      <div class="info-box">Choose which tabs each child can see. Uncheck to hide.</div>
+      <div id="admin-tabs-fields"></div>
+    </div>
+    <div class="section-block">
       <h3>🔑 Admin PIN</h3>
       <button class="btn-full-ghost" onclick="changeAdminPin()">Change Admin PIN</button>
     </div>
@@ -628,7 +690,7 @@
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v26.0   |   Paired with Code.gs: v26.0                    ║
+// ║  Version: v28.0   |   Paired with Code.gs: v28.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -653,7 +715,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbwfaeGSJLjaQ-eg-7tP94JRQVMNZAdmN1Ybs_0YeFgWKSaNh1aKPv3IR5M_aeXrgOxIuA/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbwH5GCQ3ND9BQUw88vjGRTB7aiz-rqGJ_eLNtdlrtghZpSAxo7Sq52t8Qcxr66gI7pl6w/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -735,6 +797,7 @@ let activeChild          = null;   // child being managed (parent view)
 let pendingTransactions  = [];
 let editingChoreId       = null;
 let modalCallback        = null;
+let inactivityTimer      = null;   // auto-logout timer
 
 // ================================================================
 // UTILS
@@ -756,6 +819,20 @@ function buildCalEventTitle(chore){
 function choreRewardsEnabled(childName){
   const n=(state.config&&state.config.notify&&state.config.notify[childName||activeChild||currentUser])||{};
   return n.choreRewards!==false; // default ON
+}
+
+// ================================================================
+// TAB VISIBILITY HELPER
+// ================================================================
+function getChildTabs(childName) {
+  // Returns which tabs are enabled for this child
+  // Defaults: money=true, chores=true, loans=false
+  const tabs = (state.config.tabs && state.config.tabs[childName]) || {};
+  return {
+    money:  tabs.money  !== false,  // default ON
+    chores: tabs.chores !== false,  // default ON
+    loans:  tabs.loans  === true    // default OFF
+  };
 }
 
 // ================================================================
@@ -974,7 +1051,9 @@ function attemptLogin(){
     document.getElementById("main-screen").classList.remove("hidden");
     document.getElementById("welcome-msg").textContent="Hi, "+user+"! 👋";
     document.getElementById("child-panel").classList.remove("hidden");
-    renderBalances();renderChildChores();showChoreWaitingBanner();updateChoreBadges();
+    renderChildTabBar();
+    renderBalances();renderChildChores();renderSavingsGoals();showChoreWaitingBanner();updateChoreBadges();
+    initInactivityTimer();
   }
 }
 function logout(){location.reload();}
@@ -1016,6 +1095,7 @@ function showChildPicker(){
   document.getElementById("main-screen").classList.add("hidden");
   document.getElementById("child-picker-screen").classList.remove("hidden");
   document.getElementById("picker-welcome").textContent="Hi, "+currentUser+"! 👋";
+  renderParentDashboard();
   document.getElementById("child-picker-list").innerHTML=children.map(name=>{
     const data=getChildData(name);
     const total=(data.balances.checking||0)+(data.balances.savings||0);
@@ -1032,7 +1112,7 @@ function selectChild(childName){
   document.getElementById("welcome-msg").textContent="Managing "+childName+" 👋";
   document.getElementById("parent-panel").classList.remove("hidden");
   document.getElementById("child-panel").classList.add("hidden");
-  renderBalances();renderParentSettings();renderParentChores();updateChoreBadges();
+  renderBalances();renderParentSettings();renderParentChores();renderParentGoals();updateChoreBadges();
 }
 
 // ================================================================
@@ -1181,6 +1261,12 @@ function isDueThisWeek(chore){
 function renderChildChores(){
   const listEl=document.getElementById("child-chore-list");
   const notifEl=document.getElementById("child-chore-notifications");
+  // Render streaks
+  const streakEl=document.getElementById("chore-streaks-wrap");
+  if(streakEl){
+    const streaks=renderStreaks();
+    streakEl.innerHTML=streaks.length?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">${streaks.map(s=>`<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid var(--warning);border-radius:20px;padding:6px 12px;font-size:.75rem;font-weight:700;color:#92400e;">🔥 ${s.name}: ${s.streak} ${s.unit}</div>`).join("")}</div>`:"";
+  }
   if(!listEl)return;
   const data=getChildData(activeChild||currentUser);
   const chores=data.chores||[];
@@ -1675,7 +1761,7 @@ function attemptAdminLogin(){
   errEl.className="field-msg";
   document.getElementById("admin-login-section").classList.add("hidden");
   document.getElementById("admin-settings-section").classList.remove("hidden");
-  populateAdminForm();renderAdminUsers();renderAdminEmailFields();
+  populateAdminForm();renderAdminUsers();renderAdminEmailFields();renderAdminTabFields();
 }
 function populateAdminForm(){
   const cfg=state.config;
@@ -1686,6 +1772,7 @@ function populateAdminForm(){
   document.getElementById("admin-img-banner").value=cfg.imgBanner||"";
   document.getElementById("admin-img-logo").value=cfg.imgLogo||"";
   document.getElementById("admin-timezone").value=cfg.timezone||CFG_TIMEZONE;
+  document.getElementById("admin-autologout").value=String(cfg.autoLogout||0);
 }
 function renderAdminEmailFields(){
   const el=document.getElementById("admin-notify-fields");
@@ -1771,6 +1858,16 @@ function saveAdminSettings(){
   state.config.imgBanner=document.getElementById("admin-img-banner").value.trim()||CFG_IMG_BANNER;
   state.config.imgLogo=document.getElementById("admin-img-logo").value.trim()||CFG_IMG_LOGO;
   state.config.timezone=document.getElementById("admin-timezone").value;
+  state.config.autoLogout=parseInt(document.getElementById("admin-autologout").value)||0;
+  // Save per-child tab visibility
+  if(!state.config.tabs)state.config.tabs={};
+  getChildNames().forEach(u=>{
+    state.config.tabs[u]={
+      money: document.getElementById("tab-money-"+u)?.checked!==false,
+      chores:document.getElementById("tab-chores-"+u)?.checked!==false,
+      loans: document.getElementById("tab-loans-"+u)?.checked===true
+    };
+  });
   // Save per-user emails + notification prefs + calendar IDs
   if(!state.config.emails)state.config.emails={};
   if(!state.config.calendars)state.config.calendars={};
@@ -1804,6 +1901,293 @@ const isIos=/iphone|ipad|ipod/i.test(navigator.userAgent);
 const isStandalone=window.matchMedia("(display-mode: standalone)").matches||window.navigator.standalone;
 if(isIos&&!isStandalone&&!sessionStorage.getItem("installDismissed")){setTimeout(()=>{const b=document.getElementById("install-banner");if(b){document.getElementById("install-banner-text").textContent='Tap Share then "Add to Home Screen" to install.';document.getElementById("install-btn").classList.add("hidden");b.classList.remove("hidden");}},2000);}
 if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("service-worker.js").catch(()=>{}));}
+
+// ================================================================
+// AUTO-LOGOUT
+// ================================================================
+function resetInactivityTimer(){
+  const mins=parseInt((state.config&&state.config.autoLogout)||0);
+  if(!mins)return;
+  clearTimeout(inactivityTimer);
+  inactivityTimer=setTimeout(()=>{
+    showToast("Logged out due to inactivity.","info",3000);
+    setTimeout(()=>location.reload(),1500);
+  },mins*60*1000);
+}
+function initInactivityTimer(){
+  const mins=parseInt((state.config&&state.config.autoLogout)||0);
+  if(!mins)return;
+  ["click","touchstart","keydown","scroll"].forEach(e=>
+    document.addEventListener(e,resetInactivityTimer,{passive:true})
+  );
+  resetInactivityTimer();
+}
+
+// ================================================================
+// DYNAMIC CHILD TAB BAR
+// ================================================================
+function renderChildTabBar(){
+  const tabs=getChildTabs(currentUser);
+  const bar=document.getElementById("child-tab-bar");
+  if(!bar)return;
+  let html="";
+  let firstTab=null;
+  if(tabs.money){html+=`<button class="tab-btn" onclick="switchTab('child','money')">💵 Money</button>`;if(!firstTab)firstTab="money";}
+  if(tabs.chores){html+=`<button class="tab-btn" onclick="switchTab('child','chores')">✅ Chores <span class="notif-badge hidden" id="child-chore-badge">0</span></button>`;if(!firstTab)firstTab="chores";}
+  bar.innerHTML=html;
+  // Activate first available tab
+  if(firstTab){
+    bar.querySelectorAll(".tab-btn")[0]?.classList.add("active");
+    document.getElementById("child-tab-"+firstTab)?.classList.add("active");
+  }
+}
+
+// ================================================================
+// SAVINGS GOALS
+// ================================================================
+function addSavingsGoal(){
+  const name=document.getElementById("new-goal-name").value.trim();
+  const amt=parseFloat(document.getElementById("new-goal-amount").value);
+  if(!name||!amt||amt<=0){showToast("Enter a goal name and amount.","error");return;}
+  const data=getChildData(currentUser);
+  if(!data.goals)data.goals=[];
+  data.goals.push({id:"goal_"+Date.now(),name,target:amt,createdAt:todayStr()});
+  document.getElementById("new-goal-name").value="";
+  document.getElementById("new-goal-amount").value="";
+  syncToCloud("Goal Added");
+  renderSavingsGoals();
+  showToast("Goal added! 🎯","success");
+}
+
+function renderSavingsGoals(){
+  const el=document.getElementById("child-goals-list");
+  if(!el)return;
+  const data=getChildData(activeChild||currentUser);
+  const goals=(data.goals||[]);
+  const savings=data.balances.savings||0;
+  if(!goals.length){el.innerHTML=`<div class="empty-state" style="padding:14px 0;"><span class="empty-icon">🎯</span>No goals yet — add one below!</div>`;return;}
+  el.innerHTML=goals.map(g=>{
+    const pct=Math.min(100,Math.round((savings/g.target)*100));
+    const remaining=Math.max(0,g.target-savings);
+    return `<div style="background:var(--bg);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-weight:700;font-size:.9rem;">${g.name}</span>
+        <span style="font-family:var(--mono);font-size:.85rem;color:var(--secondary);">${fmt(savings)} / ${fmt(g.target)}</span>
+      </div>
+      <div style="background:var(--border);border-radius:20px;height:10px;overflow:hidden;margin-bottom:6px;">
+        <div style="background:linear-gradient(90deg,var(--secondary),var(--primary));height:100%;width:${pct}%;border-radius:20px;transition:width .5s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.72rem;color:var(--muted);">
+        <span>${pct}% there!</span>
+        <span>${pct>=100?"🎉 Goal reached!":"${fmt(remaining)} to go"}</span>
+      </div>
+      ${pct>=100?"":`<button class="btn-full-ghost" style="margin-top:6px;font-size:.72rem;" onclick="deleteGoal('${g.id}')">Remove goal</button>`}
+    </div>`;
+  }).join("");
+}
+
+function deleteGoal(goalId){
+  const data=getChildData(activeChild||currentUser);
+  data.goals=(data.goals||[]).filter(g=>g.id!==goalId);
+  syncToCloud("Goal Removed");
+  renderSavingsGoals();
+  renderParentGoals();
+}
+
+function addParentSavingsGoal(){
+  const name=document.getElementById("parent-new-goal-name").value.trim();
+  const amt=parseFloat(document.getElementById("parent-new-goal-amount").value);
+  if(!name||!amt||amt<=0){showToast("Enter a goal name and amount.","error");return;}
+  const data=getChildData(activeChild);
+  if(!data.goals)data.goals=[];
+  data.goals.push({id:"goal_"+Date.now(),name,target:amt,createdAt:todayStr()});
+  document.getElementById("parent-new-goal-name").value="";
+  document.getElementById("parent-new-goal-amount").value="";
+  syncToCloud("Goal Added");
+  renderParentGoals();
+  showToast("Goal added! 🎯","success");
+}
+
+function renderParentGoals(){
+  const el=document.getElementById("parent-goals-list");
+  const nameEl=document.getElementById("goals-child-name");
+  if(!el)return;
+  if(nameEl)nameEl.textContent=activeChild||"Child";
+  const data=getChildData(activeChild);
+  const goals=(data.goals||[]);
+  const savings=data.balances.savings||0;
+  if(!goals.length){el.innerHTML=`<div class="empty-state" style="padding:10px 0;font-size:.78rem;"><span class="empty-icon" style="font-size:1.2rem;">🎯</span>No goals yet.</div>`;return;}
+  el.innerHTML=goals.map(g=>{
+    const pct=Math.min(100,Math.round((savings/g.target)*100));
+    const remaining=Math.max(0,g.target-savings);
+    return `<div style="background:var(--bg);border-radius:12px;padding:12px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span style="font-weight:700;font-size:.85rem;">${g.name}</span>
+        <span style="font-family:var(--mono);font-size:.82rem;color:var(--secondary);">${fmt(savings)} / ${fmt(g.target)}</span>
+      </div>
+      <div style="background:var(--border);border-radius:20px;height:8px;overflow:hidden;margin-bottom:4px;">
+        <div style="background:linear-gradient(90deg,var(--secondary),var(--primary));height:100%;width:${pct}%;border-radius:20px;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:.68rem;color:var(--muted);">
+        <span>${pct}%</span><span>${pct>=100?"🎉 Reached!":fmt(remaining)+" to go"}</span>
+      </div>
+      <button class="btn-full-ghost" style="margin-top:4px;font-size:.7rem;" onclick="deleteGoal('${g.id}')">Remove</button>
+    </div>`;
+  }).join("");
+}
+
+// ================================================================
+// NET WORTH CHART
+// ================================================================
+function openNetWorthChart(){
+  const child=activeChild||currentUser;
+  const history=(state.netWorthHistory&&state.netWorthHistory[child])||[];
+  const wrap=document.getElementById("networth-chart-wrap");
+  if(!wrap)return;
+
+  if(!history.length){
+    wrap.innerHTML=`<div class="empty-state"><span class="empty-icon">📈</span>No history yet — keep saving!</div>`;
+  } else {
+    // Build simple SVG bar chart
+    const W=320,H=160,PAD=40,BAR_W=Math.max(8,Math.min(24,Math.floor((W-PAD*2)/history.length)-4));
+    const maxVal=Math.max(...history.map(d=>d.total),1);
+    const minVal=Math.min(0,...history.map(d=>d.total));
+    const range=maxVal-minVal||1;
+    const scaleY=v=>H-PAD-((v-minVal)/range)*(H-PAD*1.5);
+
+    const bars=history.map((d,i)=>{
+      const x=PAD+(i*(W-PAD*2)/history.length);
+      const y=scaleY(d.total);
+      const barH=Math.abs(scaleY(0)-y);
+      const barY=Math.min(y,scaleY(0));
+      const color=d.total>=0?"var(--secondary)":"var(--danger)";
+      const label=d.month.substring(5); // just MM
+      return `<rect x="${x}" y="${barY}" width="${BAR_W}" height="${Math.max(2,barH)}" fill="${color}" rx="3"/>
+              <text x="${x+BAR_W/2}" y="${H-4}" text-anchor="middle" font-size="8" fill="var(--muted)">${label}</text>`;
+    }).join("");
+
+    // Y axis labels
+    const yLabels=[minVal,maxVal/2,maxVal].map(v=>`
+      <text x="${PAD-4}" y="${scaleY(v)+4}" text-anchor="end" font-size="8" fill="var(--muted)">$${Math.round(v)}</text>`).join("");
+
+    wrap.innerHTML=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;margin:0 auto;">
+      <line x1="${PAD}" y1="${scaleY(0)}" x2="${W-10}" y2="${scaleY(0)}" stroke="var(--border)" stroke-width="1"/>
+      ${yLabels}${bars}
+    </svg>`;
+
+    // Summary stats
+    const first=history[0].total;
+    const last=history[history.length-1].total;
+    const growth=last-first;
+    document.getElementById("nw-start").textContent=fmt(first);
+    document.getElementById("nw-current").textContent=fmt(last);
+    document.getElementById("nw-growth").textContent=(growth>=0?"+":"")+fmt(growth);
+    document.getElementById("nw-growth").className="chip-val "+(growth>=0?"pos":"neg");
+  }
+
+  document.getElementById("networth-drawer").classList.add("open");
+}
+function closeNetWorthChart(){document.getElementById("networth-drawer").classList.remove("open");}
+
+// ================================================================
+// STREAK DISPLAY
+// ================================================================
+function renderStreaks(){
+  // Streaks calculated server-side and come back in history — 
+  // for now compute client-side from local history
+  const child=activeChild||currentUser;
+  const history=(state.history&&state.history[child])||[];
+  const data=getChildData(child);
+  const chores=data.chores||[];
+  const streaks=[];
+
+  chores.forEach(c=>{
+    if(!c.name)return;
+    const completions=history
+      .filter(h=>h.note&&h.note.startsWith("Chore: "+c.name))
+      .map(h=>h.date).sort();
+    if(completions.length<2)return;
+    const interval=c.schedule==="daily"?1:c.schedule==="monthly"?30:c.schedule==="biweekly"?14:7;
+    let streak=1;
+    for(let j=completions.length-1;j>0;j--){
+      const diff=Math.abs(new Date(completions[j])-new Date(completions[j-1]))/(24*60*60*1000);
+      if(diff<=interval+2)streak++;else break;
+    }
+    const unit=c.schedule==="daily"?"days":c.schedule==="monthly"?"months":"weeks";
+    if(streak>=2)streaks.push({name:c.name,streak,unit});
+  });
+
+  return streaks.sort((a,b)=>b.streak-a.streak);
+}
+
+// ================================================================
+// ADMIN — Tab visibility and auto-logout
+// ================================================================
+function renderAdminTabFields(){
+  const el=document.getElementById("admin-tabs-fields");
+  if(!el)return;
+  const children=getChildNames();
+  const tabs=state.config.tabs||{};
+  if(!children.length){el.innerHTML=`<p style="font-size:.78rem;color:var(--muted);">No children added yet.</p>`;return;}
+  el.innerHTML=children.map(c=>{
+    const ct=tabs[c]||{};
+    const money =ct.money !==false;
+    const chores=ct.chores!==false;
+    const loans =ct.loans ===true;
+    return `<div style="border:1.5px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:10px;">${c}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="tab-money-${c}" ${money?"checked":""} style="width:18px!important;height:18px!important;"> 💵 Money
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="tab-chores-${c}" ${chores?"checked":""} style="width:18px!important;height:18px!important;"> ✅ Chores
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="tab-loans-${c}" ${loans?"checked":""} style="width:18px!important;height:18px!important;"> 🏦 Loans
+        </label>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ================================================================
+// PARENT DASHBOARD SUMMARY
+// ================================================================
+function renderParentDashboard(){
+  const children=getChildNames();
+  if(!children.length)return;
+  // Show summary cards above tabs when managing
+  const existing=document.getElementById("parent-dashboard-summary");
+  if(existing)existing.remove();
+  const wrap=document.createElement("div");
+  wrap.id="parent-dashboard-summary";
+  wrap.style.cssText="margin-bottom:14px;";
+  const pending=children.map(c=>{
+    const d=getChildData(c);
+    const p=(d.chores||[]).filter(ch=>ch.status==="pending").length;
+    return p>0?`<span style="color:var(--warning);font-weight:700;">${c}: ${p} pending</span>`:null;
+  }).filter(Boolean);
+
+  let html=`<div style="display:grid;grid-template-columns:${children.length>1?"1fr 1fr":"1fr"};gap:8px;margin-bottom:8px;">`;
+  children.forEach(c=>{
+    const d=getChildData(c);
+    const total=(d.balances.checking||0)+(d.balances.savings||0);
+    const pendingCount=(d.chores||[]).filter(ch=>ch.status==="pending").length;
+    const streaks=renderStreaks();
+    html+=`<div style="background:var(--bg);border-radius:12px;padding:12px;cursor:pointer;" onclick="selectChild('${c}')">
+      <div style="font-weight:700;font-size:.85rem;margin-bottom:4px;">${c} ${pendingCount>0?`<span class="notif-badge">${pendingCount}</span>`:""}</div>
+      <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--primary);">${fmt(total)}</div>
+      <div style="font-size:.65rem;color:var(--muted);margin-top:2px;">Chk: ${fmt(d.balances.checking)} | Sav: ${fmt(d.balances.savings)}</div>
+    </div>`;
+  });
+  html+="</div>";
+  if(pending.length)html+=`<div style="background:#fffbeb;border:1px solid var(--warning);border-radius:10px;padding:10px 12px;font-size:.78rem;">${pending.join(" &nbsp;·&nbsp; ")}</div>`;
+  wrap.innerHTML=html;
+
+  const picker=document.getElementById("child-picker-screen");
+  if(picker)picker.insertBefore(wrap,picker.querySelector("#child-picker-list"));
+}
 
 // ================================================================
 // INIT
