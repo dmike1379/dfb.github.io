@@ -432,8 +432,15 @@
         </div>
         <!-- One-time: due date picker -->
         <div id="chore-once-wrap" class="hidden">
-          <label class="field-label">Due Date</label>
-          <input type="date" id="chore-once-date">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+            <input type="checkbox" id="chore-onceby-enabled" onchange="toggleOnceDateField()" style="width:20px!important;height:20px!important;">
+            <label for="chore-onceby-enabled" style="font-size:.82rem;color:var(--muted);font-weight:600;margin:0;cursor:pointer;">Due By a specific date</label>
+          </div>
+          <div id="chore-onceby-date-wrap" class="hidden">
+            <label class="field-label">Due By Date</label>
+            <input type="date" id="chore-once-date">
+            <div style="font-size:.72rem;color:var(--muted);margin-top:-6px;margin-bottom:8px;">Chore is available every day until this date. After it expires it will be hidden.</div>
+          </div>
         </div>
         <!-- Weekly / Bi-weekly: day of week picker -->
         <div id="chore-weekday-wrap" class="hidden">
@@ -641,11 +648,10 @@
       <label class="field-label">Minutes of inactivity before logout</label>
       <select id="admin-autologout">
         <option value="0">Disabled</option>
+        <option value="1">1 minute</option>
         <option value="2">2 minutes</option>
         <option value="5">5 minutes (recommended)</option>
-        <option value="10">10 minutes</option>
         <option value="15">15 minutes</option>
-        <option value="30">30 minutes</option>
       </select>
     </div>
     <div class="section-block">
@@ -690,7 +696,7 @@
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v28.0   |   Paired with Code.gs: v28.0                    ║
+// ║  Version: v28.1   |   Paired with Code.gs: v27.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -715,7 +721,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbwH5GCQ3ND9BQUw88vjGRTB7aiz-rqGJ_eLNtdlrtghZpSAxo7Sq52t8Qcxr66gI7pl6w/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbxCqyyHyjFI4eW-WL_KlE77ESzL1MDFK2cNNw9-1m9KAloAKXQRCgIytxxf7kq-23yXQg/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -1204,8 +1210,10 @@ function isDueToday(chore){
   const now=new Date();
   if(chore.schedule==="daily") return true;
   if(chore.schedule==="once"){
-    if(!chore.onceDate) return true; // no due date = always show
-    return chore.onceDate===todayStr();
+    if(!chore.onceDate) return true;       // Case 1: no due date — always available
+    const today=todayStr();
+    if(chore.onceDate>=today) return true; // Case 2&3: due today or future — always available
+    return false;                           // Case 4: past due date — hidden
   }
   if(chore.schedule==="weekly"){
     const days=chore.weekdays||(chore.weekday!==undefined?[chore.weekday]:[now.getDay()]);
@@ -1229,10 +1237,9 @@ function isDueThisWeek(chore){
   if(isDueToday(chore)) return true;
   if(chore.schedule==="daily") return true;
   if(chore.schedule==="once"){
-    if(!chore.onceDate) return true;
-    const due=new Date(chore.onceDate+"T00:00:00");
-    const diff=Math.floor((due.getTime()-new Date().setHours(0,0,0,0))/(24*60*60*1000));
-    return diff>=0&&diff<=6;
+    if(!chore.onceDate) return true; // no due date — always visible
+    const today=todayStr();
+    return chore.onceDate>=today;    // visible any day up to and including due date
   }
   if(chore.schedule==="weekly"){
     const days=chore.weekdays||(chore.weekday!==undefined?[chore.weekday]:[new Date(chore.createdAt||Date.now()).getDay()]);
@@ -1316,7 +1323,11 @@ function renderChoreTable(){
   if(!wrap)return;
   const data=getChildData(activeChild||currentUser);
   const chores=data.chores||[];
-  const available=chores.filter(c=>!c.paused&&c.status==="available"&&(!c.endDate||c.endDate>=todayStr())&&c.lastCompleted!==todayStr());
+  const today=todayStr();
+  // Expired one-time chores — past due date, show greyed out
+  const expired=chores.filter(c=>c.schedule==="once"&&c.onceDate&&c.onceDate<today&&c.status==="available");
+  const available=chores.filter(c=>!c.paused&&c.status==="available"&&(!c.endDate||c.endDate>=today)&&c.lastCompleted!==today&&isDueToday(c)===true||
+    (!c.paused&&c.status==="available"&&c.schedule==="once"&&(!c.onceDate||c.onceDate>=today)&&c.lastCompleted!==today));
   const filtered=available.filter(c=>{
     if(choreFilter==="today") return isDueToday(c);
     if(choreFilter==="week")  return isDueThisWeek(c);
@@ -1334,13 +1345,22 @@ function renderChoreTable(){
     return;
   }
   const showRewards=choreRewardsEnabled(activeChild||currentUser);
+  // Build expired one-time rows — greyed out with ❌, no checkbox
+  const expiredRows=expired.map(c=>`
+    <tr style="opacity:.42;">
+      <td class="chore-check-cell"><div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.85rem;">❌</div></td>
+      <td class="chore-name-cell">${c.name}<div class="chore-desc-small" style="color:var(--danger);">Expired ${c.onceDate}</div></td>
+      <td class="chore-schedule-cell">One-time</td>
+      ${showRewards?`<td class="chore-amount-cell">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
+    </tr>`).join("");
+
   wrap.innerHTML=`
     <table class="chore-table">
       <thead><tr><th style="width:36px;"></th><th>Chore</th><th>Schedule</th>${showRewards?`<th style="text-align:right;">Earn</th>`:""}</tr></thead>
       <tbody>
         ${filtered.map(c=>`
           <tr class="chore-row" id="chore-row-${c.id}">
-            <td class="chore-check-cell"><div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div></td>
+            <td class="chore-check-cell">${isDueToday(c)?`<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>`:`<div style="width:24px;height:24px;"></div>`}</td>
             <td class="chore-name-cell">
               ${c.name}${dueBadge(c)}
               ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
@@ -1349,6 +1369,7 @@ function renderChoreTable(){
             <td class="chore-schedule-cell">${scheduleLabel(c)}</td>
             ${showRewards?`<td class="chore-amount-cell" id="chore-amt-${c.id}">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
           </tr>`).join("")}
+        ${expiredRows}
       </tbody>
     </table>`;
 }
@@ -1577,7 +1598,10 @@ function editChore(choreId){
   document.getElementById("chore-split").value=chore.splitChk!==undefined?chore.splitChk:100;
   document.getElementById("chore-child-chooses").checked=!!chore.childChooses;
   document.getElementById("chore-end-date").value=chore.endDate||"";
+  const hasOnceDate=!!(chore.onceDate);
+  document.getElementById("chore-onceby-enabled").checked=hasOnceDate;
   document.getElementById("chore-once-date").value=chore.onceDate||"";
+  document.getElementById("chore-onceby-date-wrap").classList.toggle("hidden",!hasOnceDate);
   document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
   onScheduleChange();
   if(chore.schedule==="monthly"&&chore.monthlyDay)document.getElementById("chore-monthly-day").value=chore.monthlyDay;
@@ -1598,6 +1622,8 @@ function cancelChoreEdit(){
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-child-chooses").checked=false;
+  document.getElementById("chore-onceby-enabled").checked=false;
+  document.getElementById("chore-onceby-date-wrap").classList.add("hidden");
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
   document.getElementById("chore-weekday-wrap").classList.add("hidden");
   document.getElementById("chore-once-wrap").classList.remove("hidden");
@@ -2048,31 +2074,46 @@ function openNetWorthChart(){
   if(!history.length){
     wrap.innerHTML=`<div class="empty-state"><span class="empty-icon">📈</span>No history yet — keep saving!</div>`;
   } else {
-    // Build simple SVG bar chart
-    const W=320,H=160,PAD=40,BAR_W=Math.max(8,Math.min(24,Math.floor((W-PAD*2)/history.length)-4));
+    // Build SVG line chart
+    const W=320,H=170,PAD=44,PADR=16;
     const maxVal=Math.max(...history.map(d=>d.total),1);
     const minVal=Math.min(0,...history.map(d=>d.total));
     const range=maxVal-minVal||1;
-    const scaleY=v=>H-PAD-((v-minVal)/range)*(H-PAD*1.5);
+    const chartW=W-PAD-PADR;
+    const chartH=H-PAD-20;
+    const scaleX=(i)=>PAD+(i/(history.length-1||1))*chartW;
+    const scaleY=(v)=>PAD+chartH-((v-minVal)/range)*chartH;
+    const months=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-    const bars=history.map((d,i)=>{
-      const x=PAD+(i*(W-PAD*2)/history.length);
-      const y=scaleY(d.total);
-      const barH=Math.abs(scaleY(0)-y);
-      const barY=Math.min(y,scaleY(0));
-      const color=d.total>=0?"var(--secondary)":"var(--danger)";
-      const label=d.month.substring(5); // just MM
-      return `<rect x="${x}" y="${barY}" width="${BAR_W}" height="${Math.max(2,barH)}" fill="${color}" rx="3"/>
-              <text x="${x+BAR_W/2}" y="${H-4}" text-anchor="middle" font-size="8" fill="var(--muted)">${label}</text>`;
+    // Line path
+    const pts=history.map((d,i)=>`${scaleX(i)},${scaleY(d.total)}`).join(" ");
+    const linePath="M "+pts.split(" ").join(" L ");
+    // Fill path (area under line)
+    const zeroY=scaleY(0);
+    const fillPath="M "+scaleX(0)+","+zeroY+" L "+pts.split(" ").join(" L ")+" L "+scaleX(history.length-1)+","+zeroY+" Z";
+
+    // Dots + labels
+    const dots=history.map((d,i)=>{
+      const x=scaleX(i),y=scaleY(d.total);
+      const mm=parseInt(d.month.split("-")[1]||0);
+      const label=months[mm]||d.month.substring(5);
+      return `<circle cx="${x}" cy="${y}" r="4" fill="var(--primary)" stroke="white" stroke-width="2"/>
+              <text x="${x}" y="${H-6}" text-anchor="middle" font-size="9" fill="var(--muted)">${label}</text>`;
     }).join("");
 
     // Y axis labels
-    const yLabels=[minVal,maxVal/2,maxVal].map(v=>`
-      <text x="${PAD-4}" y="${scaleY(v)+4}" text-anchor="end" font-size="8" fill="var(--muted)">$${Math.round(v)}</text>`).join("");
+    const yLabels=[minVal,maxVal].map(v=>`
+      <text x="${PAD-6}" y="${scaleY(v)+4}" text-anchor="end" font-size="9" fill="var(--muted)">$${Math.round(v)}</text>`).join("");
 
     wrap.innerHTML=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;display:block;margin:0 auto;">
-      <line x1="${PAD}" y1="${scaleY(0)}" x2="${W-10}" y2="${scaleY(0)}" stroke="var(--border)" stroke-width="1"/>
-      ${yLabels}${bars}
+      <defs><linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.01"/>
+      </linearGradient></defs>
+      <path d="${fillPath}" fill="url(#lineGrad)"/>
+      <line x1="${PAD}" y1="${scaleY(0)}" x2="${W-PADR}" y2="${scaleY(0)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3,3"/>
+      <path d="${linePath}" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      ${yLabels}${dots}
     </svg>`;
 
     // Summary stats
@@ -2175,10 +2216,15 @@ function renderParentDashboard(){
     const total=(d.balances.checking||0)+(d.balances.savings||0);
     const pendingCount=(d.chores||[]).filter(ch=>ch.status==="pending").length;
     const streaks=renderStreaks();
+    const dueCount=(d.chores||[]).filter(ch=>ch.status==="available"&&isDueToday(ch)&&ch.lastCompleted!==todayStr()).length;
     html+=`<div style="background:var(--bg);border-radius:12px;padding:12px;cursor:pointer;" onclick="selectChild('${c}')">
       <div style="font-weight:700;font-size:.85rem;margin-bottom:4px;">${c} ${pendingCount>0?`<span class="notif-badge">${pendingCount}</span>`:""}</div>
       <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--primary);">${fmt(total)}</div>
       <div style="font-size:.65rem;color:var(--muted);margin-top:2px;">Chk: ${fmt(d.balances.checking)} | Sav: ${fmt(d.balances.savings)}</div>
+      <div style="font-size:.65rem;margin-top:4px;display:flex;gap:8px;">
+        ${dueCount>0?`<span style="color:var(--warning);font-weight:700;">📋 ${dueCount} due today</span>`:""}
+        ${pendingCount>0?`<span style="color:var(--secondary);font-weight:700;">⏳ ${pendingCount} pending</span>`:""}
+      </div>
     </div>`;
   });
   html+="</div>";
