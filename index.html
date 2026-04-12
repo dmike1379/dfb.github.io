@@ -190,6 +190,9 @@
     .child-switch-bar{display:flex;align-items:center;justify-content:space-between;background:var(--bg);border-radius:10px;padding:10px 14px;margin-bottom:14px}
     .child-switch-name{font-weight:700;font-size:.9rem;color:var(--text)}
     .child-switch-btn{background:none;border:none;color:var(--primary);font-size:.78rem;font-family:var(--font);font-weight:600;cursor:pointer;padding:4px 8px}
+    /* Net worth filter buttons */
+    .nw-filter-btn{padding:6px 10px;border:1.5px solid var(--border);border-radius:20px;font-size:.75rem;font-weight:700;cursor:pointer;background:var(--surface);color:var(--muted);font-family:var(--font);}
+    .nw-filter-btn.active{background:var(--primary);color:white;border-color:var(--primary);}
     /* Day toggle buttons for weekly/biweekly chore day picker */
     .day-toggle{padding:8px 0;width:40px;border:1.5px solid var(--border);border-radius:8px;font-family:var(--font);font-size:.78rem;font-weight:700;cursor:pointer;background:var(--surface);color:var(--muted);transition:all .15s;flex-shrink:0}
     .day-toggle.selected{background:var(--primary);color:white;border-color:var(--primary)}
@@ -540,6 +543,15 @@
     <h3 style="margin:0;">📈 Net Worth Over Time</h3>
     <button class="btn btn-sm btn-ghost" onclick="closeNetWorthChart()">✕ Close</button>
   </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+    <button class="nw-filter-btn active" data-months="3" onclick="setNwFilter(this,3)">3M</button>
+    <button class="nw-filter-btn" data-months="6" onclick="setNwFilter(this,6)">6M</button>
+    <button class="nw-filter-btn" data-months="12" onclick="setNwFilter(this,12)">1Y</button>
+    <button class="nw-filter-btn" data-months="18" onclick="setNwFilter(this,18)">18M</button>
+    <button class="nw-filter-btn" data-months="24" onclick="setNwFilter(this,24)">2Y</button>
+    <button class="nw-filter-btn" data-months="60" onclick="setNwFilter(this,60)">5Y</button>
+    <button class="nw-filter-btn" data-months="0" onclick="setNwFilter(this,0)">All</button>
+  </div>
   <div id="networth-chart-wrap" style="width:100%;overflow-x:auto;"></div>
   <div class="summary-bar" style="margin-top:14px;">
     <div class="summary-chip">Starting<span class="chip-val" id="nw-start">$0.00</span></div>
@@ -696,7 +708,7 @@
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v28.1   |   Paired with Code.gs: v27.0                    ║
+// ║  Version: v28.2   |   Paired with Code.gs: v27.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -2065,9 +2077,24 @@ function renderParentGoals(){
 // ================================================================
 // NET WORTH CHART
 // ================================================================
+let nwFilterMonths=3; // default to 3 months
+function setNwFilter(btn,months){
+  document.querySelectorAll(".nw-filter-btn").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  nwFilterMonths=months;
+  openNetWorthChart();
+}
+
 function openNetWorthChart(){
   const child=activeChild||currentUser;
-  const history=(state.netWorthHistory&&state.netWorthHistory[child])||[];
+  let history=(state.netWorthHistory&&state.netWorthHistory[child])||[];
+  // Apply time filter
+  if(nwFilterMonths>0&&history.length>0){
+    const cutoff=new Date();
+    cutoff.setMonth(cutoff.getMonth()-nwFilterMonths);
+    const cutoffKey=cutoff.getFullYear()+"-"+String(cutoff.getMonth()+1).padStart(2,"0");
+    history=history.filter(d=>d.month>=cutoffKey);
+  }
   const wrap=document.getElementById("networth-chart-wrap");
   if(!wrap)return;
 
@@ -2196,43 +2223,9 @@ function renderAdminTabFields(){
 // PARENT DASHBOARD SUMMARY
 // ================================================================
 function renderParentDashboard(){
-  const children=getChildNames();
-  if(!children.length)return;
-  // Show summary cards above tabs when managing
+  // Removed redundant summary cards — picker list shows all info needed
   const existing=document.getElementById("parent-dashboard-summary");
   if(existing)existing.remove();
-  const wrap=document.createElement("div");
-  wrap.id="parent-dashboard-summary";
-  wrap.style.cssText="margin-bottom:14px;";
-  const pending=children.map(c=>{
-    const d=getChildData(c);
-    const p=(d.chores||[]).filter(ch=>ch.status==="pending").length;
-    return p>0?`<span style="color:var(--warning);font-weight:700;">${c}: ${p} pending</span>`:null;
-  }).filter(Boolean);
-
-  let html=`<div style="display:grid;grid-template-columns:${children.length>1?"1fr 1fr":"1fr"};gap:8px;margin-bottom:8px;">`;
-  children.forEach(c=>{
-    const d=getChildData(c);
-    const total=(d.balances.checking||0)+(d.balances.savings||0);
-    const pendingCount=(d.chores||[]).filter(ch=>ch.status==="pending").length;
-    const streaks=renderStreaks();
-    const dueCount=(d.chores||[]).filter(ch=>ch.status==="available"&&isDueToday(ch)&&ch.lastCompleted!==todayStr()).length;
-    html+=`<div style="background:var(--bg);border-radius:12px;padding:12px;cursor:pointer;" onclick="selectChild('${c}')">
-      <div style="font-weight:700;font-size:.85rem;margin-bottom:4px;">${c} ${pendingCount>0?`<span class="notif-badge">${pendingCount}</span>`:""}</div>
-      <div style="font-family:var(--mono);font-size:1.1rem;font-weight:800;color:var(--primary);">${fmt(total)}</div>
-      <div style="font-size:.65rem;color:var(--muted);margin-top:2px;">Chk: ${fmt(d.balances.checking)} | Sav: ${fmt(d.balances.savings)}</div>
-      <div style="font-size:.65rem;margin-top:4px;display:flex;gap:8px;">
-        ${dueCount>0?`<span style="color:var(--warning);font-weight:700;">📋 ${dueCount} due today</span>`:""}
-        ${pendingCount>0?`<span style="color:var(--secondary);font-weight:700;">⏳ ${pendingCount} pending</span>`:""}
-      </div>
-    </div>`;
-  });
-  html+="</div>";
-  if(pending.length)html+=`<div style="background:#fffbeb;border:1px solid var(--warning);border-radius:10px;padding:10px 12px;font-size:.78rem;">${pending.join(" &nbsp;·&nbsp; ")}</div>`;
-  wrap.innerHTML=html;
-
-  const picker=document.getElementById("child-picker-screen");
-  if(picker)picker.insertBefore(wrap,picker.querySelector("#child-picker-list"));
 }
 
 // ================================================================
