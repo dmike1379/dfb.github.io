@@ -435,21 +435,13 @@
         </div>
         <!-- One-time: due date picker -->
         <div id="chore-once-wrap" class="hidden">
-          <div class="row" style="gap:8px;align-items:flex-end;">
-            <div class="col">
-              <label class="field-label">Date Type</label>
-              <select id="chore-once-type" onchange="toggleOnceDateField()">
-                <option value="none">No specific date</option>
-                <option value="by">Due By (anytime before date)</option>
-                <option value="on">Due On (that day only)</option>
-              </select>
-            </div>
-            <div class="col" id="chore-onceby-date-wrap" style="display:none;">
-              <label class="field-label" id="chore-once-date-label">Date</label>
-              <input type="date" id="chore-once-date">
-            </div>
-          </div>
-          <div id="chore-once-hint" style="font-size:.72rem;color:var(--muted);margin-top:4px;margin-bottom:4px;display:none;"></div>
+          <label class="field-label">Date Type</label>
+          <select id="chore-once-type" onchange="toggleOnceDateField()">
+            <option value="none">No specific date</option>
+            <option value="by">Due By (anytime before date)</option>
+            <option value="on">Due On (that day only)</option>
+          </select>
+          <div id="chore-once-hint" style="font-size:.72rem;color:var(--muted);margin-top:2px;margin-bottom:6px;display:none;"></div>
         </div>
         <!-- Weekly / Bi-weekly: day of week picker -->
         <div id="chore-weekday-wrap" class="hidden">
@@ -482,7 +474,7 @@
           <label for="chore-child-chooses" style="font-size:.8rem;color:var(--muted);font-weight:500;margin:0;cursor:pointer;">Let child choose their own split</label>
         </div>
         <div class="row">
-          <div class="col" id="chore-enddate-col"><label class="field-label">End Date (optional)</label><input type="date" id="chore-end-date"></div>
+          <div class="col" id="chore-enddate-col"><label class="field-label" id="end-date-label">End Date (optional)</label><input type="date" id="chore-end-date"></div>
         </div>
         <div class="row">
           <div class="col">
@@ -714,7 +706,7 @@
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v28.5   |   Paired with Code.gs: v27.0                    ║
+// ║  Version: v28.6   |   Paired with Code.gs: v27.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -1523,9 +1515,17 @@ function onScheduleChange(){
   if(wl) wl.textContent=s==="biweekly"?"Due Days (every other week — select one or more)":"Due Day of Week";
   // For weekly — ensure only one day can be selected at a time
   // For biweekly — allow multiple; visual difference handled by label
-  // Hide end-date col for one-time (due date replaces it)
-  const ec=document.getElementById("chore-enddate-col");
-  if(ec) ec.classList.toggle("hidden",s==="once");
+  // For one-time: end-date is controlled by toggleOnceDateField
+  // For other schedules: show end-date normally (except daily)
+  if(s==="once"){
+    toggleOnceDateField(); // let date type dropdown control end-date visibility
+  } else {
+    const ec=document.getElementById("chore-enddate-col");
+    if(ec) ec.classList.toggle("hidden",s==="daily");
+    const endLabel=document.getElementById("end-date-label");
+    if(endLabel)endLabel.textContent="End Date (optional)";
+    document.getElementById("chore-once-hint").style.display="none";
+  }
 }
 
 function updateSplitLabel(){const p=parseInt(document.getElementById("chore-split").value);document.getElementById("split-chk-label").textContent=p;document.getElementById("split-sav-label").textContent=100-p;}
@@ -1534,21 +1534,30 @@ function toggleOnceDateField(){
   const typeEl=document.getElementById("chore-once-type");
   if(!typeEl)return;
   const type=typeEl.value;
-  const dateWrap=document.getElementById("chore-onceby-date-wrap");
-  const label=document.getElementById("chore-once-date-label");
+  const endDateCol=document.getElementById("chore-enddate-col");
+  const endLabel=document.getElementById("end-date-label");
   const hint=document.getElementById("chore-once-hint");
-  if(type==="none"){
-    if(dateWrap)dateWrap.style.display="none";
+  const schedule=document.getElementById("chore-schedule").value;
+
+  if(schedule!=="once"){
+    // Not one-time — restore normal End Date label and hide for daily
+    if(endLabel)endLabel.textContent="End Date (optional)";
     if(hint)hint.style.display="none";
-    const dateEl=document.getElementById("chore-once-date");
-    if(dateEl)dateEl.value="";
+    return;
+  }
+
+  if(type==="none"){
+    // No date — hide end date field entirely for one-time
+    if(endDateCol)endDateCol.classList.add("hidden");
+    if(hint)hint.style.display="none";
+    document.getElementById("chore-end-date").value="";
   } else if(type==="by"){
-    if(dateWrap)dateWrap.style.display="block";
-    if(label)label.textContent="Due By Date";
+    if(endDateCol)endDateCol.classList.remove("hidden");
+    if(endLabel)endLabel.textContent="Due By Date";
     if(hint){hint.style.display="block";hint.textContent="Available every day until this date. Expires after.";}
   } else {
-    if(dateWrap)dateWrap.style.display="block";
-    if(label)label.textContent="Due On Date";
+    if(endDateCol)endDateCol.classList.remove("hidden");
+    if(endLabel)endLabel.textContent="Due On Date";
     if(hint){hint.style.display="block";hint.textContent="Only appears on this specific day.";}
   }
 }
@@ -1600,7 +1609,7 @@ function createChore(){
   const splitChk=parseInt(document.getElementById("chore-split").value);
   const childChooses=document.getElementById("chore-child-chooses").checked;
   const paused=false; // pause feature removed
-  const endDate=document.getElementById("chore-end-date").value||null;
+  // endDate already set above (null for one-time chores, uses onceDate instead)
   const monthlyDay=schedule==="monthly"?document.getElementById("chore-monthly-day").value:null;
   // weekdays: array of selected day numbers [0-6]
   // For weekly: always single item array; for biweekly: can be multiple
@@ -1611,8 +1620,11 @@ function createChore(){
   }
   const weekday=weekdays&&weekdays.length>0?weekdays[0]:null; // keep for backwards compat
   const onceDateType=schedule==="once"?document.getElementById("chore-once-type").value:"none";
-  const onceDate=(schedule==="once"&&onceDateType!=="none")?document.getElementById("chore-once-date").value||null:null;
+  // Reuse end-date field as the once date for one-time chores
+  const onceDate=(schedule==="once"&&onceDateType!=="none")?document.getElementById("chore-end-date").value||null:null;
   const onceDueOn=onceDateType==="on"; // true=specific day only, false=due-by range
+  // Clear endDate for one-time chores — it's used as onceDate instead
+  const endDate=schedule!=="once"?document.getElementById("chore-end-date").value||null:null;
   const reminderHour=parseInt(document.getElementById("chore-reminder-time").value)||8;
   if(!name){msgEl.className="field-msg error";msgEl.textContent="Chore name is required.";return;}
   if(amount===null||amount===undefined||isNaN(amount)||amount<0){msgEl.className="field-msg error";msgEl.textContent="Enter a valid reward amount (0 or more).";return;}
@@ -1629,7 +1641,7 @@ function createChore(){
     data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,onceDueOn,reminderHour,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date())});
     syncToCloud("Chore Created");showToast('"'+name+'" added! 📋',"success");
   }
-  ["chore-name","chore-desc","chore-amount","chore-end-date","chore-once-date"].forEach(id=>document.getElementById(id).value="");
+  ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
@@ -1659,8 +1671,9 @@ function editChore(choreId){
     else if(chore.onceDueOn) onceTypeEl.value="on";
     else onceTypeEl.value="by";
     toggleOnceDateField();
+    // Populate end-date field with the onceDate value
+    if(chore.onceDate) document.getElementById("chore-end-date").value=chore.onceDate;
   }
-  document.getElementById("chore-once-date").value=chore.onceDate||"";
   document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
   onScheduleChange();
   if(chore.schedule==="monthly"&&chore.monthlyDay)document.getElementById("chore-monthly-day").value=chore.monthlyDay;
@@ -1676,7 +1689,7 @@ function editChore(choreId){
 
 function cancelChoreEdit(){
   editingChoreId=null;setChoreFormMode("create");
-  ["chore-name","chore-desc","chore-amount","chore-end-date","chore-once-date"].forEach(id=>document.getElementById(id).value="");
+  ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-reminder-time").value="8";
