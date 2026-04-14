@@ -1,0 +1,5 @@
+{
+  "version": "30.0",
+  "released": "2026-04-14",
+  "notes": "Admin panel structural fix • per-day chore reminder times • Chart.js net worth chart • multi-file architecture • smart auto-update"
+}
