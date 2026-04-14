@@ -1,5 +1,5 @@
 {
-  "version": "30.0",
+  "version": "30.1",
   "released": "2026-04-14",
-  "notes": "Admin panel structural fix • per-day chore reminder times • Chart.js net worth chart • multi-file architecture • smart auto-update"
+  "notes": "Bi-weekly skip-first-week option • chore tab filter fix • net worth chart day-one point • edit loan terms • parent-editable child profile in Settings"
 }

@@ -295,7 +295,8 @@
         <h3>💳 Loans for <span id="loans-child-name">Child</span></h3>
         <div id="parent-loans-list"></div>
         <div class="section-block">
-          <h3>Create New Loan</h3>
+          <h3 id="loan-form-title">Create New Loan</h3>
+          <div id="loan-edit-hint" class="info-box hidden">Editing existing loan: principal is locked. Rate/term changes recalculate the monthly payment from current balance.</div>
           <label class="field-label">Loan Name</label>
           <input type="text" id="loan-name" placeholder="e.g. Bicycle loan">
           <div class="row">
@@ -311,7 +312,10 @@
             <span id="loan-payment-preview" style="font-weight:800;color:var(--primary);font-family:var(--mono);">$0.00/mo</span>
           </div>
           <div class="field-msg" id="loan-form-msg"></div>
-          <button class="btn btn-primary" onclick="createLoan()">➕ Create Loan</button>
+          <div class="row" style="gap:8px;">
+            <button class="btn btn-primary" id="loan-submit-btn" onclick="createLoan()" style="flex:1;">➕ Create Loan</button>
+            <button class="btn btn-ghost btn-sm hidden" id="loan-cancel-edit-btn" onclick="cancelLoanEdit()" style="flex-shrink:0;padding:13px 16px;">Cancel</button>
+          </div>
         </div>
       </div>
 
@@ -360,6 +364,11 @@
             <button type="button" class="day-toggle" data-day="6" onclick="toggleDayBtn(this)">Sa</button>
           </div>
           <div class="field-msg info hidden" id="weekday-none-msg">Please select at least one day.</div>
+          <!-- v30.1: Bi-weekly only — shift first event +7 days so bi-weekly cadence lines up with user's preferred week -->
+          <div id="chore-skip-week-wrap" class="cb-row hidden" style="margin-top:8px;">
+            <input type="checkbox" id="chore-skip-first-week">
+            <label for="chore-skip-first-week">Start next week (skip this week)</label>
+          </div>
         </div>
 
         <!-- Monthly: day-of-month picker -->
@@ -505,6 +514,42 @@
             <div class="col"><label class="field-label">Savings %</label> <input type="number" id="rate-sav" step="0.01" placeholder="0.00"></div>
           </div>
           <button class="btn btn-primary" onclick="saveRates()">💾 Save Rates</button>
+        </div>
+
+        <!-- v30.1: Parent-editable child profile — email, calendar, notifications, tabs -->
+        <div class="section-block">
+          <h3 id="profile-section-title">Child Profile</h3>
+          <div class="info-box">Update contact info, notifications, and visible tabs for this child. Admin PIN not required for these fields.</div>
+
+          <label class="field-label">Email Address</label>
+          <input type="email" id="profile-email" placeholder="child@email.com">
+
+          <label class="field-label">Calendar ID</label>
+          <input type="text" id="profile-calendar-id" placeholder="abc123@group.calendar.google.com" style="font-size:13px;">
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:.72rem;color:#92400e;margin-bottom:10px;line-height:1.7;">
+            <strong>📅 Calendar setup:</strong> Create a Google Calendar → share with child's email ("See all event details") → copy Calendar ID from Settings → paste above.
+          </div>
+
+          <label class="field-label">Notifications</label>
+          <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+              <input type="checkbox" id="profile-notify-email"> 📧 Email
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+              <input type="checkbox" id="profile-notify-cal"> 📅 Calendar
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+              <input type="checkbox" id="profile-chore-rewards"> 💰 Show chore rewards
+            </label>
+          </div>
+
+          <label class="field-label">Visible Tabs</label>
+          <div class="info-box" style="margin-bottom:8px;">Controls which tabs this child sees when they log in.</div>
+          <div id="profile-tab-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;margin-bottom:6px;"></div>
+          <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openProfilePicker()">📋 Select Tabs →</button>
+
+          <div class="field-msg" id="profile-msg" style="margin-top:10px;"></div>
+          <button class="btn btn-primary" onclick="saveChildProfile()" style="margin-top:10px;">💾 Save Profile</button>
         </div>
       </div>
     </div>

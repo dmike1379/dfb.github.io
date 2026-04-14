@@ -33,7 +33,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbxbD7u2n4YGhL1wHTXdXjiSXD0egg8sFUT4k5YBaN_hM6i7w8LtEmCreVu84DRI2nf5fw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBkLt4KKTL2m7_PVRSV4X0kHn-B0mpJCc93DaW8j6TMnZa3jw/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -55,7 +55,7 @@ const CFG_IMG_LOGO   = "images/logo.png";
 const CFG_IMG_ICON   = "images/icon.png";
 
 // ── Version ──
-const APP_VERSION = "30.0";
+const APP_VERSION = "30.1";
 
 // ╔═══════════════════════════════════════════════════════════════════╗
 // ║         END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE       ║
@@ -91,6 +91,7 @@ let currentRole         = null;   // "child" | "parent"
 let activeChild         = null;   // child being managed (parent view)
 let pendingTransactions = [];
 let editingChoreId      = null;
+let editingLoanId       = null;  // v30.1
 let modalCallback       = null;
 let inactivityTimer     = null;
 let toastTimer          = null;
@@ -911,7 +912,67 @@ function renderParentSettings(){
   if((ad.schedule==="weekly"||ad.schedule==="biweekly"||!ad.schedule) && ad.weekday!==undefined){
     setAllowanceDayToggles([ad.weekday]);
   }
+  // v30.1: populate child profile section
+  renderChildProfileSection();
 }
+
+// v30.1: Child profile — email, calendar, notifications, tabs
+function renderChildProfileSection(){
+  if(!activeChild) return;
+  const cfg=state.config;
+  document.getElementById("profile-section-title").textContent = activeChild + " — Profile";
+  document.getElementById("profile-email").value       = (cfg.emails    && cfg.emails[activeChild])    || "";
+  document.getElementById("profile-calendar-id").value = (cfg.calendars && cfg.calendars[activeChild]) || "";
+  const notify=(cfg.notify && cfg.notify[activeChild]) || {};
+  document.getElementById("profile-notify-email").checked  = notify.email        !== false;  // default ON
+  document.getElementById("profile-notify-cal").checked    = !!notify.calendar;              // default OFF
+  document.getElementById("profile-chore-rewards").checked = notify.choreRewards !== false;  // default ON
+  // Tabs
+  const tabs=getChildTabs(activeChild);
+  const selected=[];
+  if(tabs.money)  selected.push("money");
+  if(tabs.chores) selected.push("chores");
+  if(tabs.loans)  selected.push("loans");
+  if(!window._pickerSelections) window._pickerSelections={};
+  window._pickerSelections.profileTabs=[...selected];
+  updatePickerDisplay("profileTabs", selected, PICKER_CONFIG.profileTabs);
+  // Clear any prior message
+  document.getElementById("profile-msg").className="field-msg";
+  document.getElementById("profile-msg").textContent="";
+}
+
+function saveChildProfile(){
+  if(!activeChild) return;
+  const msgEl=document.getElementById("profile-msg"); msgEl.className="field-msg";
+  const email=document.getElementById("profile-email").value.trim();
+  const calId=document.getElementById("profile-calendar-id").value.trim();
+  if(!state.config.emails)    state.config.emails={};
+  if(!state.config.calendars) state.config.calendars={};
+  if(!state.config.notify)    state.config.notify={};
+  if(!state.config.tabs)      state.config.tabs={};
+  state.config.emails[activeChild]=email;
+  if(calId) state.config.calendars[activeChild]=calId;
+  else      delete state.config.calendars[activeChild];
+  state.config.notify[activeChild]={
+    email:        document.getElementById("profile-notify-email").checked,
+    calendar:     document.getElementById("profile-notify-cal").checked,
+    choreRewards: document.getElementById("profile-chore-rewards").checked
+  };
+  const sel=getPickerSelections("profileTabs");
+  state.config.tabs[activeChild]={
+    money:  sel.indexOf("money")!==-1,
+    chores: sel.indexOf("chores")!==-1,
+    loans:  sel.indexOf("loans")!==-1
+  };
+  syncToCloud("Child Profile Updated");
+  msgEl.className="field-msg success";
+  msgEl.textContent="Profile saved.";
+  showToast(activeChild+"'s profile updated. 💾","success");
+  // If assigned tabs changed, the child's tab bar will reflect on their next login
+  renderParentTabBar();  // loan tab may appear/disappear for parent too
+}
+
+function openProfilePicker(){ openPicker("profileTabs"); }
 
 function populateAllowanceMonthlyDays(){
   const sel=document.getElementById("allow-monthly-day");
@@ -1000,6 +1061,9 @@ function onScheduleChange(){
   document.getElementById("chore-once-wrap").classList.toggle("hidden",s!=="once");
   document.getElementById("chore-weekday-wrap").classList.toggle("hidden",s!=="weekly" && s!=="biweekly");
   document.getElementById("chore-monthly-wrap").classList.toggle("hidden",s!=="monthly");
+
+  // v30.1: skip-first-week checkbox is bi-weekly only
+  document.getElementById("chore-skip-week-wrap").classList.toggle("hidden", s!=="biweekly");
 
   // Per-day-time editor: only meaningful for weekly/biweekly
   document.getElementById("chore-per-day-time-wrap").classList.toggle("hidden", s!=="weekly" && s!=="biweekly");
@@ -1225,6 +1289,8 @@ function createChore(){
   const endDate = schedule!=="once" ? document.getElementById("chore-end-date").value || null : null;
   const reminderHour = parseInt(document.getElementById("chore-reminder-time").value) || 8;
   const dayTimes = readPerDayTimes();  // {} if "same time" is checked
+  // v30.1: only meaningful for bi-weekly; stored as bool
+  const skipFirstWeek = schedule==="biweekly" && document.getElementById("chore-skip-first-week").checked;
 
   if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Chore name is required."; return; }
   if(amount===null||amount===undefined||isNaN(amount)||amount<0){
@@ -1235,7 +1301,7 @@ function createChore(){
   const streakVals=getStreakFormValues();
   const choreFields = {
     name,desc,amount,schedule,monthlyDay,weekday,weekdays,
-    onceDate,onceDueOn,reminderHour,dayTimes,
+    onceDate,onceDueOn,reminderHour,dayTimes,skipFirstWeek,
     splitChk,childChooses,paused:false,endDate,
     streakStart:streakVals.streakStart,
     streakMilestone:streakVals.streakMilestone,
@@ -1272,6 +1338,7 @@ function resetChoreForm(){
   document.getElementById("chore-split").value=100;
   document.getElementById("chore-child-chooses").checked=true;
   document.getElementById("chore-same-time").checked=true;
+  document.getElementById("chore-skip-first-week").checked=false;
   clearStreakForm();
   resetDayToggles();
   updateSplitLabel();
@@ -1309,6 +1376,8 @@ function editChore(choreId){
     setSelectedDays(days);
     setPerDayTimes(chore.dayTimes);  // restores per-day mode if set
   }
+  // v30.1
+  document.getElementById("chore-skip-first-week").checked = !!chore.skipFirstWeek;
   updateSplitLabel(); populateStreakForm(chore);
   setChoreFormMode("edit",chore.name);
   switchTab("parent","chores");
@@ -1506,7 +1575,9 @@ function isDueToday(chore){
     if(days.indexOf(now.getDay())===-1) return false;
     const created=new Date(chore.createdAt||Date.now());
     const weeksDiff=Math.floor((Date.now()-created.getTime())/(7*24*60*60*1000));
-    return weeksDiff%2===0;
+    // v30.1: if skipFirstWeek, flip the bi-weekly phase so "this week" is off-week
+    const offset = chore.skipFirstWeek ? 1 : 0;
+    return (weeksDiff + offset) % 2 === 0;
   }
   if(chore.schedule==="monthly"){
     const target=resolveMonthlyDay(chore.monthlyDay||"1",now.getFullYear(),now.getMonth());
@@ -1535,7 +1606,9 @@ function isDueThisWeek(chore){
     if(!anyDay) return false;
     const created=new Date(chore.createdAt||Date.now());
     const daysElapsed=Math.floor((Date.now()-created.getTime())/(24*60*60*1000));
-    return (14-(daysElapsed%14))<=7;
+    // v30.1: if skipFirstWeek, shift window by 7 days
+    const offset = chore.skipFirstWeek ? 7 : 0;
+    return (14-((daysElapsed+offset)%14))<=7;
   }
   if(chore.schedule==="monthly"){
     const now=new Date();
@@ -1606,14 +1679,20 @@ function renderChoreTable(){
   const chores=data.chores||[];
   const today=todayStr();
   const expired=chores.filter(c=>c.schedule==="once"&&c.onceDate&&c.onceDate<today&&c.status==="available");
+  // v30.1: "available" now means non-paused, not-yet-completed-today, not-past-endDate.
+  // Per-tab narrowing (today / this week / all) happens in the filter step below.
   const available=chores.filter(c=>
-    (!c.paused && c.status==="available" && (!c.endDate||c.endDate>=today) && c.lastCompleted!==today && isDueToday(c)===true) ||
-    (!c.paused && c.status==="available" && c.schedule==="once" && (!c.onceDate||c.onceDate>=today) && c.lastCompleted!==today)
+    !c.paused &&
+    c.status==="available" &&
+    (!c.endDate || c.endDate>=today) &&
+    c.lastCompleted!==today &&
+    // Exclude one-time chores whose date has passed (those are in `expired`)
+    !(c.schedule==="once" && c.onceDate && c.onceDate<today)
   );
   const filtered=available.filter(c=>{
     if(choreFilter==="today") return isDueToday(c);
     if(choreFilter==="week")  return isDueThisWeek(c);
-    return true;
+    return true;  // "all" — show every available chore regardless of schedule window
   });
   function dueBadge(c){
     if(isDueToday(c))    return `<span style="font-size:.6rem;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:10px;margin-left:5px;">Today</span>`;
@@ -1642,7 +1721,7 @@ function renderChoreTable(){
       <tbody>
         ${filtered.map(c=>`
           <tr class="chore-row" id="chore-row-${c.id}">
-            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;"></div>`}</td>
+            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--muted);" title="Not due today">🔒</div>`}</td>
             <td class="chore-name-cell">
               ${c.name}${dueBadge(c)}
               ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
@@ -1861,21 +1940,90 @@ function createLoan(){
   const dueDay=document.getElementById("loan-due-day").value;
   const msgEl=document.getElementById("loan-form-msg"); msgEl.className="field-msg";
   if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Loan name is required."; return; }
-  if(!p||p<=0){ msgEl.className="field-msg error"; msgEl.textContent="Principal must be greater than 0."; return; }
   if(isNaN(r)||r<0){ msgEl.className="field-msg error"; msgEl.textContent="Enter a valid interest rate."; return; }
   if(!t||t<=0){ msgEl.className="field-msg error"; msgEl.textContent="Term must be at least 1 month."; return; }
+
   const data=getChildData(activeChild);
   if(!data.loans) data.loans=[];
-  data.loans.push({
-    id:"loan_"+Date.now(),
-    name, principal:p, balance:p, rate:r, termMonths:t, dueDay,
-    payment:calcMonthlyPayment(p,r,t),
-    createdAt:todayStr()
-  });
-  ["loan-name","loan-principal","loan-rate","loan-term"].forEach(id=>document.getElementById(id).value="");
-  syncToCloud("Loan Created");
+
+  if(editingLoanId){
+    // v30.1: Edit terms only — name, rate, term, dueDay.
+    // Principal is locked (edit form disables that input).
+    // Payment is recalculated from CURRENT balance + new terms — keeps audit trail intact.
+    const loan=data.loans.find(l=>l.id===editingLoanId);
+    if(!loan){ msgEl.className="field-msg error"; msgEl.textContent="Loan not found."; return; }
+    loan.name=name;
+    loan.rate=r;
+    loan.termMonths=t;
+    loan.dueDay=dueDay;
+    loan.payment=calcMonthlyPayment(loan.balance, r, t);
+    editingLoanId=null;
+    setLoanFormMode("create");
+    syncToCloud("Loan Edited");
+    showToast("Loan updated. ✏️","success");
+  } else {
+    if(!p||p<=0){ msgEl.className="field-msg error"; msgEl.textContent="Principal must be greater than 0."; return; }
+    data.loans.push({
+      id:"loan_"+Date.now(),
+      name, principal:p, balance:p, rate:r, termMonths:t, dueDay,
+      payment:calcMonthlyPayment(p,r,t),
+      createdAt:todayStr()
+    });
+    syncToCloud("Loan Created");
+    showToast("Loan created. 💳","success");
+  }
+  resetLoanForm();
   renderParentLoans();
-  showToast("Loan created. 💳","success");
+}
+
+function resetLoanForm(){
+  ["loan-name","loan-principal","loan-rate","loan-term"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("loan-principal").disabled=false;
+  document.getElementById("loan-payment-preview").textContent="$0.00/mo";
+  setLoanFormMode("create");
+}
+
+function editLoan(loanId){
+  const data=getChildData(activeChild);
+  const loan=(data.loans||[]).find(l=>l.id===loanId);
+  if(!loan) return;
+  editingLoanId=loanId;
+  document.getElementById("loan-name").value=loan.name||"";
+  // Principal field shows balance (read-only visual cue) — users can see but not change
+  document.getElementById("loan-principal").value=loan.balance;
+  document.getElementById("loan-principal").disabled=true;
+  document.getElementById("loan-rate").value=loan.rate;
+  document.getElementById("loan-term").value=loan.termMonths;
+  document.getElementById("loan-due-day").value=loan.dueDay||"1";
+  // Show payment preview using current balance
+  const newPayment=calcMonthlyPayment(loan.balance,loan.rate,loan.termMonths);
+  document.getElementById("loan-payment-preview").textContent=fmt(newPayment)+"/mo";
+  setLoanFormMode("edit",loan.name);
+  document.getElementById("loan-form-title").scrollIntoView({behavior:"smooth",block:"start"});
+  showToast('Editing "'+loan.name+'" — principal locked; adjust terms and save.',"info",4000);
+}
+
+function cancelLoanEdit(){
+  editingLoanId=null;
+  resetLoanForm();
+}
+
+function setLoanFormMode(mode,name){
+  const t=document.getElementById("loan-form-title");
+  const sb=document.getElementById("loan-submit-btn");
+  const cb=document.getElementById("loan-cancel-edit-btn");
+  const hint=document.getElementById("loan-edit-hint");
+  if(mode==="edit"){
+    if(t)    t.textContent="✏️ Editing: "+(name||"Loan");
+    if(sb)   sb.textContent="💾 Save Changes";
+    if(cb)   cb.classList.remove("hidden");
+    if(hint) hint.classList.remove("hidden");
+  } else {
+    if(t)    t.textContent="Create New Loan";
+    if(sb)   sb.textContent="➕ Create Loan";
+    if(cb)   cb.classList.add("hidden");
+    if(hint) hint.classList.add("hidden");
+  }
 }
 
 function renderParentLoans(){
@@ -1897,7 +2045,10 @@ function renderParentLoans(){
         Original: ${fmt(l.principal)} • ${l.rate}% APR • ${l.termMonths} mo<br>
         Payment: ${fmt(l.payment)}/mo • Due: ${fmtNextPayment(l)}
       </div>
-      <button class="btn btn-danger btn-sm" onclick="deleteLoan('${l.id}')">🗑️ Delete</button>
+      <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" onclick="editLoan('${l.id}')">✏️ Edit</button>
+        <button class="btn btn-danger  btn-sm" onclick="deleteLoan('${l.id}')">🗑️ Delete</button>
+      </div>
     </div>`).join("");
 }
 
@@ -2148,6 +2299,9 @@ function drawNetWorthChart(){
     return monthNames[parseInt(mm)] + (mm==="01" ? " '"+yr.slice(2) : "");
   });
   const actuals=[...history.map(d=>d.total), ...futureMonths.map(()=>null)];
+
+  // v30.1: single-point data looks lonely; enlarge the dot and widen the default radius
+  const singlePoint = history.length === 1;
 
   // Brand color
   const primary = getComputedStyle(document.documentElement).getPropertyValue("--primary").trim() || "#2563eb";
@@ -2493,6 +2647,19 @@ const PICKER_CONFIG = {
     title:"Select Visible Tabs",
     hint:"Tap to toggle. Money and Chores are on by default.",
     displayId:"edit-tab-display",
+    noItemsText:"",
+    getItems: ()=> [
+      {value:"money",  label:"💵 Money"},
+      {value:"chores", label:"✅ Chores"},
+      {value:"loans",  label:"🏦 Loans"}
+    ]
+  },
+  // v30.1: separate picker mode for parent Settings tab — different displayId,
+  // same items. Keeps state isolated from the admin edit flow.
+  profileTabs: {
+    title:"Select Visible Tabs",
+    hint:"Controls which tabs this child sees on login.",
+    displayId:"profile-tab-display",
     noItemsText:"",
     getItems: ()=> [
       {value:"money",  label:"💵 Money"},
