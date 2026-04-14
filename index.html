@@ -356,6 +356,25 @@
           </div>
         </div>
         <div class="section-block">
+          <h3>💰 Make a Deposit</h3>
+          <div class="info-box">Got birthday money or cash from a job? Ask to deposit it into your bank!</div>
+          <label class="field-label">Amount $</label>
+          <input type="number" id="deposit-amt" placeholder="$0.00" step="0.01" min="0.01">
+          <div class="field-msg" id="deposit-amt-msg"></div>
+          <label class="field-label">Where did this money come from?</label>
+          <input type="text" id="deposit-source" placeholder="e.g. Birthday money from Grandma">
+          <div class="field-msg" id="deposit-source-msg"></div>
+          <label class="field-label">Payout Split</label>
+          <div class="split-display">
+            <span class="chk-pct">💵 Checking: <strong><span id="dep-split-chk-label">100</span>%</strong></span>
+            <span class="sav-pct">🏦 Savings: <strong><span id="dep-split-sav-label">0</span>%</strong></span>
+          </div>
+          <input type="range" id="deposit-split" min="0" max="100" value="100" oninput="updateDepositSplitLabel()">
+          <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--muted);margin-top:2px;margin-bottom:8px;"><span>← All Savings</span><span>50/50</span><span>All Checking →</span></div>
+          <div id="deposit-pending-list"></div>
+          <button class="btn btn-secondary" onclick="submitDeposit()">📥 Request Deposit</button>
+        </div>
+        <div class="section-block">
           <button class="btn-full-ghost" onclick="changePinPrompt('child')">🔑 Change My PIN</button>
         </div>
       </div>
@@ -398,6 +417,7 @@
         <input type="text" id="adj-note" placeholder="e.g. Birthday gift, chore bonus...">
         <div class="field-msg" id="adj-msg"></div>
         <button class="btn btn-warning" onclick="confirmAdjust()">⚡ Apply Adjustment</button>
+        <div id="parent-deposit-approvals"></div>
         <div class="section-block">
           <h3>Apply Interest</h3>
           <div class="info-box">Adds one month of interest based on current APY rates.</div>
@@ -528,6 +548,25 @@
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
           <input type="checkbox" id="chore-child-chooses" checked>
           <label for="chore-child-chooses" style="font-size:.8rem;color:var(--muted);font-weight:500;margin:0;cursor:pointer;">Let child choose their own split</label>
+        </div>
+        <!-- Per-chore streak settings -->
+        <div class="section-block" style="padding-top:14px;">
+          <h3 style="font-size:.82rem;margin-bottom:10px;">🔥 Streak Settings (optional)</h3>
+          <div class="row">
+            <div class="col">
+              <label class="field-label">Starting Streak Count</label>
+              <input type="number" id="chore-streak-start" min="0" step="1" placeholder="0" value="0">
+              <div style="font-size:.68rem;color:var(--muted);margin-top:-6px;margin-bottom:8px;">Credit past completions</div>
+            </div>
+            <div class="col">
+              <label class="field-label">Milestone Every X times</label>
+              <input type="number" id="chore-streak-milestone" min="0" step="1" placeholder="e.g. 4">
+              <div style="font-size:.68rem;color:var(--muted);margin-top:-6px;margin-bottom:8px;">0 = no milestone</div>
+            </div>
+          </div>
+          <label class="field-label">Milestone Bonus Reward $</label>
+          <input type="number" id="chore-streak-reward" min="0" step="0.01" placeholder="0.00">
+          <div style="font-size:.68rem;color:var(--muted);margin-top:-6px;margin-bottom:8px;">Deposited to checking when milestone hit</div>
         </div>
         <div class="field-msg" id="chore-form-msg"></div>
         <div class="row" style="gap:8px;">
@@ -693,6 +732,11 @@
       </select>
     </div>
     <div class="section-block">
+      <h3>👨‍👩‍👧 Parent → Child Assignment</h3>
+      <div class="info-box">Select which children each parent can see and manage. Leave all unchecked to allow a parent to see all children.</div>
+      <div id="admin-parent-children-fields"></div>
+    </div>
+    <div class="section-block">
       <h3>👶 Child Tab Visibility</h3>
       <div class="info-box">Choose which tabs each child can see. Uncheck to hide.</div>
       <div id="admin-tabs-fields"></div>
@@ -734,7 +778,7 @@
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v29.0   |   Paired with Code.gs: v27.0                    ║
+// ║  Version: v29.0   |   Paired with Code.gs: v29.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -759,7 +803,7 @@
 // Paste your Web App URL here every time you redeploy Code.gs.
 // Get it from: Apps Script → Deploy → Manage Deployments → copy URL
 // ------------------------------------------------------------------
-const API_URL = "https://script.google.com/macros/s/AKfycbxCqyyHyjFI4eW-WL_KlE77ESzL1MDFK2cNNw9-1m9KAloAKXQRCgIytxxf7kq-23yXQg/exec"; // ← PASTE NEW URL HERE
+const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBkLt4KKTL2m7_PVRSV4X0kHn-B0mpJCc93DaW8j6TMnZa3jw/exec"; // ← PASTE NEW URL HERE
 
 // ------------------------------------------------------------------
 // STEP 2 — BANK IDENTITY
@@ -1081,12 +1125,14 @@ function attemptLogin(){
   const user=state.users.find(u=>u.toLowerCase()===userRaw.toLowerCase());
   if(!user){showFieldError("pin-input","pin-error","Name not recognised — check spelling.");return;}
   if(state.pins[user]!==pin){showFieldError("pin-input","pin-error","Incorrect PIN. Try again.");document.getElementById("pin-input").value="";return;}
-  if(document.getElementById("remember-me").checked)try{localStorage.setItem("fb_remembered_user",user);}catch(e){}
+  if(document.getElementById("remember-me").checked){
+    try{localStorage.setItem("fb_remembered_user",user);localStorage.setItem("fb_remembered_pin",pin);}catch(e){}
+  }
   currentUser=user;
   currentRole=state.roles[user]||"child";
   document.getElementById("login-screen").classList.add("hidden");
   if(currentRole==="parent"){
-    const children=getChildNames();
+    const children=getAssignedChildren();
     if(children.length===1){document.getElementById("main-screen").classList.remove("hidden");selectChild(children[0]);}
     else if(children.length>1){document.getElementById("child-picker-screen").classList.remove("hidden");showChildPicker();}
     else{document.getElementById("main-screen").classList.remove("hidden");document.getElementById("welcome-msg").textContent="Hi, "+user+"! 👋";document.getElementById("parent-panel").classList.remove("hidden");}
@@ -1096,7 +1142,7 @@ function attemptLogin(){
     document.getElementById("welcome-msg").textContent="Hi, "+user+"! 👋";
     document.getElementById("child-panel").classList.remove("hidden");
     renderChildTabBar();
-    renderBalances();renderChildChores();renderSavingsGoals();showChoreWaitingBanner();updateChoreBadges();
+    renderBalances();renderChildChores();renderSavingsGoals();renderPendingDeposits();showChoreWaitingBanner();updateChoreBadges();
     initInactivityTimer();
   }
 }
@@ -1122,19 +1168,43 @@ function restoreRememberedUser(){
     if(!saved)return;
     const valid=state.users.find(u=>u.toLowerCase()===saved.toLowerCase());
     if(!valid){localStorage.removeItem("fb_remembered_user");return;}
+    // Try auto-login if PIN also stored
+    const savedPin=localStorage.getItem("fb_remembered_pin");
+    if(savedPin&&state.pins[valid]===savedPin){
+      // Auto-login silently
+      currentUser=valid;
+      currentRole=state.roles[valid]||"child";
+      document.getElementById("login-screen").classList.add("hidden");
+      if(currentRole==="parent"){
+        const children=getAssignedChildren();
+        if(children.length===1){document.getElementById("main-screen").classList.remove("hidden");selectChild(children[0]);}
+        else if(children.length>1){document.getElementById("child-picker-screen").classList.remove("hidden");showChildPicker();}
+        else{document.getElementById("main-screen").classList.remove("hidden");document.getElementById("welcome-msg").textContent="Hi, "+valid+"! 👋";document.getElementById("parent-panel").classList.remove("hidden");}
+      }else{
+        activeChild=valid;
+        document.getElementById("main-screen").classList.remove("hidden");
+        document.getElementById("welcome-msg").textContent="Hi, "+valid+"! 👋";
+        document.getElementById("child-panel").classList.remove("hidden");
+        renderChildTabBar();
+        renderBalances();renderChildChores();renderSavingsGoals();renderPendingDeposits();showChoreWaitingBanner();updateChoreBadges();
+        initInactivityTimer();
+      }
+      return;
+    }
+    // No pin stored — just pre-fill the username
     const ni=document.getElementById("username-input"),rc=document.getElementById("remember-me"),nb=document.getElementById("not-you-btn");
     if(ni)ni.value=valid;if(rc)rc.checked=true;if(nb)nb.classList.remove("hidden");
     setTimeout(()=>document.getElementById("pin-input")?.focus(),400);
   }catch(e){}
 }
-function onRememberMeChange(){if(!document.getElementById("remember-me").checked){try{localStorage.removeItem("fb_remembered_user");}catch(e){}document.getElementById("not-you-btn").classList.add("hidden");}}
-function clearRememberedUser(){try{localStorage.removeItem("fb_remembered_user");}catch(e){}const ni=document.getElementById("username-input"),rc=document.getElementById("remember-me"),nb=document.getElementById("not-you-btn");if(ni){ni.value="";ni.focus();}if(rc)rc.checked=false;if(nb)nb.classList.add("hidden");}
+function onRememberMeChange(){if(!document.getElementById("remember-me").checked){try{localStorage.removeItem("fb_remembered_user");localStorage.removeItem("fb_remembered_pin");}catch(e){}document.getElementById("not-you-btn").classList.add("hidden");}}
+function clearRememberedUser(){try{localStorage.removeItem("fb_remembered_user");localStorage.removeItem("fb_remembered_pin");}catch(e){}const ni=document.getElementById("username-input"),rc=document.getElementById("remember-me"),nb=document.getElementById("not-you-btn");if(ni){ni.value="";ni.focus();}if(rc)rc.checked=false;if(nb)nb.classList.add("hidden");}
 
 // ================================================================
 // CHILD PICKER
 // ================================================================
 function showChildPicker(){
-  const children=getChildNames();
+  const children=getAssignedChildren();
   if(children.length===1){selectChild(children[0]);return;}
   document.getElementById("main-screen").classList.add("hidden");
   document.getElementById("child-picker-screen").classList.remove("hidden");
@@ -1168,7 +1238,7 @@ function selectChild(childName){
   document.getElementById("parent-panel").classList.remove("hidden");
   document.getElementById("child-panel").classList.add("hidden");
   renderParentTabBar();
-  renderBalances();renderParentSettings();renderParentChores();renderParentGoals();updateChoreBadges();
+  renderBalances();renderParentSettings();renderParentChores();renderParentGoals();renderParentDepositApprovals();updateChoreBadges();
 }
 
 // ================================================================
@@ -1667,23 +1737,27 @@ function createChore(){
   if(!name){msgEl.className="field-msg error";msgEl.textContent="Chore name is required.";return;}
   if(amount===null||amount===undefined||isNaN(amount)||amount<0){msgEl.className="field-msg error";msgEl.textContent="Enter a valid reward amount (0 or more).";return;}
   const data=getChildData(activeChild);
+  const streakVals=getStreakFormValues();
   if(editingChoreId){
     const ex=data.chores.find(c=>c.id===editingChoreId);
-    if(ex)Object.assign(ex,{name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,onceDueOn,reminderHour,splitChk,childChooses,paused,endDate});
+    if(ex)Object.assign(ex,{name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,onceDueOn,reminderHour,splitChk,childChooses,paused,endDate,
+      streakStart:streakVals.streakStart,streakMilestone:streakVals.streakMilestone,streakReward:streakVals.streakReward});
     const editedId=ex?ex.id:null;
     if(editedId)state._editedChoreId=editedId;
     editingChoreId=null;setChoreFormMode("create");syncToCloud("Chore Edited");
     delete state._editedChoreId;
     showToast("Chore updated! ✏️","success");
   }else{
-    data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,onceDueOn,reminderHour,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date())});
+    data.chores.push({id:"chore_"+Date.now(),name,desc,amount,schedule,monthlyDay,weekday,weekdays,onceDate,onceDueOn,reminderHour,splitChk,childChooses,paused,endDate,status:"available",completedBy:null,completedAt:null,denialNote:null,createdAt:fmtDate(new Date()),
+      streakCount:0,streakStart:streakVals.streakStart,streakMilestone:streakVals.streakMilestone,streakReward:streakVals.streakReward});
     syncToCloud("Chore Created");showToast('"'+name+'" added! 📋',"success");
   }
   ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-schedule").value="once";
   document.getElementById("chore-split").value=100;
-  document.getElementById("chore-child-chooses").checked=false;
+  document.getElementById("chore-child-chooses").checked=true;
+  clearStreakForm();
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
   document.getElementById("chore-weekday-wrap").classList.add("hidden");
   document.getElementById("chore-once-wrap").classList.remove("hidden");
@@ -1720,7 +1794,7 @@ function editChore(choreId){
     const days=chore.weekdays||(chore.weekday!==undefined?[chore.weekday]:[]);
     setSelectedDays(days);
   }
-  updateSplitLabel();setChoreFormMode("edit",chore.name);switchTab("parent","chores");
+  updateSplitLabel();populateStreakForm(chore);setChoreFormMode("edit",chore.name);switchTab("parent","chores");
   document.getElementById("chore-form-title").scrollIntoView({behavior:"smooth",block:"start"});
   showToast('Editing "'+chore.name+'" — make changes and tap Save.',"info",4000);
 }
@@ -1734,6 +1808,7 @@ function cancelChoreEdit(){
   document.getElementById("chore-child-chooses").checked=false;
   const onceTypeReset=document.getElementById("chore-once-type");
   if(onceTypeReset){onceTypeReset.value="none";toggleOnceDateField();}
+  clearStreakForm();
   document.getElementById("chore-monthly-wrap").classList.add("hidden");
   document.getElementById("chore-weekday-wrap").classList.add("hidden");
   document.getElementById("chore-once-wrap").classList.remove("hidden");
@@ -1897,7 +1972,7 @@ function attemptAdminLogin(){
   errEl.className="field-msg";
   document.getElementById("admin-login-section").classList.add("hidden");
   document.getElementById("admin-settings-section").classList.remove("hidden");
-  populateAdminForm();renderAdminUsers();renderAdminEmailFields();renderAdminTabFields();
+  populateAdminForm();renderAdminUsers();renderAdminEmailFields();renderAdminTabFields();renderAdminParentChildren();
 }
 function populateAdminForm(){
   const cfg=state.config;
@@ -1995,6 +2070,16 @@ function saveAdminSettings(){
   state.config.imgLogo=document.getElementById("admin-img-logo").value.trim()||CFG_IMG_LOGO;
   state.config.timezone=document.getElementById("admin-timezone").value;
   state.config.autoLogout=parseInt(document.getElementById("admin-autologout").value)||0;
+  // Save per-parent child assignments
+  if(!state.config.parentChildren)state.config.parentChildren={};
+  getParentNames().forEach(p=>{
+    const children=getChildNames();
+    const assigned=children.filter(c=>{
+      const cb=document.getElementById("pc-"+p+"-"+c);
+      return cb&&cb.checked;
+    });
+    state.config.parentChildren[p]=assigned; // empty array = see all
+  });
   // Save per-child tab visibility
   if(!state.config.tabs)state.config.tabs={};
   getChildNames().forEach(u=>{
@@ -2376,12 +2461,223 @@ function renderParentDashboard(){
   if(existing)existing.remove();
 }
 
+
+// ================================================================
+// DEPOSIT SPLIT LABEL
+// ================================================================
+function updateDepositSplitLabel(){
+  const p=parseInt(document.getElementById("deposit-split").value);
+  document.getElementById("dep-split-chk-label").textContent=p;
+  document.getElementById("dep-split-sav-label").textContent=100-p;
+}
+
+// ================================================================
+// DEPOSIT — CHILD SUBMIT
+// ================================================================
+function submitDeposit(){
+  const amtEl=document.getElementById("deposit-amt");
+  const srcEl=document.getElementById("deposit-source");
+  const amt=parseFloat(amtEl.value);
+  const source=srcEl.value.trim();
+  const splitChk=parseInt(document.getElementById("deposit-split").value);
+
+  // Clear errors
+  document.getElementById("deposit-amt-msg").className="field-msg";
+  document.getElementById("deposit-source-msg").className="field-msg";
+
+  let ok=true;
+  if(!amt||amt<=0){document.getElementById("deposit-amt-msg").className="field-msg error";document.getElementById("deposit-amt-msg").textContent="Enter a valid amount.";ok=false;}
+  if(!source){document.getElementById("deposit-source-msg").className="field-msg error";document.getElementById("deposit-source-msg").textContent="Tell us where the money came from.";ok=false;}
+  if(!ok)return;
+
+  const child=activeChild||currentUser;
+  const data=getChildData(child);
+  if(!data.deposits)data.deposits=[];
+
+  const dep={
+    id:"dep_"+Date.now(),
+    amount:amt,
+    source:source,
+    splitChk:splitChk,
+    status:"pending",
+    submittedBy:currentUser,
+    submittedAt:fmtDate(new Date())
+  };
+  data.deposits.push(dep);
+
+  amtEl.value="";srcEl.value="";
+  document.getElementById("deposit-split").value=100;
+  updateDepositSplitLabel();
+
+  syncToCloud("Deposit Submitted");
+  showToast("Deposit request sent! Waiting for approval. 📥","success");
+  renderPendingDeposits();
+}
+
+// ================================================================
+// DEPOSIT — RENDER PENDING (child view)
+// ================================================================
+function renderPendingDeposits(){
+  const child=activeChild||currentUser;
+  const data=getChildData(child);
+  const deposits=(data.deposits||[]).filter(d=>d.status==="pending");
+  const el=document.getElementById("deposit-pending-list");
+  if(!el)return;
+  if(!deposits.length){el.innerHTML="";return;}
+  el.innerHTML=`<div style="margin-bottom:10px;">
+    <div style="font-size:.72rem;font-weight:700;color:var(--warning);margin-bottom:6px;">⏳ Pending Deposits</div>
+    ${deposits.map(d=>`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;margin-bottom:6px;font-size:.8rem;">
+      <strong>$${(d.amount||0).toFixed(2)}</strong> — ${d.source}
+      <div style="color:var(--muted);font-size:.7rem;margin-top:2px;">Submitted ${d.submittedAt} · Waiting for approval</div>
+    </div>`).join("")}
+  </div>`;
+}
+
+// ================================================================
+// DEPOSIT — RENDER PENDING APPROVALS (parent view)
+// ================================================================
+function renderParentDepositApprovals(){
+  const child=activeChild;
+  if(!child)return;
+  const data=getChildData(child);
+  const deposits=(data.deposits||[]).filter(d=>d.status==="pending");
+  const el=document.getElementById("parent-deposit-approvals");
+  if(!el)return;
+  if(!deposits.length){el.innerHTML="";return;}
+  el.innerHTML=`<div class="approval-banner" style="margin-bottom:14px;">
+    <h3>💰 Deposit Requests (${deposits.length})</h3>
+    ${deposits.map(d=>`
+      <div class="chore-card state-pending" style="margin-bottom:10px;">
+        <div class="chore-card-header">
+          <span class="chore-card-name">📥 ${d.source}</span>
+          <span class="chore-card-amount">${fmt(d.amount)}</span>
+        </div>
+        <div class="chore-card-meta">
+          From <strong>${d.submittedBy}</strong> at ${d.submittedAt}<br>
+          Split: ${d.splitChk}% Chk / ${100-d.splitChk}% Sav
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn btn-secondary btn-sm col" onclick="approveDeposit('${d.id}')">✅ Approve</button>
+          <button class="btn btn-danger btn-sm col" onclick="denyDeposit('${d.id}')">❌ Deny</button>
+        </div>
+      </div>`).join("")}
+  </div>`;
+}
+
+// ================================================================
+// DEPOSIT — APPROVE / DENY (parent in-app)
+// ================================================================
+function approveDeposit(depositId){
+  const data=getChildData(activeChild);
+  const dep=(data.deposits||[]).find(d=>d.id===depositId);
+  if(!dep)return;
+  const ck=dep.amount*(dep.splitChk/100);
+  const sv=dep.amount*((100-dep.splitChk)/100);
+  openModal({icon:"💰",title:"Approve Deposit?",
+    body:"Adds $"+dep.amount.toFixed(2)+" from "+dep.source+" to "+activeChild+"'s account.",
+    detail:{"Source":dep.source,"Total":fmt(dep.amount),"→ Checking":fmt(ck),"→ Savings":fmt(sv)},
+    confirmText:"Approve",confirmClass:"btn-secondary",
+    onConfirm:()=>{
+      data.balances.checking+=ck;
+      data.balances.savings+=sv;
+      if(ck>0)recordTransaction("Bank","Deposit: "+dep.source+" (Chk)",ck);
+      if(sv>0)recordTransaction("Bank","Deposit: "+dep.source+" (Sav)",sv);
+      dep.status="approved";
+      syncToCloud("Deposit Approved");
+      showToast("Deposit approved! "+fmt(dep.amount)+" added. 💰","success");
+      renderParentDepositApprovals();renderBalances();
+    }});
+}
+
+function denyDeposit(depositId){
+  const data=getChildData(activeChild);
+  const dep=(data.deposits||[]).find(d=>d.id===depositId);
+  if(!dep)return;
+  openModal({icon:"❌",title:"Deny Deposit?",
+    body:"The deposit request of "+fmt(dep.amount)+" from "+dep.source+" will be declined.",
+    confirmText:"Deny",confirmClass:"btn-danger",
+    onConfirm:()=>{
+      dep.status="denied";
+      syncToCloud("Deposit Denied");
+      showToast("Deposit denied.","error");
+      renderParentDepositApprovals();
+    }});
+}
+
+// ================================================================
+// STREAK SETTINGS — read/write chore form fields
+// ================================================================
+function getStreakFormValues(){
+  return {
+    streakStart:    parseInt(document.getElementById("chore-streak-start").value)||0,
+    streakMilestone:parseInt(document.getElementById("chore-streak-milestone").value)||0,
+    streakReward:   parseFloat(document.getElementById("chore-streak-reward").value)||0,
+    streakCount:    0  // always starts at 0 for new chores
+  };
+}
+
+function populateStreakForm(chore){
+  document.getElementById("chore-streak-start").value=chore.streakStart||0;
+  document.getElementById("chore-streak-milestone").value=chore.streakMilestone||"";
+  document.getElementById("chore-streak-reward").value=chore.streakReward||"";
+}
+
+function clearStreakForm(){
+  document.getElementById("chore-streak-start").value=0;
+  document.getElementById("chore-streak-milestone").value="";
+  document.getElementById("chore-streak-reward").value="";
+}
+
+// ================================================================
+// ADMIN — PARENT-CHILD ASSIGNMENT
+// ================================================================
+function renderAdminParentChildren(){
+  const el=document.getElementById("admin-parent-children-fields");
+  if(!el)return;
+  const parents=getParentNames();
+  const children=getChildNames();
+  if(!parents.length||!children.length){
+    el.innerHTML=`<p style="font-size:.78rem;color:var(--muted);">Need at least one parent and one child to configure assignments.</p>`;
+    return;
+  }
+  const assignments=state.config.parentChildren||{};
+  el.innerHTML=parents.map(p=>{
+    const assigned=assignments[p]||[];
+    return `<div style="border:1.5px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="font-weight:700;font-size:.88rem;margin-bottom:10px;">${p} <span style="font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:4px;background:#dbeafe;color:#1d4ed8;">Parent</span></div>
+      <div style="font-size:.73rem;color:var(--muted);margin-bottom:8px;">Leave all unchecked to allow access to all children.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        ${children.map(c=>`<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--muted);font-weight:500;cursor:pointer;">
+          <input type="checkbox" id="pc-${p}-${c}" ${assigned.indexOf(c)!==-1?"checked":""} style="width:18px!important;height:18px!important;">
+          👤 ${c}
+        </label>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ================================================================
+// CHILD PICKER — filter by parent assignment
+// ================================================================
+function getAssignedChildren(){
+  // Returns children assigned to currentUser parent.
+  // If no assignments configured for this parent, returns all children.
+  const assignments=state.config&&state.config.parentChildren;
+  const allChildren=getChildNames();
+  if(!assignments||!assignments[currentUser]||!assignments[currentUser].length){
+    return allChildren; // no filter — see all
+  }
+  return allChildren.filter(c=>assignments[currentUser].indexOf(c)!==-1);
+}
+
+
 // ================================================================
 // INIT
 // ================================================================
 populateMonthlyDays();
 onScheduleChange(); // Show correct fields for default "One-time" schedule
 updateSplitLabel();
+updateDepositSplitLabel();
 document.getElementById("username-input").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("pin-input").focus();});
 document.getElementById("pin-input").addEventListener("keydown",e=>{if(e.key==="Enter")attemptLogin();});
 document.getElementById("admin-pin-input").addEventListener("keydown",e=>{if(e.key==="Enter")attemptAdminLogin();});
