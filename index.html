@@ -358,27 +358,6 @@
         <label class="field-label" id="child-note-label">What is this for?</label>
         <input type="text" id="child-note" placeholder="e.g. New shoes, saving up...">
         <div class="field-msg" id="child-note-msg"></div>
-        <!-- Loan selector — only shown for loan payment action -->
-        <div id="child-loan-select-wrap" class="hidden">
-          <label class="field-label">Select Loan</label>
-          <select id="child-loan-select" onchange="onChildLoanSelect()">
-            <option value="">— Select a loan —</option>
-          </select>
-          <div id="child-loan-info" style="background:var(--bg);border-radius:10px;padding:10px 14px;margin-bottom:10px;font-size:.8rem;display:none;">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-              <span style="color:var(--muted);font-weight:600;">Payment Amount</span>
-              <span id="child-loan-payment" style="font-weight:800;color:var(--warning);font-family:var(--mono);">$0.00</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-              <span style="color:var(--muted);font-weight:600;">Balance Remaining</span>
-              <span id="child-loan-balance" style="font-weight:800;color:var(--primary);font-family:var(--mono);">$0.00</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;">
-              <span style="color:var(--muted);font-weight:600;">Next Payment Due</span>
-              <span id="child-loan-due" style="font-weight:700;color:var(--text);">—</span>
-            </div>
-          </div>
-        </div>
         <!-- Deposit split — only shown for deposit action -->
         <div id="child-deposit-split-wrap" class="hidden">
           <label class="field-label">Payout Split</label>
@@ -443,7 +422,11 @@
         <div class="field-msg" id="adj-msg"></div>
         <button class="btn btn-warning" onclick="confirmAdjust()">⚡ Apply Adjustment</button>
         <div id="parent-deposit-approvals"></div>
-
+        <div class="section-block">
+          <h3>Apply Interest</h3>
+          <div class="info-box">Adds one month of interest based on current APY rates.</div>
+          <button class="btn btn-purple" onclick="confirmInterest()">📈 Apply 1 Month of Interest</button>
+        </div>
         <div class="section-block">
           <h3>🎯 Savings Goals for <span id="goals-child-name">Child</span></h3>
           <div id="parent-goals-list"></div>
@@ -475,11 +458,7 @@
           </div>
           <div class="row">
             <div class="col"><label class="field-label">Term (months)</label><input type="number" id="loan-term" step="1" min="1" placeholder="12" oninput="updateLoanPaymentPreview()"></div>
-            <div class="col"><label class="field-label">Payment Due Day</label><select id="loan-due-day"></select></div>
-          </div>
-          <div style="background:var(--bg);border-radius:10px;padding:10px 14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:.75rem;color:var(--muted);font-weight:600;">Est. Monthly Payment</span>
-            <span id="loan-payment-preview" style="font-weight:800;color:var(--primary);font-family:var(--mono);">$0.00/mo</span>
+            <div class="col"><label class="field-label">Monthly Payment</label><div id="loan-payment-preview" style="padding:11px 13px;background:var(--bg);border-radius:10px;font-weight:700;color:var(--primary);font-size:.95rem;margin-bottom:10px;">$0.00/mo</div></div>
           </div>
           <div class="field-msg" id="loan-form-msg"></div>
           <button class="btn btn-primary" onclick="createLoan()">➕ Create Loan</button>
@@ -750,19 +729,13 @@
         <div id="edit-parent-assignment" style="display:none;">
           <label class="field-label" style="margin-top:10px;">👶 Assigned Children</label>
           <div class="info-box" style="margin-bottom:8px;">Tap to toggle. No selection = sees all children.</div>
-          <select id="edit-child-select" multiple style="height:auto;min-height:80px;padding:6px;font-size:.82rem;"></select>
-          <div style="font-size:.68rem;color:var(--muted);margin-top:4px;">Hold Ctrl/Cmd to select multiple. No selection = parent sees all children.</div>
+          <div id="edit-child-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;"></div>
         </div>
         <!-- Child: tab visibility as pill selector -->
         <div id="edit-tab-visibility" style="display:none;">
           <label class="field-label" style="margin-top:10px;">📋 Visible Tabs</label>
           <div class="info-box" style="margin-bottom:8px;">Tap to toggle. Money and Chores are on by default.</div>
-          <select id="edit-tab-select" multiple style="height:auto;min-height:80px;padding:6px;font-size:.82rem;">
-            <option value="money">💵 Money</option>
-            <option value="chores">✅ Chores</option>
-            <option value="loans">💳 Loans</option>
-          </select>
-          <div style="font-size:.68rem;color:var(--muted);margin-top:4px;">Hold Ctrl/Cmd to select multiple.</div>
+          <div id="edit-tab-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;"></div>
         </div>
         <div class="row" style="gap:8px;margin-top:10px;">
           <button class="btn btn-primary col" onclick="saveUserEdit()">💾 Save Changes</button>
@@ -873,7 +846,7 @@ const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBk
 // ║                   FAMILY BANK — index.html                           ║
 // ║              Frontend Configuration & Setup Block                     ║
 // ╠═══════════════════════════════════════════════════════════════════════╣
-// ║  Version: v29.4   |   Paired with Code.gs: v29.0                    ║
+// ║  Version: v29.3   |   Paired with Code.gs: v29.0                    ║
 // ║  Update version numbers on each deployment                           ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 //
@@ -2867,26 +2840,42 @@ function setAllowanceDayToggles(days){
 // ================================================================
 // CHILD ACTION — unified withdraw/transfer/deposit
 // ================================================================
-
-// onChildActionChange — updated version defined below
- else {
+function onChildActionChange(){
+  const action=document.getElementById("child-action").value;
+  const hint=document.getElementById("child-action-hint");
+  const noteLabel=document.getElementById("child-note-label");
+  const splitWrap=document.getElementById("child-deposit-split-wrap");
+  const btn=document.getElementById("child-action-btn");
+  const noteEl=document.getElementById("child-note");
+  if(action==="withdraw"){
+    hint.textContent="Money comes out of checking. Remember to take the same amount from your real bank account.";
+    noteLabel.textContent="What is this for?";
+    noteEl.placeholder="e.g. New shoes, snack money...";
+    splitWrap.classList.add("hidden");
+    btn.textContent="💸 Withdraw Cash";btn.className="btn btn-primary";
+  } else if(action==="transfer"){
+    hint.textContent="Moves money from checking into savings.";
+    noteLabel.textContent="What is this for?";
+    noteEl.placeholder="e.g. Saving up for a bike...";
+    splitWrap.classList.add("hidden");
+    btn.textContent="🏦 Move to Savings";btn.className="btn btn-secondary";
+  } else {
     hint.textContent="Got cash from a birthday or job? Request to add it to your bank account.";
     noteLabel.textContent="Where did the money come from?";
     noteEl.placeholder="e.g. Birthday money from Grandma";
     splitWrap.classList.remove("hidden");
     btn.textContent="📥 Request Deposit";btn.className="btn btn-secondary";
   }
+}
 
 function doChildAction(){
   const action=document.getElementById("child-action").value;
   if(action==="loanpayment"){
     const child=activeChild||currentUser;
     const data=getChildData(child);
-    const loanSel=document.getElementById("child-loan-select");
-    const selectedId=loanSel?loanSel.value:"";
-    if(!selectedId){showToast("Please select a loan first.","info");return;}
-    const loan=(data.loans||[]).find(l=>l.id===selectedId&&l.status==="active");
-    if(!loan){showToast("Loan not found.","error");return;}
+    const activeLoans=(data.loans||[]).filter(l=>l.status==="active");
+    if(!activeLoans.length){showToast("No active loans to pay.","info");return;}
+    const loan=activeLoans[0];
     const payment=Math.min(loan.monthlyPayment,loan.balance);
     if(data.balances.checking<payment){
       showToast("Not enough in checking! Balance: "+fmt(data.balances.checking),"error");return;
@@ -3129,12 +3118,9 @@ function createLoan(){
   data.balances.checking+=principal;
   recordTransaction("Bank","Loan Disbursement: "+name+" (Chk)",principal);
 
-  const dueDayRaw=document.getElementById("loan-due-day")?.value||"1";
-  const dueDay=["last","last-1","last-2"].indexOf(dueDayRaw)!==-1?dueDayRaw:parseInt(dueDayRaw)||1;
   data.loans.push({
     id:"loan_"+Date.now(),
     name,principal,rate,term,
-    dueDay,
     monthlyPayment:parseFloat(payment.toFixed(2)),
     balance:parseFloat(principal.toFixed(2)),
     status:"active",
@@ -3145,7 +3131,6 @@ function createLoan(){
   ["loan-name","loan-principal","loan-rate","loan-term"].forEach(id=>{
     const el=document.getElementById(id);if(el)el.value="";
   });
-  const dueSel=document.getElementById("loan-due-day");if(dueSel)dueSel.selectedIndex=0;
   updateLoanPaymentPreview();
   syncToCloud("Loan Created");
   showToast("Loan created! $"+principal.toFixed(2)+" added to checking. 💳","success");
@@ -3202,7 +3187,7 @@ function renderChildLoans(){
         <div style="background:var(--primary);height:100%;width:${pct}%;border-radius:6px;transition:width .3s;"></div>
       </div>
       <div class="chore-card-meta">${pct}% paid off · ${fmt(l.monthlyPayment)}/month</div>
-      <div style="font-size:.72rem;font-weight:700;margin-top:4px;color:${nextPmt.startsWith('Overdue')?'var(--danger)':nextPmt.startsWith('Due today')?'var(--danger)':'var(--warning)'};">📅 Next payment: ${nextPmt}</div>
+      <div style="font-size:.72rem;color:var(--warning);font-weight:700;margin-top:4px;">📅 Next payment: ${nextPmt}</div>
     </div>`;
   }).join("");
 }
@@ -3295,25 +3280,46 @@ function openUserEdit(username){
     document.getElementById("edit-cal-id").value=cals[username]||"";
     toggleEditCalField();
 
-    // Tab visibility multiselect
+    // Tab visibility pills
     const tabWrap=document.getElementById("edit-tab-visibility");
     if(tabWrap) tabWrap.style.display="";
-    const tabCfg=(state.config.tabs&&state.config.tabs[username])||{};
-    const activeTabVals=[];
-    if(tabCfg.money!==false)activeTabVals.push("money");
-    if(tabCfg.chores!==false)activeTabVals.push("chores");
-    if(tabCfg.loans===true)activeTabVals.push("loans");
-    setMultiSelectValues("edit-tab-select",activeTabVals);
+    const tabChips=document.getElementById("edit-tab-chips");
+    if(tabChips){
+      tabChips.innerHTML="";
+      const tabCfg=(state.config.tabs&&state.config.tabs[username])||{};
+      const moneyOn=tabCfg.money!==false;
+      const choresOn=tabCfg.chores!==false;
+      const loansOn=tabCfg.loans===true;
+      [
+        {label:"💵 Money", val:"money", on:moneyOn},
+        {label:"✅ Chores", val:"chores", on:choresOn},
+        {label:"💳 Loans", val:"loans", on:loansOn}
+      ].forEach(t=>{
+        tabChips.appendChild(makePill(t.label, t.val, t.on, "active"));
+      });
+    }
   } else {
     const tabWrap=document.getElementById("edit-tab-visibility");
     if(tabWrap) tabWrap.style.display="none";
   }
 
-  // Parent assignment multiselect
+  // Parent assignment pills
   const assignWrap=document.getElementById("edit-parent-assignment");
   if(assignWrap) assignWrap.style.display=isParent?"":"none";
   if(isParent){
-    populateEditChildAssignSelect(username);
+    const chipContainer=document.getElementById("edit-child-chips");
+    if(chipContainer){
+      chipContainer.innerHTML="";
+      const allChildren=getChildNames();
+      const assignments=(state.config.parentChildren&&state.config.parentChildren[username])||[];
+      allChildren.forEach(c=>{
+        const active=assignments.indexOf(c)!==-1;
+        chipContainer.appendChild(makePill("👤 "+c, c, active, "active-green"));
+      });
+      if(!allChildren.length){
+        chipContainer.innerHTML='<span style="font-size:.78rem;color:var(--muted);">No children added yet.</span>';
+      }
+    }
   }
 
   document.getElementById("admin-user-edit-wrap").classList.remove("hidden");
@@ -3347,9 +3353,9 @@ function saveUserEdit(){
     const calId=document.getElementById("edit-cal-id").value.trim();
     if(!state.config.calendars)state.config.calendars={};
     if(calId)state.config.calendars[u]=calId;
-    // Tab visibility from multiselect
+    // Tab visibility from pills
     if(!state.config.tabs)state.config.tabs={};
-    const activeTabVals=getMultiSelectValues("edit-tab-select");
+    const activeTabVals=getPillActiveValues("edit-tab-chips");
     state.config.tabs[u]={
       money: activeTabVals.indexOf("money")!==-1,
       chores: activeTabVals.indexOf("chores")!==-1,
@@ -3358,9 +3364,9 @@ function saveUserEdit(){
   }
 
   if(role==="parent"){
-    // Child assignment from multiselect
+    // Child assignment from pills
     if(!state.config.parentChildren)state.config.parentChildren={};
-    state.config.parentChildren[u]=getMultiSelectValues("edit-child-select");
+    state.config.parentChildren[u]=getPillActiveValues("edit-child-chips");
   }
 
   syncToCloud("User Updated");
@@ -3505,141 +3511,11 @@ function onChildActionChange(){
   }
 }
 
-
-// ================================================================
-// LOAN DUE DAY PICKER — populate select (same pattern as monthly days)
-// ================================================================
-function populateLoanDueDayPicker(){
-  const sel=document.getElementById("loan-due-day");
-  if(!sel||sel.options.length>1)return;
-  sel.innerHTML="";
-  const sfx={1:"st",2:"nd",3:"rd"};
-  for(let d=1;d<=28;d++){
-    const o=document.createElement("option");
-    o.value=String(d);
-    o.textContent=d+(sfx[d]||"th")+" of the month";
-    if(d===1)o.selected=true;
-    sel.appendChild(o);
-  }
-  [["last","Last day of month"],["last-1","2nd to last day"],["last-2","3rd to last day"]].forEach(([v,t])=>{
-    const o=document.createElement("option");o.value=v;o.textContent=t;sel.appendChild(o);
-  });
-}
-
-// ================================================================
-// CHILD LOAN SELECTOR — populate + update info panel
-// ================================================================
-function populateChildLoanSelect(){
-  const sel=document.getElementById("child-loan-select");
-  if(!sel)return;
-  const child=activeChild||currentUser;
-  const data=getChildData(child);
-  const loans=(data.loans||[]).filter(l=>l.status==="active");
-  sel.innerHTML="<option value=''>— Select a loan —</option>";
-  loans.forEach(l=>{
-    const o=document.createElement("option");
-    o.value=l.id;
-    o.textContent=l.name+" ("+fmt(l.balance)+" remaining)";
-    sel.appendChild(o);
-  });
-  // Auto-select if only one loan
-  if(loans.length===1){sel.value=loans[0].id;onChildLoanSelect();}
-}
-
-function onChildLoanSelect(){
-  const sel=document.getElementById("child-loan-select");
-  const info=document.getElementById("child-loan-info");
-  const btn=document.getElementById("child-action-btn");
-  if(!sel||!sel.value){
-    if(info)info.style.display="none";
-    if(btn){btn.textContent="💳 Select a Loan";btn.disabled=true;}
-    return;
-  }
-  const child=activeChild||currentUser;
-  const data=getChildData(child);
-  const loan=(data.loans||[]).find(l=>l.id===sel.value);
-  if(!loan)return;
-  if(info){
-    info.style.display="";
-    document.getElementById("child-loan-payment").textContent=fmt(loan.monthlyPayment)+"/mo";
-    document.getElementById("child-loan-balance").textContent=fmt(loan.balance);
-    document.getElementById("child-loan-due").textContent=fmtNextPayment(loan);
-  }
-  if(btn){
-    btn.textContent="💳 Pay "+fmt(Math.min(loan.monthlyPayment,loan.balance));
-    btn.className="btn btn-warning";
-    btn.disabled=false;
-  }
-}
-
-// ================================================================
-// NEXT PAYMENT DATE — use dueDay stored on loan
-// ================================================================
-function calcNextPaymentDate(loan){
-  if(!loan.startDate)return null;
-  try{
-    const start=new Date(loan.startDate+"T00:00:00");
-    const paid=parseInt(loan.paidMonths)||0;
-    const now=new Date();
-    // Resolve dueDay
-    let dueDay=parseInt(loan.dueDay)||start.getDate();
-    // Find next occurrence of dueDay after today
-    let candidate=new Date(now.getFullYear(),now.getMonth(),dueDay);
-    if(candidate<=now){
-      candidate=new Date(now.getFullYear(),now.getMonth()+1,dueDay);
-    }
-    // Cap to last day of month if needed
-    const lastDay=new Date(candidate.getFullYear(),candidate.getMonth()+1,0).getDate();
-    if(dueDay>lastDay)candidate.setDate(lastDay);
-    return candidate;
-  }catch(e){return null;}
-}
-
-// ================================================================
-// ADMIN EDIT FORM — multiselect read/write helpers
-// ================================================================
-function getMultiSelectValues(id){
-  const sel=document.getElementById(id);
-  if(!sel)return[];
-  return Array.from(sel.selectedOptions).map(o=>o.value);
-}
-
-function setMultiSelectValues(id,vals){
-  const sel=document.getElementById(id);
-  if(!sel)return;
-  Array.from(sel.options).forEach(o=>{
-    o.selected=vals.indexOf(o.value)!==-1;
-  });
-}
-
-// ================================================================
-// ADMIN EDIT FORM — populate child assignment multiselect
-// ================================================================
-function populateEditChildAssignSelect(username){
-  const sel=document.getElementById("edit-child-select");
-  if(!sel)return;
-  sel.innerHTML="";
-  const allChildren=getChildNames();
-  const assignments=(state.config.parentChildren&&state.config.parentChildren[username])||[];
-  allChildren.forEach(c=>{
-    const o=document.createElement("option");
-    o.value=c;o.textContent="👤 "+c;
-    o.selected=assignments.indexOf(c)!==-1;
-    sel.appendChild(o);
-  });
-  if(!allChildren.length){
-    const o=document.createElement("option");
-    o.textContent="No children added yet";o.disabled=true;
-    sel.appendChild(o);
-  }
-}
-
 // ================================================================
 // INIT
 // ================================================================
 populateMonthlyDays();
 populateAllowanceMonthlyDays();
-populateLoanDueDayPicker();
 onScheduleChange(); // Show correct fields for default "One-time" schedule
 onAllowanceScheduleChange(); // Set initial allowance schedule UI
 // Default allowance day to Monday
