@@ -1,5 +1,5 @@
 /* ╔═══════════════════════════════════════════════════════════════════╗
-   ║                FAMILY BANK — service-worker.js  v30.0            ║
+   ║                FAMILY BANK — service-worker.js  v31.0            ║
    ║                                                                   ║
    ║  HOW THE AUTO-UPDATE WORKS:                                       ║
    ║  1. SW fetches version.json on every page load (network-first).  ║
@@ -8,14 +8,14 @@
    ║  3. The page waits until the user is idle (no taps for 30 sec)   ║
    ║     then quietly reloads to pick up the new version.             ║
    ║                                                                   ║
-   ║  All other assets (HTML, CSS, JS, vendored Chart.js) are cached  ║
-   ║  with stale-while-revalidate: instant load from cache, fresh     ║
-   ║  copy fetched in background.                                      ║
+   ║  All other assets (HTML, CSS, JS, vendored Chart.js, Phosphor    ║
+   ║  sprite) are cached with stale-while-revalidate: instant load    ║
+   ║  from cache, fresh copy fetched in background.                   ║
    ║                                                                   ║
    ║  script.google.com is always bypassed — never cached.            ║
    ╚═══════════════════════════════════════════════════════════════════╝ */
 
-const SW_VERSION  = 'v30.1';
+const SW_VERSION  = 'v31.0';
 const CACHE_NAME  = 'family-bank-' + SW_VERSION;
 const CORE_ASSETS = [
   './',
@@ -23,7 +23,8 @@ const CORE_ASSETS = [
   './styles.css',
   './app.js',
   './manifest.json',
-  './vendor/chart.umd.min.js'
+  './vendor/chart.umd.min.js',
+  './vendor/phosphor-sprite.svg'
 ];
 
 // ── Install: pre-cache the shell ──────────────────────────────────

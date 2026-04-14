@@ -1,5 +1,5 @@
 {
-  "version": "30.1",
+  "version": "31.0",
   "released": "2026-04-14",
-  "notes": "Bi-weekly skip-first-week option • chore tab filter fix • net worth chart day-one point • edit loan terms • parent-editable child profile in Settings"
+  "notes": "Phosphor icon migration • avatar system (emoji + per-device photo) • empty-state illustrations • upgraded chore celebration (confetti + optional sound)"
 }

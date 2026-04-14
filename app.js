@@ -1,5 +1,8 @@
 /* ╔═══════════════════════════════════════════════════════════════════╗
-   ║                  FAMILY BANK — app.js  v30.0                      ║
+   ║                  FAMILY BANK — app.js  v31.0                      ║
+   ║  v31 adds: Phosphor icons (vendor/phosphor-sprite.svg), avatar    ║
+   ║  system (emoji default + per-device photo), empty-state SVG       ║
+   ║  illustrations, upgraded chore celebration.                       ║
    ║                                                                   ║
    ║  Sections:                                                        ║
    ║    1.  Configuration & defaults                                   ║
@@ -33,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbz53vls6sygWEZps70j_X3f3F8tiigR5eJL4yEtHwgVe4oQ6eO8CMBZDZwz9XE4WOCR3Q/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBkLt4KKTL2m7_PVRSV4X0kHn-B0mpJCc93DaW8j6TMnZa3jw/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -55,11 +58,179 @@ const CFG_IMG_LOGO   = "images/logo.png";
 const CFG_IMG_ICON   = "images/icon.png";
 
 // ── Version ──
-const APP_VERSION = "30.1";
+const APP_VERSION = "31.0";
 
 // ╔═══════════════════════════════════════════════════════════════════╗
 // ║         END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE       ║
 // ╚═══════════════════════════════════════════════════════════════════╝
+
+// ════════════════════════════════════════════════════════════════════
+// 0a. ICONS — central Phosphor map. Every UI icon in the app references
+//     a semantic key here; to swap an icon, change one line.
+//     Usage: icon('approve')  →  '<svg class="icon"><use href="..."/></svg>'
+// ════════════════════════════════════════════════════════════════════
+const ICONS = {
+  // Actions
+  approve:    "ph-check-circle",
+  deny:       "ph-x-circle",
+  check:      "ph-check",
+  close:      "ph-x",
+  add:        "ph-plus",
+  edit:       "ph-pencil",
+  trash:      "ph-trash",
+  save:       "ph-floppy-disk",
+  refresh:    "ph-arrows-clockwise",
+  // Auth
+  login:      "ph-sign-in",
+  logout:     "ph-sign-out",
+  lock:       "ph-lock",
+  key:        "ph-key",
+  // Money
+  money:      "ph-money",
+  dollar:     "ph-currency-dollar",
+  checking:   "ph-money",
+  savings:    "ph-piggy-bank",
+  loan:       "ph-credit-card",
+  deposit:    "ph-arrow-circle-down",
+  withdraw:   "ph-arrow-circle-up",
+  bank:       "ph-bank",
+  // Content
+  chores:     "ph-clipboard-text",
+  history:    "ph-receipt",
+  calendar:   "ph-calendar",
+  chart:      "ph-chart-line-up",
+  goal:       "ph-target",
+  streak:     "ph-fire",
+  milestone:  "ph-trophy",
+  celebrate:  "ph-party-popper",
+  sparkle:    "ph-sparkle",
+  // Status
+  pending:    "ph-hourglass",
+  clock:      "ph-clock",
+  warning:    "ph-warning",
+  info:       "ph-info",
+  email:      "ph-envelope",
+  search:     "ph-magnifying-glass",
+  hand:       "ph-hand",
+  // People
+  user:       "ph-user",
+  users:      "ph-users",
+  child:      "ph-baby",
+  // System
+  settings:   "ph-gear",
+  image:      "ph-image",
+  globe:      "ph-globe",
+  timer:      "ph-timer",
+  lightning:  "ph-lightning",
+  // Arrows
+  arrowRight: "ph-arrow-right",
+  arrowLeft:  "ph-arrow-left",
+  caretRight: "ph-caret-right",
+  caretDown:  "ph-caret-down"
+};
+
+function icon(key, extraClass){
+  const name = ICONS[key] || key; // allow direct ph-* keys too
+  const cls  = "icon" + (extraClass ? " "+extraClass : "");
+  return `<svg class="${cls}" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#${name}"/></svg>`;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 0b. EMPTY-STATE ILLUSTRATIONS — inline SVG, duotone via CSS vars.
+// ════════════════════════════════════════════════════════════════════
+const ILLUSTRATIONS = {
+  chores: () => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="120" cy="96" r="60" fill="var(--primary)" opacity=".08"/><circle cx="120" cy="96" r="44" fill="var(--primary)" opacity=".18"/><path d="M100 96 L116 112 L144 82" stroke="var(--primary)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/><g fill="var(--secondary)" opacity=".8"><circle cx="52" cy="44" r="4"/><circle cx="192" cy="52" r="5"/><circle cx="44" cy="140" r="3"/><circle cx="200" cy="132" r="4"/></g><path d="M180 28 L184 36 L192 40 L184 44 L180 52 L176 44 L168 40 L176 36 Z" fill="var(--warning,#f59e0b)" opacity=".7"/><path d="M60 68 L62 72 L66 74 L62 76 L60 80 L58 76 L54 74 L58 72 Z" fill="var(--primary)" opacity=".5"/></svg>`,
+  history: () => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="70" y="38" width="80" height="104" rx="6" fill="var(--primary)" opacity=".12"/><rect x="70" y="38" width="80" height="104" rx="6" stroke="var(--primary)" stroke-width="2.5" fill="none" opacity=".5"/><line x1="82" y1="62" x2="138" y2="62" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" opacity=".45"/><line x1="82" y1="80" x2="128" y2="80" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" opacity=".3"/><line x1="82" y1="98" x2="138" y2="98" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" opacity=".3"/><line x1="82" y1="116" x2="118" y2="116" stroke="var(--primary)" stroke-width="3" stroke-linecap="round" opacity=".3"/><circle cx="156" cy="108" r="28" stroke="var(--secondary)" stroke-width="5" fill="white"/><line x1="176" y1="128" x2="196" y2="148" stroke="var(--secondary)" stroke-width="6" stroke-linecap="round"/></svg>`,
+  goals:   () => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="110" cy="100" r="52" fill="var(--secondary)" opacity=".12"/><circle cx="110" cy="100" r="52" stroke="var(--secondary)" stroke-width="2.5" opacity=".4" fill="none"/><circle cx="110" cy="100" r="36" stroke="var(--secondary)" stroke-width="2.5" opacity=".55" fill="none"/><circle cx="110" cy="100" r="20" stroke="var(--secondary)" stroke-width="2.5" opacity=".7" fill="none"/><circle cx="110" cy="100" r="6" fill="var(--secondary)"/><path d="M140 70 L188 30" stroke="var(--primary)" stroke-width="5" stroke-linecap="round"/><path d="M175 30 L188 30 L188 43" stroke="var(--primary)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M140 70 L150 60 L150 80 Z" fill="var(--primary)"/></svg>`,
+  loans:   () => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><ellipse cx="120" cy="148" rx="72" ry="10" fill="var(--primary)" opacity=".08"/><ellipse cx="120" cy="138" rx="50" ry="10" fill="var(--primary)" opacity=".25"/><rect x="70" y="108" width="100" height="30" fill="var(--primary)" opacity=".45"/><ellipse cx="120" cy="108" rx="50" ry="10" fill="var(--primary)" opacity=".6"/><rect x="74" y="80" width="92" height="28" fill="var(--secondary)" opacity=".45"/><ellipse cx="120" cy="80" rx="46" ry="9" fill="var(--secondary)" opacity=".7"/><rect x="80" y="54" width="80" height="26" fill="var(--warning,#f59e0b)" opacity=".45"/><ellipse cx="120" cy="54" rx="40" ry="8" fill="var(--warning,#f59e0b)" opacity=".7"/><text x="120" y="60" text-anchor="middle" font-size="11" font-weight="700" fill="white" font-family="DM Mono, monospace">$</text><text x="120" y="86" text-anchor="middle" font-size="11" font-weight="700" fill="white" font-family="DM Mono, monospace">$</text><text x="120" y="114" text-anchor="middle" font-size="11" font-weight="700" fill="white" font-family="DM Mono, monospace">$</text></svg>`,
+  children:() => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="100" cy="70" r="24" fill="var(--primary)" opacity=".25"/><path d="M60 146 C60 122, 80 108, 100 108 C120 108, 140 122, 140 146 Z" fill="var(--primary)" opacity=".25"/><circle cx="170" cy="54" r="22" fill="var(--primary)" opacity=".15" stroke="var(--primary)" stroke-width="2.5" stroke-dasharray="4 4"/><circle cx="170" cy="108" r="20" fill="white" stroke="var(--secondary)" stroke-width="3"/><line x1="170" y1="100" x2="170" y2="116" stroke="var(--secondary)" stroke-width="3" stroke-linecap="round"/><line x1="162" y1="108" x2="178" y2="108" stroke="var(--secondary)" stroke-width="3" stroke-linecap="round"/></svg>`,
+  chart:   () => `<svg class="illust" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><line x1="40" y1="150" x2="210" y2="150" stroke="var(--border,#e2e8f0)" stroke-width="2.5" stroke-linecap="round"/><line x1="40" y1="30" x2="40" y2="150" stroke="var(--border,#e2e8f0)" stroke-width="2.5" stroke-linecap="round"/><rect x="60"  y="110" width="22" height="40" rx="3" fill="var(--primary)"   opacity=".5"/><rect x="96"  y="90"  width="22" height="60" rx="3" fill="var(--primary)"   opacity=".7"/><rect x="132" y="70"  width="22" height="80" rx="3" fill="var(--secondary)" opacity=".7"/><rect x="168" y="50"  width="22" height="100" rx="3" fill="var(--secondary)"/><path d="M71 100 L107 80 L143 60 L179 40" stroke="var(--warning,#f59e0b)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="179" cy="40" r="5" fill="var(--warning,#f59e0b)"/></svg>`
+};
+
+function emptyState(illustKey, msg, extraStyle){
+  const svg = (ILLUSTRATIONS[illustKey] && ILLUSTRATIONS[illustKey]()) || "";
+  const sty = extraStyle ? ` style="${extraStyle}"` : "";
+  return `<div class="empty-state"${sty}>${svg}<div class="empty-msg">${msg}</div></div>`;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 0c. AVATARS — emoji picker options + resolution helpers.
+//     Per spec: device photo (localStorage) → synced emoji → fallback.
+// ════════════════════════════════════════════════════════════════════
+const AVATAR_EMOJIS = [
+  "😀","😎","🤠","🥳","🤓","🦸","🧙","🧑‍🚀",
+  "🐶","🐱","🐼","🦊","🐵","🦁","🐸","🐧",
+  "🦄","🐙","🐢","🦖","🐝","🦋","🐳","🦈",
+  "⭐","🌈","🌟","⚡","🔥","🎨","🎮","🎯"
+];
+const DEFAULT_AVATAR_PARENT = "😀";
+const DEFAULT_AVATAR_CHILD  = "🐶";
+
+function avatarPhotoKey(username){ return "fb_avatar_" + username; }
+
+function getAvatarPhoto(username){
+  if(!username) return null;
+  try { return localStorage.getItem(avatarPhotoKey(username)) || null; } catch(e){ return null; }
+}
+function setAvatarPhoto(username, dataUrl){
+  if(!username) return;
+  try { localStorage.setItem(avatarPhotoKey(username), dataUrl); } catch(e){}
+}
+function clearAvatarPhoto(username){
+  if(!username) return;
+  try { localStorage.removeItem(avatarPhotoKey(username)); } catch(e){}
+}
+
+function getAvatarEmoji(username){
+  if(!username) return DEFAULT_AVATAR_CHILD;
+  const map = (state.config && state.config.avatars) || {};
+  if(map[username]) return map[username];
+  const role = state.roles && state.roles[username];
+  return role === "parent" ? DEFAULT_AVATAR_PARENT : DEFAULT_AVATAR_CHILD;
+}
+function setAvatarEmoji(username, emoji){
+  if(!state.config.avatars) state.config.avatars = {};
+  state.config.avatars[username] = emoji;
+}
+
+/* Render an avatar chip. size: 'xs' | 'sm' | 'md' | 'lg'.
+   Output is a <span class="avatar avatar-sm"> containing either an <img>
+   or the emoji as text. */
+function renderAvatar(username, size){
+  size = size || "sm";
+  const photo = getAvatarPhoto(username);
+  if(photo){
+    return `<span class="avatar avatar-${size} has-photo"><img src="${photo}" alt="" draggable="false"></span>`;
+  }
+  const emoji = getAvatarEmoji(username);
+  return `<span class="avatar avatar-${size}"><span class="avatar-emoji">${emoji}</span></span>`;
+}
+
+/* Resize a File (from <input type="file">) to a 200x200 square PNG data URL.
+   Center-crops. Returns a Promise. */
+function resizeImageFileTo200(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("image decode failed"));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width  - side) / 2;
+        const sy = (img.height - side) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = 200; canvas.height = 200;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, 200, 200);
+        try { resolve(canvas.toDataURL("image/jpeg", 0.85)); }
+        catch(e){ reject(e); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 // ════════════════════════════════════════════════════════════════════
 // 1. DEFAULTS
@@ -74,7 +245,8 @@ const DEFAULT_CONFIG = {
   imgIcon:        CFG_IMG_ICON,
   timezone:       CFG_TIMEZONE,
   adminPin:       CFG_ADMIN_PIN,
-  emails:         {}
+  emails:         {},
+  avatars:        {}
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -227,8 +399,60 @@ function showEarnedPopup(amount,choreName){
   const p=document.getElementById("earned-popup");
   document.getElementById("earned-popup-amount").textContent="+"+fmt(amount);
   document.getElementById("earned-popup-label").textContent='"'+choreName+'" submitted!';
+  // Confetti burst — rebuilt every time
+  let burst = p.querySelector(".confetti-burst");
+  if(!burst){
+    burst = document.createElement("div");
+    burst.className = "confetti-burst";
+    p.insertBefore(burst, p.firstChild);
+  }
+  burst.innerHTML = "";
+  const colors = ["var(--primary)","var(--secondary)","#f59e0b","#ec4899","#8b5cf6","#06b6d4"];
+  const pieces = 16;
+  for(let i=0;i<pieces;i++){
+    const piece = document.createElement("span");
+    piece.className = "confetti-piece";
+    const angle = (360/pieces)*i + (Math.random()*20 - 10);
+    const dist  = 70 + Math.random()*40;
+    const rot   = Math.random()*540 - 270;
+    piece.style.setProperty("--cx", Math.cos(angle*Math.PI/180)*dist + "px");
+    piece.style.setProperty("--cy", Math.sin(angle*Math.PI/180)*dist + "px");
+    piece.style.setProperty("--cr", rot + "deg");
+    piece.style.background = colors[i % colors.length];
+    burst.appendChild(piece);
+  }
+  p.classList.remove("show");
+  // reflow so animation restarts cleanly
+  void p.offsetWidth;
   p.classList.add("show");
+  // Sound — admin opt-in, default off
+  if(state.config && state.config.celebrationSound){
+    try { playCelebrationSound(); } catch(e){}
+  }
   setTimeout(()=>p.classList.remove("show"),3000);
+}
+
+/* Quick ascending chime via WebAudio — no asset needed, respects user opt-in. */
+function playCelebrationSound(){
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if(!Ctx) return;
+  const ctx = new Ctx();
+  const notes = [660, 880, 1100];   // E5, A5, C#6
+  const now = ctx.currentTime;
+  notes.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const t0 = now + i*0.10;
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(0.18, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.28);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.30);
+  });
+  setTimeout(() => { try { ctx.close(); } catch(e){} }, 800);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -253,6 +477,7 @@ async function loadFromCloud(){
         state.users.forEach(u=>{ state.roles[u] = u==="Dad" ? "parent" : "child"; });
       }
       if(!state.config.emails) state.config.emails={};
+      if(!state.config.avatars) state.config.avatars={};
       migrateIfNeeded();
       pendingTransactions=[];
       applyBranding();
@@ -353,6 +578,17 @@ function renderBalances(){
   document.getElementById("savings-val").textContent      = fmt(data.balances.savings);
   document.getElementById("rate-chk-display").textContent = data.rates.checking || 0;
   document.getElementById("rate-sav-display").textContent = data.rates.savings  || 0;
+  // v31: owner chip on checking card
+  const chkCard = document.querySelector(".balance-card.checking");
+  if(chkCard && child){
+    let owner = chkCard.querySelector(".account-owner");
+    if(!owner){
+      owner = document.createElement("div");
+      owner.className = "account-owner";
+      chkCard.appendChild(owner);
+    }
+    owner.innerHTML = renderAvatar(child,"xs") + "<span>" + child + "</span>";
+  }
   // Interest earned this month estimate
   const ec=(data.balances.checking*(data.rates.checking/100/12));
   const es=(data.balances.savings *(data.rates.savings /100/12));
@@ -413,10 +649,10 @@ function renderParentTabBar(){
   if(!bar||!activeChild) return;
   const tabs=getChildTabs(activeChild);
   const btns=[];
-  btns.push(`<button class="tab-btn active" onclick="switchTab('parent','adjust')">💰 Adjust</button>`);
-  btns.push(`<button class="tab-btn" onclick="switchTab('parent','chores')">✅ Chores <span class="notif-badge hidden" id="parent-chore-badge">0</span></button>`);
-  if(tabs.loans) btns.push(`<button class="tab-btn" onclick="switchTab('parent','loans')">🏦 Loans</button>`);
-  btns.push(`<button class="tab-btn" onclick="switchTab('parent','settings')">⚙️ Settings</button>`);
+  btns.push(`<button class="tab-btn active" onclick="switchTab('parent','adjust')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> Adjust</button>`);
+  btns.push(`<button class="tab-btn" onclick="switchTab('parent','chores')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Chores <span class="notif-badge hidden" id="parent-chore-badge">0</span></button>`);
+  if(tabs.loans) btns.push(`<button class="tab-btn" onclick="switchTab('parent','loans')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-bank'/></svg> Loans</button>`);
+  btns.push(`<button class="tab-btn" onclick="switchTab('parent','settings')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-gear'/></svg> Settings</button>`);
   bar.className="tab-bar tabs-"+btns.length;
   bar.innerHTML=btns.join("");
 }
@@ -427,9 +663,9 @@ function renderChildTabBar(){
   if(!bar) return;
   const btns=[];
   let firstTab=null;
-  if(tabs.money) { btns.push({tab:"money", html:`<button class="tab-btn" onclick="switchTab('child','money')">💵 Money</button>`}); if(!firstTab) firstTab="money"; }
-  if(tabs.chores){ btns.push({tab:"chores",html:`<button class="tab-btn" onclick="switchTab('child','chores')">✅ Chores <span class="notif-badge hidden" id="child-chore-badge">0</span></button>`}); if(!firstTab) firstTab="chores"; }
-  if(tabs.loans) { btns.push({tab:"loans", html:`<button class="tab-btn" onclick="switchTab('child','loans')">🏦 Loans</button>`}); if(!firstTab) firstTab="loans"; }
+  if(tabs.money) { btns.push({tab:"money", html:`<button class="tab-btn" onclick="switchTab('child','money')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-money'/></svg> Money</button>`}); if(!firstTab) firstTab="money"; }
+  if(tabs.chores){ btns.push({tab:"chores",html:`<button class="tab-btn" onclick="switchTab('child','chores')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Chores <span class="notif-badge hidden" id="child-chore-badge">0</span></button>`}); if(!firstTab) firstTab="chores"; }
+  if(tabs.loans) { btns.push({tab:"loans", html:`<button class="tab-btn" onclick="switchTab('child','loans')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-bank'/></svg> Loans</button>`}); if(!firstTab) firstTab="loans"; }
   bar.className="tab-bar tabs-"+btns.length;
   bar.innerHTML=btns.map(b=>b.html).join("");
   if(firstTab){
@@ -486,13 +722,13 @@ function enterApp(user){
       showChildPicker();
     } else {
       document.getElementById("main-screen").classList.remove("hidden");
-      document.getElementById("welcome-msg").textContent="Hi, "+user+"! 👋";
+      document.getElementById("welcome-msg").innerHTML=renderAvatar(user,"sm")+' <span>Hi, '+user+'! 👋</span>';
       document.getElementById("parent-panel").classList.remove("hidden");
     }
   } else {
     activeChild=user;
     document.getElementById("main-screen").classList.remove("hidden");
-    document.getElementById("welcome-msg").textContent="Hi, "+user+"! 👋";
+    document.getElementById("welcome-msg").innerHTML=renderAvatar(user,"sm")+' <span>Hi, '+user+'! 👋</span>';
     document.getElementById("child-panel").classList.remove("hidden");
     renderChildTabBar();
     renderBalances(); renderChildChores(); renderSavingsGoals(); renderPendingDeposits(); renderChildLoans(); showChoreWaitingBanner(); updateChoreBadges();
@@ -613,18 +849,19 @@ function restoreRememberedUser(){
 
 function showChildPicker(){
   const children=getAssignedChildren();
-  document.getElementById("picker-welcome").textContent="Hi "+currentUser+"! 👋";
+  document.getElementById("picker-welcome").innerHTML=renderAvatar(currentUser,"sm")+' <span>Hi '+currentUser+'! 👋</span>';
   document.getElementById("main-screen").classList.add("hidden");
   document.getElementById("child-picker-screen").classList.remove("hidden");
   const list=document.getElementById("child-picker-list");
   if(!children.length){
-    list.innerHTML='<div class="empty-state"><span class="empty-icon">👶</span>No children assigned. Add one in Admin.</div>';
+    list.innerHTML=emptyState("children","No children assigned. Add one in Admin.");
     return;
   }
   list.innerHTML=children.map(name=>{
     const d=getChildData(name);
     const total=(d.balances?.checking||0)+(d.balances?.savings||0);
-    return `<button class="child-btn" onclick="selectChild('${name}')">
+    return `<button class="child-btn with-avatar" onclick="selectChild('${name}')">
+      ${renderAvatar(name,"md")}
       ${name}
       <div class="child-btn-balance">Total: ${fmt(total)}</div>
       <span class="child-btn-arrow">›</span>
@@ -636,7 +873,7 @@ function selectChild(childName){
   activeChild=childName;
   document.getElementById("child-picker-screen").classList.add("hidden");
   document.getElementById("main-screen").classList.remove("hidden");
-  document.getElementById("welcome-msg").textContent="Managing "+childName+"'s account";
+  document.getElementById("welcome-msg").innerHTML=renderAvatar(childName,"sm")+' <span>Managing '+childName+"'s account</span>";
   // Show switch bar if there are multiple assigned children
   const switchBar=document.getElementById("child-switch-bar");
   if(getAssignedChildren().length>1){
@@ -679,20 +916,20 @@ function onChildActionChange(){
 
   if(action==="withdraw"){
     hint.textContent="Take cash out of your checking account.";
-    btn.textContent="💸 Withdraw Cash"; btn.className="btn btn-primary";
+    btn.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-arrow-circle-up'/></svg> Withdraw Cash"; btn.className="btn btn-primary";
     noteLabel.textContent="What is this for?";
   } else if(action==="transfer"){
     hint.textContent="Move money from checking to savings.";
-    btn.textContent="🏦 Transfer to Savings"; btn.className="btn btn-secondary";
+    btn.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-piggy-bank'/></svg> Transfer to Savings"; btn.className="btn btn-secondary";
     noteLabel.textContent="What is this for?";
   } else if(action==="deposit"){
     hint.textContent="Submit money for parent approval. Once approved it will be added to your account.";
-    btn.textContent="📥 Submit Deposit"; btn.className="btn btn-secondary";
+    btn.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-arrow-circle-down'/></svg> Submit Deposit"; btn.className="btn btn-secondary";
     splitWrap.classList.remove("hidden");
     noteLabel.textContent="Where did this money come from?";
   } else if(action==="loanpayment"){
     hint.textContent="Pay extra toward a loan's principal balance.";
-    btn.textContent="💳 Pay Loan"; btn.className="btn btn-warning";
+    btn.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-credit-card'/></svg> Pay Loan"; btn.className="btn btn-warning";
     loanWrap.classList.remove("hidden");
     noteLabel.textContent="Note (optional)";
     populateChildLoanSelect();
@@ -792,7 +1029,7 @@ function renderPendingDeposits(){
   const pending=(data.pendingDeposits||[]).filter(d=>d.submittedBy===currentUser);
   if(!pending.length){ el.innerHTML=""; return; }
   el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:.78rem;color:#92400e;">
-    ⏳ ${pending.length} deposit${pending.length===1?"":"s"} awaiting approval — total ${fmt(pending.reduce((s,d)=>s+d.amount,0))}
+    <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> ${pending.length} deposit${pending.length===1?"":"s"} awaiting approval — total ${fmt(pending.reduce((s,d)=>s+d.amount,0))}
   </div>`;
 }
 
@@ -803,7 +1040,7 @@ function renderParentDepositApprovals(){
   if(!el) return;
   if(!pending.length){ el.innerHTML=""; return; }
   el.innerHTML=`<div class="approval-banner">
-    <h3>⏳ Deposits Awaiting Approval (${pending.length})</h3>
+    <h3><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> Deposits Awaiting Approval (${pending.length})</h3>
     ${pending.map(d=>`
       <div class="chore-card state-pending">
         <div class="chore-card-header">
@@ -815,8 +1052,8 @@ function renderParentDepositApprovals(){
           Split: ${d.splitChk}% Chk / ${100-d.splitChk}% Sav
         </div>
         <div class="row" style="gap:8px;">
-          <button class="btn btn-secondary btn-sm col" onclick="approveDeposit('${d.id}')">✅ Approve</button>
-          <button class="btn btn-danger    btn-sm col" onclick="denyDeposit('${d.id}')">❌ Deny</button>
+          <button class="btn btn-secondary btn-sm col" onclick="approveDeposit('${d.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Approve</button>
+          <button class="btn btn-danger    btn-sm col" onclick="denyDeposit('${d.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg> Deny</button>
         </div>
       </div>`).join("")}
   </div>`;
@@ -1395,12 +1632,12 @@ function setChoreFormMode(mode,name){
   const sb=document.getElementById("chore-submit-btn");
   const cb=document.getElementById("chore-cancel-edit-btn");
   if(mode==="edit"){
-    if(t)  t.textContent="✏️ Editing: "+(name||"Chore");
-    if(sb) sb.textContent="💾 Save Changes";
+    if(t)  t.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Editing: "+(name||"Chore");
+    if(sb) sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-floppy-disk'/></svg> Save Changes";
     if(cb) cb.classList.remove("hidden");
   } else {
-    if(t)  t.textContent="➕ Create New Chore";
-    if(sb) sb.textContent="✅ Add Chore";
+    if(t)  t.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-plus-circle'/></svg> Create New Chore";
+    if(sb) sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Add Chore";
     if(cb) cb.classList.add("hidden");
   }
 }
@@ -1412,7 +1649,7 @@ function renderParentChores(){
   const pending=chores.filter(c=>c.status==="pending");
   approvalsEl.innerHTML = pending.length ? `
     <div class="approval-banner">
-      <h3>⏳ Awaiting Approval (${pending.length})</h3>
+      <h3><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> Awaiting Approval (${pending.length})</h3>
       ${pending.map(c=>`
         <div class="chore-card state-pending">
           <div class="chore-card-header">
@@ -1420,19 +1657,19 @@ function renderParentChores(){
             <span class="chore-card-amount">${c.amount>0 ? fmt(c.amount) : '<span style="color:var(--muted);font-size:.78rem;">No reward</span>'}</span>
           </div>
           <div class="chore-card-meta">
-            Completed by <strong>${c.completedBy}</strong> at ${c.completedAt}<br>
-            Split: ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.desc?"<br>📝 "+c.desc:""}
+            Completed by <span class="completed-by-chip">${renderAvatar(c.completedBy,"xs")}<strong>${c.completedBy}</strong></span> at ${c.completedAt}<br>
+            Split: ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+c.desc:""}
           </div>
           <div class="row" style="gap:8px;">
-            <button class="btn btn-secondary btn-sm col" onclick="approveChore('${c.id}')">✅ Approve</button>
-            <button class="btn btn-danger    btn-sm col" onclick="denyChore('${c.id}')">❌ Deny</button>
+            <button class="btn btn-secondary btn-sm col" onclick="approveChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Approve</button>
+            <button class="btn btn-danger    btn-sm col" onclick="denyChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg> Deny</button>
           </div>
         </div>`).join("")}
     </div>` : "";
 
   const listEl=document.getElementById("parent-chore-list");
   if(!chores.length){
-    listEl.innerHTML='<div class="empty-state"><span class="empty-icon">📋</span>No chores yet.</div>';
+    listEl.innerHTML=emptyState("chores","No chores yet.");
     return;
   }
   listEl.innerHTML=chores.map(c=>{
@@ -1445,12 +1682,12 @@ function renderParentChores(){
         <span class="chore-card-amount">${fmt(c.amount)}</span>
       </div>
       <div class="chore-card-meta">
-        ${badge} 📅 ${scheduleLabel(c)}<br>
-        💰 ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br>⏰ Ends: "+c.endDate:""}${c.desc?"<br>📝 "+c.desc:""}
+        ${badge} <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-calendar'/></svg> ${scheduleLabel(c)}<br>
+        <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-clock'/></svg> Ends: "+c.endDate:""}${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+c.desc:""}
       </div>
       <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
-        <button class="btn btn-outline btn-sm" onclick="editChore('${c.id}')">✏️ Edit</button>
-        <button class="btn btn-danger  btn-sm" onclick="deleteChore('${c.id}')">🗑️ Delete</button>
+        <button class="btn btn-outline btn-sm" onclick="editChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
+        <button class="btn btn-danger  btn-sm" onclick="deleteChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-trash'/></svg> Delete</button>
       </div>
     </div>`;
   }).join("");
@@ -1628,7 +1865,7 @@ function renderChildChores(){
   if(streakEl){
     const streaks=renderStreaks();
     streakEl.innerHTML = streaks.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">${streaks.map(s=>`<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid var(--warning);border-radius:20px;padding:6px 12px;font-size:.75rem;font-weight:700;color:#92400e;">🔥 ${s.name}: ${s.streak} ${s.unit}</div>`).join("")}</div>`
+      ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">${streaks.map(s=>`<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid var(--warning);border-radius:20px;padding:6px 12px;font-size:.75rem;font-weight:700;color:#92400e;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-fire'/></svg> ${s.name}: ${s.streak} ${s.unit}</div>`).join("")}</div>`
       : "";
   }
   if(!listEl) return;
@@ -1640,17 +1877,17 @@ function renderChildChores(){
     notifEl.innerHTML=decisions.map(c=>`
       <div class="chore-card" style="${c.status==="approved"?"border-color:var(--secondary);background:#f0fdf4;":"border-color:var(--danger);background:#fef2f2;"}">
         <div class="chore-card-header">
-          <span class="chore-card-name">${c.status==="approved"?"✅":"❌"} ${c.name}</span>
+          <span class="chore-card-name">${c.status==="approved"?"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg>":"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg>"} ${c.name}</span>
           <span class="chore-card-amount">${fmt(c.amount)}</span>
         </div>
-        <div class="chore-card-meta">${c.status==="approved" ? "Great work! "+fmt(c.amount)+" added to your account! 🎉" : "Not approved this time."+(c.denialNote?" Reason: "+c.denialNote:"")+" Talk to your parent if you have questions."}</div>
+        <div class="chore-card-meta">${c.status==="approved" ? "Great work! "+fmt(c.amount)+" added to your account! <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-party-popper'/></svg>" : "Not approved this time."+(c.denialNote?" Reason: "+c.denialNote:"")+" Talk to your parent if you have questions."}</div>
         <button class="btn btn-ghost btn-sm" onclick="dismissChoreNotif('${c.id}')">Got it ✓</button>
       </div>`).join("") || "";
   }
 
   const available=chores.filter(c=>!c.paused && c.status==="available" && (!c.endDate||c.endDate>=todayStr()) && c.lastCompleted!==todayStr());
   if(!available.length){
-    listEl.innerHTML=`<div class="empty-state"><span class="empty-icon">🎉</span>${decisions.length?"Check the notifications above!":"No chores right now — check back later!"}</div>`;
+    listEl.innerHTML=emptyState("chores", decisions.length?"Check the notifications above!":"No chores right now — check back later!");
     return;
   }
 
@@ -1703,13 +1940,13 @@ function renderChoreTable(){
     const msg = choreFilter==="today" ? "No chores due today — check 'This Week' or 'All Chores'!"
               : choreFilter==="week"  ? "No chores due this week — check 'All Chores'!"
               : "No chores available right now!";
-    wrap.innerHTML=`<div class="empty-state"><span class="empty-icon">✅</span>${msg}</div>`;
+    wrap.innerHTML=emptyState("chores", msg);
     return;
   }
   const showRewards=choreRewardsEnabled(activeChild||currentUser);
   const expiredRows=expired.map(c=>`
     <tr style="opacity:.42;">
-      <td class="chore-check-cell"><div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.85rem;">❌</div></td>
+      <td class="chore-check-cell"><div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.85rem;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg></div></td>
       <td class="chore-name-cell">${c.name}<div class="chore-desc-small" style="color:var(--danger);">Expired ${c.onceDate}</div></td>
       <td class="chore-schedule-cell">One-time</td>
       ${showRewards?`<td class="chore-amount-cell">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
@@ -1721,11 +1958,11 @@ function renderChoreTable(){
       <tbody>
         ${filtered.map(c=>`
           <tr class="chore-row" id="chore-row-${c.id}">
-            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--muted);" title="Not due today">🔒</div>`}</td>
+            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--muted);" title="Not due today"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-lock-simple'/></svg></div>`}</td>
             <td class="chore-name-cell">
               ${c.name}${dueBadge(c)}
               ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
-              ${showRewards?(c.childChooses?`<div class="chore-desc-small">💰 You choose the split</div>`:`<div class="chore-desc-small">💰 ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`):""}
+              ${showRewards?(c.childChooses?`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> You choose the split</div>`:`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`):""}
             </td>
             <td class="chore-schedule-cell">${scheduleLabel(c)}</td>
             ${showRewards?`<td class="chore-amount-cell" id="chore-amt-${c.id}">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
@@ -1834,7 +2071,7 @@ function renderSavingsGoals(){
   const el=document.getElementById("child-goals-list");
   if(!el) return;
   if(!goals.length){
-    el.innerHTML='<div class="empty-state"><span class="empty-icon">🎯</span>No goals yet. Set one below!</div>';
+    el.innerHTML=emptyState("goals","No goals yet. Set one below!");
     return;
   }
   const sav=data.balances.savings||0;
@@ -1883,7 +2120,7 @@ function renderParentGoals(){
   const el=document.getElementById("parent-goals-list");
   if(!el) return;
   if(!goals.length){
-    el.innerHTML='<div class="empty-state"><span class="empty-icon">🎯</span>No goals yet for this child.</div>';
+    el.innerHTML=emptyState("goals","No goals yet for this child.");
     return;
   }
   const sav=data.balances.savings||0;
@@ -2014,13 +2251,13 @@ function setLoanFormMode(mode,name){
   const cb=document.getElementById("loan-cancel-edit-btn");
   const hint=document.getElementById("loan-edit-hint");
   if(mode==="edit"){
-    if(t)    t.textContent="✏️ Editing: "+(name||"Loan");
-    if(sb)   sb.textContent="💾 Save Changes";
+    if(t)    t.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Editing: "+(name||"Loan");
+    if(sb)   sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-floppy-disk'/></svg> Save Changes";
     if(cb)   cb.classList.remove("hidden");
     if(hint) hint.classList.remove("hidden");
   } else {
     if(t)    t.textContent="Create New Loan";
-    if(sb)   sb.textContent="➕ Create Loan";
+    if(sb)   sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-plus-circle'/></svg> Create Loan";
     if(cb)   cb.classList.add("hidden");
     if(hint) hint.classList.add("hidden");
   }
@@ -2032,7 +2269,7 @@ function renderParentLoans(){
   const el=document.getElementById("parent-loans-list");
   if(!el) return;
   if(!loans.length){
-    el.innerHTML='<div class="empty-state"><span class="empty-icon">💳</span>No loans yet.</div>';
+    el.innerHTML=emptyState("loans","No loans yet.");
     return;
   }
   el.innerHTML=loans.map(l=>`
@@ -2046,8 +2283,8 @@ function renderParentLoans(){
         Payment: ${fmt(l.payment)}/mo • Due: ${fmtNextPayment(l)}
       </div>
       <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
-        <button class="btn btn-outline btn-sm" onclick="editLoan('${l.id}')">✏️ Edit</button>
-        <button class="btn btn-danger  btn-sm" onclick="deleteLoan('${l.id}')">🗑️ Delete</button>
+        <button class="btn btn-outline btn-sm" onclick="editLoan('${l.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
+        <button class="btn btn-danger  btn-sm" onclick="deleteLoan('${l.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-trash'/></svg> Delete</button>
       </div>
     </div>`).join("");
 }
@@ -2058,7 +2295,7 @@ function renderChildLoans(){
   const el=document.getElementById("child-loans-list");
   if(!el) return;
   if(!loans.length){
-    el.innerHTML='<div class="empty-state"><span class="empty-icon">💳</span>No loans right now.</div>';
+    el.innerHTML=emptyState("loans","No loans right now.");
     return;
   }
   el.innerHTML=loans.map(l=>`
@@ -2217,7 +2454,7 @@ function renderHistory(){
   document.getElementById("hist-net").className="chip-val "+(net>=0?"pos":"neg");
   const listEl=document.getElementById("ledger-list");
   if(!filtered.length){
-    listEl.innerHTML='<div class="empty-state"><span class="empty-icon">🔍</span>No transactions match these filters.</div>';
+    listEl.innerHTML=emptyState("history","No transactions match these filters.");
     return;
   }
   listEl.innerHTML=filtered.map(h=>{
@@ -2227,7 +2464,7 @@ function renderHistory(){
     const pillCls = isChore ? "acct-pill chore" : isSav ? "acct-pill sav" : "acct-pill";
     return `<div class="ledger-row">
       <div class="${pillCls}">${isChore?"CHORE":isSav?"SAV":"CHK"}</div>
-      <div><span class="ledger-date">${h.date}</span><span class="ledger-who">${h.user}</span><span class="ledger-note"> — ${h.note}</span></div>
+      <div><span class="ledger-date">${h.date}</span><span class="ledger-who-wrap">${renderAvatar(h.user,"xs")}<span class="ledger-who">${h.user}</span></span><span class="ledger-note"> — ${h.note}</span></div>
       <div class="ledger-amt ${h.amt>=0?"pos":"neg"}">${h.amt>=0?"+":""}${fmt(h.amt)}</div>
     </div>`;
   }).join("");
@@ -2286,7 +2523,7 @@ function drawNetWorthChart(){
     if(nwChartInstance){ nwChartInstance.destroy(); nwChartInstance=null; }
     const ctx=canvas.getContext("2d");
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    canvas.parentElement.innerHTML=`<div class="empty-state" style="padding:60px 0;"><span class="empty-icon">📈</span>No history yet — keep saving!</div>`;
+    canvas.parentElement.innerHTML=emptyState("chart","No history yet — keep saving!","padding:60px 0;");
     document.getElementById("nw-start").textContent="$0.00";
     document.getElementById("nw-current").textContent="$0.00";
     document.getElementById("nw-growth").textContent="+$0.00";
@@ -2444,6 +2681,8 @@ function populateAdminForm(){
   document.getElementById("admin-img-logo").value       = cfg.imgLogo        || "";
   document.getElementById("admin-timezone").value       = cfg.timezone       || CFG_TIMEZONE;
   document.getElementById("admin-autologout").value     = String(cfg.autoLogout||0);
+  const cs = document.getElementById("admin-celebration-sound");
+  if(cs) cs.checked = !!cfg.celebrationSound;
 }
 
 function renderAdminUsers(){
@@ -2452,11 +2691,14 @@ function renderAdminUsers(){
   el.innerHTML=state.users.map(u=>{
     const role=state.roles[u]||"child";
     return `<div class="user-row">
-      <div style="flex:1;">
-        <strong>${u}</strong>
-        <span class="user-role-badge ${role==="parent"?"role-parent":"role-child"}" style="margin-left:8px;">${role.charAt(0).toUpperCase()+role.slice(1)}</span>
+      <div style="flex:1;display:flex;align-items:center;gap:8px;">
+        ${renderAvatar(u,"sm")}
+        <div>
+          <strong>${u}</strong>
+          <span class="user-role-badge ${role==="parent"?"role-parent":"role-child"}" style="margin-left:4px;">${role.charAt(0).toUpperCase()+role.slice(1)}</span>
+        </div>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="openUserEdit('${u}')">✏️ Edit</button>
+      <button class="btn btn-primary btn-sm" onclick="openUserEdit('${u}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
       ${state.users.length>1 ? `<button class="btn btn-danger btn-sm" onclick="adminRemoveUser('${u}')">Remove</button>` : ""}
     </div>`;
   }).join("");
@@ -2514,6 +2756,7 @@ function saveAdminSettings(){
   state.config.imgLogo        = document.getElementById("admin-img-logo").value.trim()     || CFG_IMG_LOGO;
   state.config.timezone       = document.getElementById("admin-timezone").value;
   state.config.autoLogout     = parseInt(document.getElementById("admin-autologout").value) || 0;
+  state.config.celebrationSound = !!document.getElementById("admin-celebration-sound")?.checked;
   if(window._pickerSelections) window._pickerSelections={};
   applyBranding();
   syncToCloud("Admin Settings Updated");
@@ -2542,7 +2785,7 @@ function openUserEdit(username){
   editingUserName=username;
   const role=state.roles[username]||"child";
   const cfg=state.config;
-  document.getElementById("admin-edit-title").textContent="✏️ Edit "+username;
+  document.getElementById("admin-edit-title").innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit "+username;
   document.getElementById("edit-user-name").value=username;
   document.getElementById("edit-user-role").value=role;
   document.getElementById("edit-user-pin").value="";
@@ -2576,6 +2819,84 @@ function openUserEdit(username){
   }
   document.getElementById("admin-user-edit-wrap").classList.remove("hidden");
   document.getElementById("admin-user-edit-wrap").scrollIntoView({behavior:"smooth",block:"start"});
+  // v31: render avatar picker
+  renderAvatarPicker(username);
+}
+
+// v31: avatar picker (emoji grid + photo upload)
+let _editAvatarEmoji = null;  // staged selection, applied on saveUserEdit
+
+function renderAvatarPicker(username){
+  _editAvatarEmoji = getAvatarEmoji(username);
+  const cur = document.getElementById("edit-avatar-current");
+  const grid = document.getElementById("edit-avatar-grid");
+  if(!cur || !grid) return;
+  const hasPhoto = !!getAvatarPhoto(username);
+  cur.innerHTML = renderAvatar(username,"lg") +
+    `<div class="label-stack">
+       <div class="who">${username}</div>
+       <div class="src">${hasPhoto ? "Using device photo — emoji shown if photo removed" : "Using emoji"}</div>
+     </div>`;
+  grid.innerHTML = AVATAR_EMOJIS.map(e =>
+    `<button type="button" class="${e===_editAvatarEmoji?"selected":""}" onclick="selectAvatarEmoji('${e}')">${e}</button>`
+  ).join("");
+}
+
+function selectAvatarEmoji(emoji){
+  _editAvatarEmoji = emoji;
+  // Update grid selection state
+  const grid = document.getElementById("edit-avatar-grid");
+  if(grid){
+    grid.querySelectorAll("button").forEach(b=>{
+      b.classList.toggle("selected", b.textContent===emoji);
+    });
+  }
+  // Stage the emoji in state.config so renderAvatar reflects it in the preview
+  if(editingUserName){
+    setAvatarEmoji(editingUserName, emoji);
+    // Refresh preview chip
+    const cur = document.getElementById("edit-avatar-current");
+    if(cur){
+      const hasPhoto = !!getAvatarPhoto(editingUserName);
+      cur.innerHTML = renderAvatar(editingUserName,"lg") +
+        `<div class="label-stack">
+           <div class="who">${editingUserName}</div>
+           <div class="src">${hasPhoto ? "Using device photo — emoji shown if photo removed" : "Using emoji"}</div>
+         </div>`;
+    }
+  }
+}
+
+async function onAvatarPhotoChosen(event){
+  if(!editingUserName) return;
+  const file = event.target.files && event.target.files[0];
+  if(!file) return;
+  try {
+    const dataUrl = await resizeImageFileTo200(file);
+    setAvatarPhoto(editingUserName, dataUrl);
+    showToast("Photo saved on this device.","success");
+    renderAvatarPicker(editingUserName);
+    // Refresh any live avatars
+    refreshVisibleAvatars();
+  } catch(e){
+    showToast("Could not process photo.","error");
+  }
+  event.target.value = "";
+}
+
+function removeAvatarPhoto(){
+  if(!editingUserName) return;
+  clearAvatarPhoto(editingUserName);
+  showToast("Photo removed from this device.","info");
+  renderAvatarPicker(editingUserName);
+  refreshVisibleAvatars();
+}
+
+/* Re-renders whatever is visible so avatars update immediately. */
+function refreshVisibleAvatars(){
+  if(typeof renderBalances==="function") renderBalances();
+  if(typeof renderHistory==="function" && document.getElementById("history-drawer")?.classList.contains("open")) renderHistory();
+  if(typeof renderParentChores==="function" && activeChild) renderParentChores();
 }
 
 function toggleEditCalField(){
@@ -2649,9 +2970,9 @@ const PICKER_CONFIG = {
     displayId:"edit-tab-display",
     noItemsText:"",
     getItems: ()=> [
-      {value:"money",  label:"💵 Money"},
-      {value:"chores", label:"✅ Chores"},
-      {value:"loans",  label:"🏦 Loans"}
+      {value:"money",  label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-money"/></svg> Money`},
+      {value:"chores", label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-check-circle"/></svg> Chores`},
+      {value:"loans",  label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-bank"/></svg> Loans`}
     ]
   },
   // v30.1: separate picker mode for parent Settings tab — different displayId,
@@ -2662,9 +2983,9 @@ const PICKER_CONFIG = {
     displayId:"profile-tab-display",
     noItemsText:"",
     getItems: ()=> [
-      {value:"money",  label:"💵 Money"},
-      {value:"chores", label:"✅ Chores"},
-      {value:"loans",  label:"🏦 Loans"}
+      {value:"money",  label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-money"/></svg> Money`},
+      {value:"chores", label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-check-circle"/></svg> Chores`},
+      {value:"loans",  label:`<svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-bank"/></svg> Loans`}
     ]
   }
 };

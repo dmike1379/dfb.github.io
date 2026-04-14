@@ -324,8 +324,10 @@ input[type=range]{
 }
 
 /* Empty state */
-.empty-state{text-align:center;color:var(--muted);font-size:.82rem;padding:28px 0}
-.empty-icon{font-size:2rem;display:block;margin-bottom:8px}
+.empty-state{text-align:center;color:var(--muted);font-size:.85rem;padding:24px 8px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.empty-state .illust{width:180px;max-width:80%;height:auto;display:block;margin-bottom:4px}
+.empty-state .empty-msg{font-weight:500;line-height:1.5;max-width:300px}
+.empty-icon{font-size:2rem;display:block;margin-bottom:8px}  /* legacy — kept for any un-migrated callers */
 
 /* User row (admin) */
 .user-row{
@@ -482,18 +484,32 @@ input[type=range]{
 .picker-item-check.checked{background:var(--primary);border-color:var(--primary)}
 .picker-item-check.checked::after{content:'✓';color:white;font-size:.85rem;font-weight:800}
 
-/* Earned popup */
+/* Earned popup — v31: bigger animation, confetti burst, larger amount */
 .earned-popup{
   position:fixed;top:50%;left:50%;
-  transform:translate(-50%,-50%) scale(0);
-  background:var(--secondary);color:white;
-  border-radius:var(--radius-lg);padding:24px 32px;text-align:center;z-index:600;
-  transition:transform .3s cubic-bezier(.175,.885,.32,1.275);
-  box-shadow:0 20px 60px rgba(0,0,0,.25);
+  transform:translate(-50%,-50%) scale(0) rotate(-18deg);
+  background:linear-gradient(135deg,var(--secondary),var(--secondary-dark));
+  color:white;border-radius:var(--radius-lg);padding:28px 40px;text-align:center;z-index:600;
+  box-shadow:0 24px 70px rgba(0,0,0,.3), 0 0 0 6px rgba(255,255,255,.25);
+  transition:transform .45s cubic-bezier(.17,.89,.32,1.4), opacity .3s ease;
+  opacity:0;min-width:240px;overflow:visible;
 }
-.earned-popup.show{transform:translate(-50%,-50%) scale(1)}
-.earned-popup-amount{font-size:2.5rem;font-weight:900;font-family:var(--mono);letter-spacing:-1px}
-.earned-popup-label {font-size:.9rem;font-weight:600;opacity:.9;margin-top:4px}
+.earned-popup.show{transform:translate(-50%,-50%) scale(1) rotate(0);opacity:1}
+.earned-popup-amount{font-size:3.1rem;font-weight:900;font-family:var(--mono);letter-spacing:-1.5px;line-height:1;margin:6px 0 8px;text-shadow:0 2px 8px rgba(0,0,0,.18)}
+.earned-popup-label {font-size:.95rem;font-weight:600;opacity:.95;margin-top:4px}
+.earned-popup .icon-hero{width:48px;height:48px;color:white;display:inline-block;margin-bottom:4px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.2))}
+.confetti-burst{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.confetti-piece{
+  position:absolute;left:50%;top:50%;width:10px;height:14px;
+  border-radius:2px;opacity:0;
+  animation:confettiFly 1.6s cubic-bezier(.22,.6,.36,1) forwards;
+}
+.earned-popup.show .confetti-piece{opacity:1}
+@keyframes confettiFly{
+  0%  {transform:translate(-50%,-50%) scale(0) rotate(0);opacity:1}
+  20% {transform:translate(calc(-50% + var(--cx)*.4),calc(-50% + var(--cy)*.4)) scale(1) rotate(calc(var(--cr)*.4));opacity:1}
+  100%{transform:translate(calc(-50% + var(--cx)),calc(-50% + var(--cy) + 40px)) scale(.6) rotate(var(--cr));opacity:0}
+}
 
 /* ── 10. SPLASH + INSTALL BANNER + UPDATE BANNER ─────────────────── */
 .splash-screen{
@@ -617,3 +633,90 @@ input[type=range]{
 .mb-0{margin-bottom:0!important}
 .flex-center{display:flex;align-items:center;justify-content:center}
 .text-warning{color:var(--warning)}
+
+/* ── v31 ADDITIONS ─────────────────────────────────────────────── */
+
+/* Phosphor icons — inherit color from parent via currentColor */
+.icon{
+  width:1.1em;height:1.1em;
+  display:inline-block;vertical-align:-.18em;
+  fill:currentColor;flex-shrink:0;
+}
+.icon.icon-sm{width:.95em;height:.95em;vertical-align:-.15em}
+.icon.icon-lg{width:1.4em;height:1.4em;vertical-align:-.25em}
+.icon.icon-xl{width:1.8em;height:1.8em;vertical-align:-.3em}
+/* Inside buttons, space the icon from the label */
+.btn .icon{margin-right:6px}
+.btn .icon:last-child:not(:first-child){margin-right:0;margin-left:6px}
+/* Tab buttons — icon + label */
+.tab-btn .icon{margin-right:4px}
+/* Standalone icon inside a heading/tag stays inline */
+h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
+
+/* Avatars */
+.avatar{
+  display:inline-flex;align-items:center;justify-content:center;
+  border-radius:50%;overflow:hidden;flex-shrink:0;
+  background:linear-gradient(135deg,#f1f5f9,#e2e8f0);
+  border:2px solid var(--surface);
+  box-shadow:0 2px 6px rgba(0,0,0,.08);
+  font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;
+  line-height:1;user-select:none;
+}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.avatar.has-photo{background:transparent}
+.avatar-emoji{display:block}
+.avatar-xs{width:22px;height:22px;font-size:13px}
+.avatar-sm{width:32px;height:32px;font-size:18px}
+.avatar-md{width:44px;height:44px;font-size:24px}
+.avatar-lg{width:72px;height:72px;font-size:40px;border-width:3px}
+/* Inline avatar inside ledger rows / approval headers */
+.ledger-who-wrap{display:inline-flex;align-items:center;gap:6px}
+.ledger-who-wrap .avatar{margin-right:2px}
+/* Child picker button — larger avatar on the left */
+.child-btn{position:relative}
+.child-btn .avatar{position:absolute;left:16px;top:50%;transform:translateY(-50%)}
+.child-btn.with-avatar{padding-left:70px !important}
+/* Welcome header — avatar + text */
+.welcome-wrap{display:flex;align-items:center;gap:10px}
+.welcome-wrap .welcome-text{flex:1;min-width:0}
+/* Balance card avatar header strip */
+.balance-grid .balance-card{position:relative}
+.balance-card .account-owner{
+  position:absolute;top:8px;right:8px;
+  display:flex;align-items:center;gap:4px;
+  font-size:.62rem;font-weight:700;opacity:.85;
+  background:rgba(255,255,255,.18);padding:3px 8px 3px 4px;
+  border-radius:999px;backdrop-filter:blur(4px);
+}
+.balance-card .account-owner .avatar{border-color:rgba(255,255,255,.4)}
+/* Approval card — completedBy avatar */
+.completed-by-chip{display:inline-flex;align-items:center;gap:5px;font-weight:700}
+
+/* Avatar picker UI (admin) */
+.avatar-picker-grid{
+  display:grid;grid-template-columns:repeat(8,1fr);gap:6px;
+  padding:10px;background:var(--bg);border-radius:var(--radius-sm);
+  margin:8px 0 10px;
+}
+.avatar-picker-grid button{
+  all:unset;cursor:pointer;aspect-ratio:1;display:flex;align-items:center;justify-content:center;
+  font-size:22px;border-radius:8px;transition:background .15s,transform .15s;
+  font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;
+  padding:0;margin:0;width:auto;
+}
+.avatar-picker-grid button:hover{background:#e2e8f0}
+.avatar-picker-grid button.selected{background:var(--primary);box-shadow:0 0 0 2px var(--primary);transform:scale(1.08)}
+.avatar-picker-current{
+  display:flex;align-items:center;gap:12px;
+  padding:12px;background:var(--bg);border-radius:var(--radius-sm);margin-bottom:10px;
+}
+.avatar-picker-current .label-stack{flex:1;min-width:0}
+.avatar-picker-current .label-stack .who{font-size:.8rem;font-weight:700;color:var(--text)}
+.avatar-picker-current .label-stack .src{font-size:.68rem;color:var(--muted);margin-top:2px}
+.avatar-photo-note{
+  font-size:.7rem;color:var(--muted);line-height:1.5;margin-top:6px;
+  padding:8px 10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;color:#92400e;
+}
+.avatar-photo-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.avatar-photo-btns button{width:auto;margin:0;flex:1;min-width:120px}
