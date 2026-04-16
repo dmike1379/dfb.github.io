@@ -854,8 +854,8 @@
 
     <label class="field-label">Visible Tabs</label>
     <div class="info-box" style="margin-bottom:8px;">Controls which tabs this child sees when they log in.</div>
-    <div id="profile-tab-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;margin-bottom:6px;"></div>
-    <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openProfilePicker()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-clipboard-text"/></svg> Select Tabs →</button>
+    <button type="button" class="btn btn-outline btn-sm" style="width:auto;margin-bottom:8px;" onclick="openProfilePicker()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-clipboard-text"/></svg> Select Tabs →</button>
+    <div id="profile-tab-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;"></div>
 
     <div class="field-msg" id="profile-msg" style="margin-top:10px;"></div>
     <button class="btn btn-primary" onclick="saveChildProfile()" style="margin-top:10px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save Profile</button>
@@ -1008,15 +1008,15 @@
     <div id="edit-parent-assignment" style="display:none;">
       <label class="field-label" style="margin-top:10px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-baby"/></svg> Assigned Children</label>
       <div class="info-box" style="margin-bottom:8px;">Tap to toggle. No selection = sees all children.</div>
-      <div id="edit-child-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;margin-bottom:6px;"></div>
-      <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openPicker('children')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user"/></svg> Select Children →</button>
+      <button type="button" class="btn btn-outline btn-sm" style="width:auto;margin-bottom:8px;" onclick="openPicker('children')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user"/></svg> Select Children →</button>
+      <div id="edit-child-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;"></div>
     </div>
 
     <div id="edit-tab-visibility" style="display:none;">
       <label class="field-label" style="margin-top:10px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-clipboard-text"/></svg> Visible Tabs</label>
       <div class="info-box" style="margin-bottom:8px;">Tap to toggle. Money and Chores are on by default.</div>
-      <div id="edit-tab-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;margin-bottom:6px;"></div>
-      <button type="button" class="btn btn-outline btn-sm" style="width:auto;" onclick="openPicker('tabs')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-clipboard-text"/></svg> Select Tabs →</button>
+      <button type="button" class="btn btn-outline btn-sm" style="width:auto;margin-bottom:8px;" onclick="openPicker('tabs')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-clipboard-text"/></svg> Select Tabs →</button>
+      <div id="edit-tab-display" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;"></div>
     </div>
 
     <div id="edit-avatar-wrap" style="margin-top:14px;display:none;">

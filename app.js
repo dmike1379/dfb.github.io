@@ -554,8 +554,14 @@ function recordTransaction(user,note,amt){
 // ════════════════════════════════════════════════════════════════════
 function applyBranding(){
   const cfg=state.config;
-  document.getElementById("bank-name-display").textContent    = cfg.bankName || CFG_BANK_NAME;
-  document.getElementById("bank-tagline-display").textContent = cfg.tagline  || CFG_BANK_TAGLINE;
+  // v32.2: Null-guard these — the elements were removed from the login screen
+  // in v32.1. Without guards, textContent on null threw and the error was
+  // swallowed by loadFromCloud's catch, flipping status to "Could not connect"
+  // even though all the data had already loaded correctly above the throw.
+  const nameEl = document.getElementById("bank-name-display");
+  if(nameEl) nameEl.textContent = cfg.bankName || CFG_BANK_NAME;
+  const tagEl = document.getElementById("bank-tagline-display");
+  if(tagEl) tagEl.textContent = cfg.tagline || CFG_BANK_TAGLINE;
   document.title = cfg.bankName || CFG_BANK_NAME;
   document.documentElement.style.setProperty("--primary",        cfg.colorPrimary   || CFG_COLOR_PRIMARY);
   document.documentElement.style.setProperty("--primary-dark",   shadeColor(cfg.colorPrimary   || CFG_COLOR_PRIMARY,   -20));
@@ -1305,15 +1311,9 @@ function setAllowanceDayToggles(days){
 // 11. CHORES — SCHEDULE UI, PER-DAY TIMES, CREATE/EDIT/APPROVE
 // ════════════════════════════════════════════════════════════════════
 function toggleDayBtn(btn){
-  const s=document.getElementById("chore-schedule").value;
-  if(s==="weekly"){
-    // Single-select for weekly
-    document.querySelectorAll("#chore-weekday-toggles .day-toggle").forEach(b=>b.classList.remove("selected"));
-    btn.classList.add("selected");
-  } else {
-    // Multi-select for biweekly
-    btn.classList.toggle("selected");
-  }
+  // v32.2: Both weekly AND biweekly are multi-select (was: weekly single only).
+  // Lets parents schedule "weekly Mon/Wed/Fri" style chores.
+  btn.classList.toggle("selected");
   document.getElementById("weekday-none-msg").classList.add("hidden");
   // Per-day-time editor visibility depends on selected days
   refreshPerDayTimeUI();
@@ -1362,7 +1362,7 @@ function onScheduleChange(){
   const wl=document.getElementById("chore-weekday-label");
   if(wl) wl.textContent = s==="biweekly"
     ? "Due Days (every other week — select one or more)"
-    : "Due Day of Week";
+    : "Due Days of Week (select one or more)";
 
   const streakWrap=document.getElementById("chore-streak-section");
   if(streakWrap) streakWrap.classList.toggle("hidden",s==="once");
@@ -1619,6 +1619,8 @@ function createChore(){
   }
   resetChoreForm();
   renderParentChores(); renderChildChores(); updateChoreBadges();
+  // v32.2: Auto-close the creator sheet after successful save (create or edit)
+  closeSheet("sheet-chore-creator");
 }
 
 function resetChoreForm(){
@@ -1911,17 +1913,13 @@ function isDueThisWeek(chore){
 }
 
 function renderChildChores(){
-  renderWeeklyStreakBanner();  // v31.2
+  renderWeeklyStreakBanner();  // v31.2 — green "6 chores done this week!" banner (kept)
   const listEl=document.getElementById("child-chore-list");
   const notifEl=document.getElementById("child-chore-notifications");
-  // Streaks
+  // v32.2: Streak pills row removed per Mike — too busy at the top.
+  // Streak info is now shown inline inside each chore card body (see renderChoreRow below).
   const streakEl=document.getElementById("chore-streaks-wrap");
-  if(streakEl){
-    const streaks=renderStreaks();
-    streakEl.innerHTML = streaks.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">${streaks.map(s=>`<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid var(--warning);border-radius:20px;padding:6px 12px;font-size:.75rem;font-weight:700;color:#92400e;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-fire'/></svg> ${s.name}: ${s.streak} ${s.unit}</div>`).join("")}</div>`
-      : "";
-  }
+  if(streakEl) streakEl.innerHTML = "";
   if(!listEl) return;
   const data=getChildData(activeChild||currentUser);
   const chores=data.chores||[];
@@ -2017,6 +2015,7 @@ function renderChoreTable(){
               ${c.name}${dueBadge(c)}
               ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
               ${showRewards?(c.childChooses?`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> You choose the split</div>`:`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`):""}
+              ${renderInlineStreak(c)}
             </td>
             <td class="chore-schedule-cell">${scheduleLabel(c)}</td>
             ${showRewards?`<td class="chore-amount-cell" id="chore-amt-${c.id}">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
@@ -2266,6 +2265,8 @@ function createLoan(){
   }
   resetLoanForm();
   renderParentLoans();
+  // v32.2: Auto-close the creator sheet after successful save (create or edit)
+  closeSheet("sheet-loan-creator");
 }
 
 function resetLoanForm(){
@@ -2703,6 +2704,27 @@ function renderStreaks(){
         unit: remaining===milestone ? "🎯" : `(${remaining} to bonus)`
       };
     });
+}
+
+/**
+ * v32.2: Inline streak line for a single chore — shown inside the chore card
+ * body (replaces the deleted top-of-page pill row). Only renders when the
+ * chore has milestone tracking enabled OR a nonzero streak already accrued.
+ */
+function renderInlineStreak(c){
+  if(!c) return "";
+  const effective = (parseInt(c.streakCount)||0) + (parseInt(c.streakStart)||0);
+  const milestone = parseInt(c.streakMilestone) || 0;
+  // Only show if streak tracking is enabled or user already has progress
+  if(milestone <= 0 && effective <= 0) return "";
+  let suffix = "";
+  if(milestone > 0){
+    const remaining = milestone - (effective % milestone);
+    suffix = remaining === milestone
+      ? ` <span style="color:var(--warning);">🎯 milestone!</span>`
+      : ` <span style="color:var(--muted);">(${remaining} to bonus)</span>`;
+  }
+  return `<div class="chore-desc-small" style="color:#92400e;font-weight:600;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-fire'/></svg> Streak: ${effective}${suffix}</div>`;
 }
 
 // ════════════════════════════════════════════════════════════════════

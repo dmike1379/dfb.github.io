@@ -1,5 +1,5 @@
 {
-  "version": "32.1",
+  "version": "32.2",
   "released": "2026-04-16",
-  "notes": "v32.1 • Login screen cleanup (no heading/tagline, centered) • Swipe navigation between tabs • Edit Chore/Loan/User reuse creator sheets • Instant Adjustment, Savings Goals, Allowance, Interest Rates all bottom sheets • This Week moved above tabs • Parent PIN management on Settings tab (standalone) • Child PIN reset moved into Child Profile sheet • Loan payment label simplified • Monthly statement PDF removed"
+  "notes": "v32.2 • Fix Couldn't Connect false error (null-guard branding) • Fix Add/Edit User sheet popping under admin drawer • Fix weekly multi-day chore selection • Chore/Loan sheets auto-close after save • Admin picker buttons above pills • Remove chore-list streak pills (streak now shown inline within each chore card)"
 }
