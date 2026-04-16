@@ -341,6 +341,23 @@ function migrateIfNeeded(){
     };
     delete state.balances; delete state.rates; delete state.autoDeposit; delete state.chores;
   }
+  // v32: migrate celebration sound from global config → per-user record.
+  // Idempotent: only runs once, flagged on state.config.
+  if(!state.config.celebrationMigrated_v32){
+    if(!state.usersData) state.usersData = {};
+    // state.users is an array of display names; mirror per-user settings
+    // into state.usersData[name] objects so we have somewhere to live.
+    (state.users||[]).forEach(u => {
+      if(!state.usersData[u]) state.usersData[u] = {};
+      if(state.usersData[u].celebrationSound === undefined){
+        state.usersData[u].celebrationSound = true; // default ON for v32
+      }
+    });
+    delete state.config.celebrationSound;
+    state.config.celebrationMigrated_v32 = true;
+  }
+  // Build a convenience accessor — makes the playback site cleaner.
+  if(!state.users_map) state.users_map = state.usersData || {};
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -426,8 +443,13 @@ function showEarnedPopup(amount,choreName){
   // reflow so animation restarts cleanly
   void p.offsetWidth;
   p.classList.add("show");
-  // Sound — admin opt-in, default off
-  if(state.config && state.config.celebrationSound){
+  // v32: Per-user celebration sound. Default on. Reads from the *child whose
+  // chore was completed* (activeChild in parent sessions, currentUser in child
+  // sessions). Falls back to false only if the user record says so explicitly.
+  const celebrateFor = activeChild || currentUser;
+  const userRec = celebrateFor && state.usersData ? state.usersData[celebrateFor] : null;
+  const celebOn = userRec ? (userRec.celebrationSound !== false) : true;
+  if(celebOn){
     try { playCelebrationSound(); } catch(e){}
   }
   setTimeout(()=>p.classList.remove("show"),3000);
@@ -712,18 +734,28 @@ function attemptLogin(){
 // Shared landing logic used by both attemptLogin and auto-login restore
 function enterApp(user){
   currentUser=user;
-  // v31.3: record login stats (count + last seen). Syncs via cloud like other config.
+  // v32: login counter 5-min guard — only increment if >5 min since last login.
+  // stats.lastAt updates ONLY when counter increments (reloads inside window
+  // leave both untouched).
   if(!state.config.loginStats) state.config.loginStats = {};
   const stats = state.config.loginStats[user] || {count:0, lastAt:null};
-  stats.count = (parseInt(stats.count)||0) + 1;
-  stats.lastAt = new Date().toISOString();
-  state.config.loginStats[user] = stats;
-  // Sync in the background — non-blocking, we don't want to delay the UI
-  setTimeout(()=>{ try { syncToCloud("Login"); } catch(e){} }, 500);
+  const nowMs = Date.now();
+  const lastMs = stats.lastAt ? new Date(stats.lastAt).getTime() : 0;
+  const FIVE_MIN = 5*60*1000;
+  if(!lastMs || (nowMs - lastMs) > FIVE_MIN){
+    stats.count  = (parseInt(stats.count)||0) + 1;
+    stats.lastAt = new Date().toISOString();
+    state.config.loginStats[user] = stats;
+    // Sync in the background — non-blocking, we don't want to delay the UI
+    setTimeout(()=>{ try { syncToCloud("Login"); } catch(e){} }, 500);
+  }
   currentRole=state.roles[user]||"child";
   document.getElementById("login-screen").classList.add("hidden");
   updateLogoutButtonLabel();
   if(currentRole==="parent"){
+    // v32: parent uses single-line top bar, not child top-bar
+    document.getElementById("child-top-bar")?.classList.add("hidden");
+    document.getElementById("parent-top-bar")?.classList.remove("hidden");
     const children=getAssignedChildren();
     if(children.length===1){
       document.getElementById("main-screen").classList.remove("hidden");
@@ -733,14 +765,17 @@ function enterApp(user){
       showChildPicker();
     } else {
       document.getElementById("main-screen").classList.remove("hidden");
-      document.getElementById("welcome-msg").innerHTML=renderAvatar(user,"sm")+' <span>Hi, '+user+'! 👋</span>';
+      // No assigned children — keep parent top bar visible but label generic
+      const ptb=document.getElementById("ptb-child-name"); if(ptb) ptb.textContent="—";
       document.getElementById("parent-panel").classList.remove("hidden");
     }
   } else {
+    // v32: child uses the original top-bar; parent top-bar stays hidden
+    document.getElementById("parent-top-bar")?.classList.add("hidden");
+    document.getElementById("child-top-bar")?.classList.remove("hidden");
     activeChild=user;
     document.getElementById("main-screen").classList.remove("hidden");
     document.getElementById("welcome-msg").innerHTML=renderAvatar(user,"sm")+' <span>Hi, '+user+'! 👋</span>';
-    document.getElementById("child-switch-bar").classList.add("hidden");  // children never see the switcher
     document.getElementById("child-panel").classList.remove("hidden");
     renderChildTabBar();
     renderBalances(); renderChildChores(); renderSavingsGoals(); renderPendingDeposits(); renderChildLoans(); showChoreWaitingBanner(); updateChoreBadges(); renderChildAvatar();
@@ -886,15 +921,11 @@ function selectChild(childName){
   activeChild=childName;
   document.getElementById("child-picker-screen").classList.add("hidden");
   document.getElementById("main-screen").classList.remove("hidden");
-  document.getElementById("welcome-msg").innerHTML=renderAvatar(childName,"sm")+' <span>Managing '+childName+"'s account</span>";
-  // Show switch bar if there are multiple assigned children
-  const switchBar=document.getElementById("child-switch-bar");
-  if(getAssignedChildren().length>1){
-    switchBar.classList.remove("hidden");
-    document.getElementById("child-switch-name").textContent=childName+"'s Account";
-  } else {
-    switchBar.classList.add("hidden");
-  }
+  // v32: Parent uses single-line top bar; child-top-bar stays hidden for parent
+  document.getElementById("child-top-bar")?.classList.add("hidden");
+  document.getElementById("parent-top-bar")?.classList.remove("hidden");
+  const ptb=document.getElementById("ptb-child-name");
+  if(ptb) ptb.textContent=childName;
   document.getElementById("parent-panel").classList.remove("hidden");
   document.getElementById("child-panel").classList.add("hidden");
   renderParentTabBar();
@@ -1177,6 +1208,10 @@ function renderChildProfileSection(){
   document.getElementById("profile-notify-email").checked  = notify.email        !== false;  // default ON
   document.getElementById("profile-notify-cal").checked    = !!notify.calendar;              // default OFF
   document.getElementById("profile-chore-rewards").checked = notify.choreRewards !== false;  // default ON
+  // v32: per-user celebration sound (default ON)
+  const ud = (state.usersData && state.usersData[activeChild]) || {};
+  const csProfile = document.getElementById("profile-celebration-sound");
+  if(csProfile) csProfile.checked = (ud.celebrationSound !== false);
   // Tabs
   const tabs=getChildTabs(activeChild);
   const selected=[];
@@ -1208,6 +1243,11 @@ function saveChildProfile(){
     calendar:     document.getElementById("profile-notify-cal").checked,
     choreRewards: document.getElementById("profile-chore-rewards").checked
   };
+  // v32: per-user celebration sound
+  if(!state.usersData) state.usersData={};
+  if(!state.usersData[activeChild]) state.usersData[activeChild]={};
+  const csProfile = document.getElementById("profile-celebration-sound");
+  if(csProfile) state.usersData[activeChild].celebrationSound = !!csProfile.checked;
   const sel=getPickerSelections("profileTabs");
   state.config.tabs[activeChild]={
     money:  sel.indexOf("money")!==-1,
@@ -1585,7 +1625,7 @@ function resetChoreForm(){
   ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("chore-reminder-time").value="8";
   document.getElementById("chore-schedule").value="once";
-  document.getElementById("chore-split").value=100;
+  document.getElementById("chore-split").value=50; // v32: 50/50 default (was 100)
   document.getElementById("chore-child-chooses").checked=true;
   document.getElementById("chore-same-time").checked=true;
   document.getElementById("chore-skip-first-week").checked=false;
@@ -1605,7 +1645,7 @@ function editChore(choreId){
   document.getElementById("chore-desc").value=chore.desc||"";
   document.getElementById("chore-amount").value=chore.amount||"";
   document.getElementById("chore-schedule").value=chore.schedule||"once";
-  document.getElementById("chore-split").value=chore.splitChk!==undefined?chore.splitChk:100;
+  document.getElementById("chore-split").value=chore.splitChk!==undefined?chore.splitChk:50; // v32: 50/50 fallback
   document.getElementById("chore-child-chooses").checked=!!chore.childChooses;
   document.getElementById("chore-end-date").value=chore.endDate||"";
   const onceTypeEl=document.getElementById("chore-once-type");
@@ -2002,10 +2042,9 @@ function toggleChoreCheck(choreId){
     });
     setTimeout(()=>{
       const de=document.getElementById("modal-detail");
-      // v31.2: if child has an active (unmet) goal, default split toward savings
-      const hasActiveGoal = hasUnmetGoal(activeChild||currentUser);
-      const p = chore.splitChk ?? (hasActiveGoal ? 50 : 100);
-      de.innerHTML=`<div class="split-display"><span class="chk-pct">Checking: <span id="msc-chk">${p}</span>%</span><span class="sav-pct">Savings: <span id="msc-sav">${100-p}</span>%</span></div><input type="range" id="modal-split-slider" min="0" max="100" value="${p}" oninput="document.getElementById('msc-chk').textContent=this.value;document.getElementById('msc-sav').textContent=100-parseInt(this.value);"><p style="font-size:.73rem;color:var(--muted);margin:6px 0 0;text-align:center;">${hasActiveGoal?"💡 Defaulted to 50/50 — you're saving for a goal!":"Drag to set your split"}</p>`;
+      // v32: Always default split to 50/50 (drop v31.2 goal-aware conditional)
+      const p = chore.splitChk ?? 50;
+      de.innerHTML=`<div class="split-display"><span class="chk-pct">Checking: <span id="msc-chk">${p}</span>%</span><span class="sav-pct">Savings: <span id="msc-sav">${100-p}</span>%</span></div><input type="range" id="modal-split-slider" min="0" max="100" value="${p}" oninput="document.getElementById('msc-chk').textContent=this.value;document.getElementById('msc-sav').textContent=100-parseInt(this.value);"><p style="font-size:.73rem;color:var(--muted);margin:6px 0 0;text-align:center;">Drag to set your split</p>`;
       de.classList.remove("hidden");
     },60);
   } else {
@@ -2702,8 +2741,8 @@ function populateAdminForm(){
   document.getElementById("admin-img-logo").value       = cfg.imgLogo        || "";
   document.getElementById("admin-timezone").value       = cfg.timezone       || CFG_TIMEZONE;
   document.getElementById("admin-autologout").value     = String(cfg.autoLogout||0);
-  const cs = document.getElementById("admin-celebration-sound");
-  if(cs) cs.checked = !!cfg.celebrationSound;
+  // v32: admin-celebration-sound removed — celebration sound is now per-user
+  // (see user edit form + child profile sheet)
 }
 
 function renderAdminUsers(){
@@ -2785,7 +2824,7 @@ function saveAdminSettings(){
   state.config.imgLogo        = document.getElementById("admin-img-logo").value.trim()     || CFG_IMG_LOGO;
   state.config.timezone       = document.getElementById("admin-timezone").value;
   state.config.autoLogout     = parseInt(document.getElementById("admin-autologout").value) || 0;
-  state.config.celebrationSound = !!document.getElementById("admin-celebration-sound")?.checked;
+  // v32: celebrationSound removed from global config — now per-user in user edit form
   if(window._pickerSelections) window._pickerSelections={};
   applyBranding();
   syncToCloud("Admin Settings Updated");
@@ -2823,6 +2862,10 @@ function openUserEdit(username){
   document.getElementById("edit-notify-email").checked   = notify.email   !== false;
   document.getElementById("edit-notify-cal").checked     = !!notify.calendar;
   document.getElementById("edit-chore-rewards").checked  = notify.choreRewards !== false;
+  // v32: per-user celebration sound (default true)
+  const ud = (state.usersData && state.usersData[username]) || {};
+  const csEdit = document.getElementById("edit-celebration-sound");
+  if(csEdit) csEdit.checked = (ud.celebrationSound !== false);
   document.getElementById("edit-cal-id").value=(cfg.calendars&&cfg.calendars[username])||"";
   toggleEditCalField();
   // Show role-specific sections
@@ -3020,6 +3063,11 @@ function saveUserEdit(){
   const calId=document.getElementById("edit-cal-id").value.trim();
   if(calId) state.config.calendars[u]=calId;
   else delete state.config.calendars[u];
+  // v32: per-user celebration sound
+  if(!state.usersData) state.usersData={};
+  if(!state.usersData[u]) state.usersData[u]={};
+  const csEdit = document.getElementById("edit-celebration-sound");
+  if(csEdit) state.usersData[u].celebrationSound = !!csEdit.checked;
   // Parent: assigned children
   if(role==="parent"){
     if(!state.config.parentChildren) state.config.parentChildren={};
@@ -3787,3 +3835,80 @@ document.getElementById("username-input").addEventListener("keydown", e=>{ if(e.
 document.getElementById("pin-input").addEventListener("keydown",      e=>{ if(e.key==="Enter") attemptLogin(); });
 document.getElementById("admin-pin-input").addEventListener("keydown",e=>{ if(e.key==="Enter") attemptAdminLogin(); });
 loadFromCloud();
+
+// ════════════════════════════════════════════════════════════════════
+// 20. v32 — BOTTOM SHEETS, COLLAPSIBLES, LAUNCHER HELPERS
+// ════════════════════════════════════════════════════════════════════
+/**
+ * Open a bottom sheet by DOM id. Shared dim backdrop slides in.
+ * Multiple sheets can stack — backdrop stays until all are closed.
+ */
+function openSheet(id){
+  const sheet = document.getElementById(id);
+  if(!sheet) return;
+  sheet.classList.add("open");
+  document.getElementById("sheet-backdrop")?.classList.add("open");
+}
+function closeSheet(id){
+  const sheet = document.getElementById(id);
+  if(!sheet) return;
+  sheet.classList.remove("open");
+  // If no sheets are still open, retract the backdrop.
+  if(!document.querySelector(".bottom-sheet.open")){
+    document.getElementById("sheet-backdrop")?.classList.remove("open");
+  }
+}
+function closeAllSheets(){
+  document.querySelectorAll(".bottom-sheet.open").forEach(s=>s.classList.remove("open"));
+  document.getElementById("sheet-backdrop")?.classList.remove("open");
+}
+
+/**
+ * Toggle a collapsible card's expanded state (used for admin User Management
+ * and Bank Branding sections). Chevron rotation handled via CSS.
+ */
+function toggleCollapsible(id){
+  const card = document.getElementById(id);
+  if(!card) return;
+  card.classList.toggle("expanded");
+}
+
+/**
+ * Launcher helpers — open the right sheet and also reset/populate the form
+ * inside so the user gets a clean experience each time.
+ */
+function openChoreCreator(){
+  // If not mid-edit, start a fresh form
+  if(typeof editingChoreId !== "undefined" && !editingChoreId){
+    try { resetChoreForm(); } catch(e){}
+  }
+  openSheet("sheet-chore-creator");
+}
+function openLoanCreator(){
+  if(typeof editingLoanId !== "undefined" && !editingLoanId){
+    try { resetLoanForm && resetLoanForm(); } catch(e){}
+  }
+  openSheet("sheet-loan-creator");
+}
+function openChildProfileSheet(){
+  // Populate from current activeChild before showing
+  try { renderChildProfileSection(); } catch(e){}
+  openSheet("sheet-child-profile");
+}
+
+// v32: Auto-close chore/loan sheets when the Cancel/Save handlers finish their work.
+// We don't need to modify those handlers — instead, hook into the hidden-attribute
+// changes on the edit wrappers, which is what their existing cancel/reset code touches.
+// (Handled implicitly by form-submit flows calling resetChoreForm / cancelChoreEdit.)
+// If you want the sheet to auto-close on successful chore creation, extend createChore()
+// accordingly. For now, the user taps ✕ Close or the backdrop.
+
+// v32: When parent changes active child, close any open sheets that show stale data
+(function(){
+  const origSelectChild = typeof selectChild === "function" ? selectChild : null;
+  if(!origSelectChild) return;
+  window.selectChild = function(name){
+    closeAllSheets();
+    return origSelectChild(name);
+  };
+})();

@@ -1,5 +1,5 @@
 /* ╔═══════════════════════════════════════════════════════════════════╗
-   ║                  FAMILY BANK — styles.css  v30.0                  ║
+   ║                  FAMILY BANK — styles.css  v32.0                  ║
    ║                                                                   ║
    ║  Organization:                                                    ║
    ║    1. Tokens (CSS variables)                                      ║
@@ -7,14 +7,15 @@
    ║    3. Layout shell                                                ║
    ║    4. Forms (inputs, labels, messages)                            ║
    ║    5. Buttons                                                     ║
-   ║    6. Tabs                                                        ║
+   ║    6. Tabs (v32: connected-to-content, sticky)                    ║
    ║    7. Cards (balance, chore, ledger)                              ║
-   ║    8. Drawers (admin, history, net worth)                         ║
+   ║    8. Drawers (admin, history, net worth) + Bottom Sheets         ║
    ║    9. Modal + toast + picker + earned popup                       ║
    ║   10. Splash + install banner                                     ║
    ║   11. Net worth chart (Chart.js wrapper)                          ║
    ║   12. Day toggles + per-day-time editor                           ║
    ║   13. Utilities                                                   ║
+   ║   14. v32 — Bottom sheets, collapsibles, card sections            ║
    ╚═══════════════════════════════════════════════════════════════════╝ */
 
 /* ── 1. TOKENS ───────────────────────────────────────────────────── */
@@ -38,10 +39,11 @@ body{
   display:flex;flex-direction:column;align-items:center;
   touch-action:manipulation;color:var(--text);
   -webkit-font-smoothing:antialiased;
+  font-size:16px; /* v32: bumped from browser default for readability */
 }
-h2{font-size:1.35rem;font-weight:800;margin:0 0 4px;text-align:center;color:var(--text)}
-h3{font-size:.95rem;font-weight:700;margin:0 0 14px;color:var(--text)}
-.page-subtitle{font-size:.78rem;color:var(--muted);text-align:center;margin:0 0 22px}
+h2{font-size:1.4rem;font-weight:800;margin:0 0 4px;text-align:center;color:var(--text)}
+h3{font-size:1rem;font-weight:700;margin:0 0 14px;color:var(--text)}
+.page-subtitle{font-size:.82rem;color:var(--muted);text-align:center;margin:0 0 22px}
 .hidden{display:none!important}
 
 /* ── 3. LAYOUT SHELL ─────────────────────────────────────────────── */
@@ -60,7 +62,13 @@ h3{font-size:.95rem;font-weight:700;margin:0 0 14px;color:var(--text)}
   width:160px;height:160px;object-fit:contain;
   display:block;margin:0 auto 10px;border-radius:28px;
 }
-.section-block{margin-top:18px;padding-top:18px;border-top:1px solid var(--border)}
+.section-block{
+  margin-top:22px;padding:16px;
+  background:var(--bg);border-radius:var(--radius);
+  border:1px solid var(--border);
+}
+/* v32: login screen hides the centered logo per handoff (banner + tagline stay) */
+#login-screen .logo-img{display:none}
 .row{display:flex;gap:10px}
 .col{flex:1;min-width:0}
 .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
@@ -79,6 +87,12 @@ input,select,textarea{
   transition:border-color .15s, box-shadow .15s;
   margin-bottom:10px;appearance:none;-webkit-appearance:none;
 }
+/* v32: softer placeholder styling so empty numeric fields don't look pre-filled */
+input::placeholder,textarea::placeholder{
+  color:#cbd5e1;font-style:italic;font-weight:400;opacity:1;
+}
+input::-webkit-input-placeholder{color:#cbd5e1;font-style:italic;font-weight:400;}
+input::-moz-placeholder{color:#cbd5e1;font-style:italic;font-weight:400;opacity:1;}
 input:focus,select:focus,textarea:focus{
   border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1);
 }
@@ -145,31 +159,54 @@ input[type=range]{
 }
 
 /* ── 6. TABS ─────────────────────────────────────────────────────── */
+/* ── 6. TABS (v32: connected-to-content) ─────────────────────────── */
+/* Tab bar sits flush atop the content panel. Active tab's background
+   matches surface color and bleeds into the panel below — no visible
+   gap, no border between active tab and content. Sticky to top on scroll. */
 .tab-bar{
-  display:flex;flex-wrap:wrap;background:var(--bg);
-  border-radius:var(--radius-sm);padding:4px;gap:3px;margin:14px 0 18px;
+  display:flex;flex-wrap:wrap;gap:0;
+  margin:14px 0 0;
+  padding:0 4px;
+  background:var(--bg);
+  border-radius:var(--radius-sm) var(--radius-sm) 0 0;
+  position:sticky;top:0;z-index:20;
+  border-bottom:1px solid var(--border);
 }
 .tab-bar.tabs-1 .tab-btn,
 .tab-bar.tabs-2 .tab-btn,
 .tab-bar.tabs-3 .tab-btn{flex:1;min-width:0}
-.tab-bar.tabs-4 .tab-btn{min-width:calc(50% - 4px);flex:1}
+.tab-bar.tabs-4 .tab-btn{flex:1;min-width:0}
 .tab-bar.tabs-5 .tab-btn{min-width:calc(33.333% - 4px);flex:1}
 .tab-bar.tabs-6 .tab-btn{min-width:calc(33.333% - 4px);flex:1}
 .tab-btn{
-  padding:9px 4px;border:none;border-radius:7px;
-  font-family:var(--font);font-size:.72rem;font-weight:700;
+  padding:11px 4px;border:none;
+  border-radius:10px 10px 0 0;
+  font-family:var(--font);font-size:.78rem;font-weight:700;
   cursor:pointer;background:transparent;color:var(--muted);
-  transition:all .15s;white-space:nowrap;text-align:center;
+  transition:background .15s, color .15s;
+  white-space:nowrap;text-align:center;
+  margin:0;margin-bottom:-1px; /* overlap the tab-bar border-bottom */
+  border-bottom:1px solid transparent;
+  position:relative;
 }
 .tab-btn.active{
-  background:var(--surface);color:var(--primary);
-  box-shadow:0 2px 8px rgba(0,0,0,.08);
+  background:var(--surface);
+  color:var(--primary);
+  border-bottom:1px solid var(--surface); /* kills the border under the active tab */
+  box-shadow:0 -2px 6px rgba(0,0,0,.04);
 }
+/* Content panels connect flush to active tab: white bg, no top border */
 .tab-panel{display:none}
-.tab-panel.active{display:block}
+.tab-panel.active{
+  display:block;
+  background:var(--surface);
+  padding:18px 2px 4px;
+  margin:0 0 18px;
+  border-radius:0 0 var(--radius-sm) var(--radius-sm);
+}
 .notif-badge{
   background:var(--danger);color:white;
-  font-size:.58rem;font-weight:700;padding:2px 5px;border-radius:10px;
+  font-size:.6rem;font-weight:700;padding:2px 5px;border-radius:10px;
   margin-left:3px;display:inline-block;
 }
 
@@ -835,3 +872,132 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
   font-size:.64rem;color:var(--muted);font-weight:500;
   line-height:1.4;
 }
+
+/* ══════════════════════════════════════════════════════════════════ */
+/* ── 14. v32 — BOTTOM SHEETS, COLLAPSIBLES, PARENT TOP BAR ───────── */
+/* ══════════════════════════════════════════════════════════════════ */
+
+/* Bottom sheet — reuses the drawer slide-up motion. Dimmed backdrop
+   sits behind; close button top-right of the sheet header. Multiple
+   sheets can stack (Savings Goals opens over Money tab, etc.) */
+.sheet-backdrop{
+  position:fixed;inset:0;background:rgba(15,23,42,.45);
+  z-index:290;opacity:0;pointer-events:none;
+  transition:opacity .25s ease;
+}
+.sheet-backdrop.open{opacity:1;pointer-events:auto}
+
+.bottom-sheet{
+  position:fixed;left:0;right:0;bottom:0;top:5vh;
+  background:var(--surface);z-index:300;
+  border-radius:20px 20px 0 0;
+  transform:translateY(100%);
+  transition:transform .32s cubic-bezier(.32,.72,0,1);
+  overflow-y:auto;
+  box-shadow:0 -8px 40px rgba(0,0,0,.18);
+}
+.bottom-sheet.open{transform:translateY(0)}
+.bottom-sheet .sheet-header{
+  position:sticky;top:0;background:var(--surface);
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 18px;border-bottom:1px solid var(--border);
+  z-index:1;
+}
+.bottom-sheet .sheet-header h3{margin:0}
+.bottom-sheet .sheet-body{padding:18px}
+.bottom-sheet .sheet-grab{
+  width:40px;height:4px;background:var(--border);border-radius:2px;
+  margin:8px auto 0;display:block;
+}
+
+/* Trigger button that opens a bottom sheet — card-like with right chevron */
+.sheet-trigger{
+  display:flex;align-items:center;gap:12px;
+  width:100%;padding:14px 16px;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);
+  font-family:var(--font);font-size:.92rem;font-weight:700;
+  color:var(--text);cursor:pointer;
+  margin:0 0 10px;
+  transition:transform .12s, box-shadow .15s;
+  text-align:left;
+}
+.sheet-trigger:active{transform:scale(.985)}
+.sheet-trigger .icon{font-size:1.1rem;color:var(--primary);flex-shrink:0}
+.sheet-trigger .st-label{flex:1}
+.sheet-trigger .st-chevron{color:var(--muted);font-size:1.1rem;flex-shrink:0}
+
+/* Money-tab reports divider (between action sheets and History/Net Worth) */
+.reports-divider{
+  display:flex;align-items:center;gap:10px;
+  margin:18px 0 10px;
+  font-size:.68rem;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.08em;
+}
+.reports-divider::before,
+.reports-divider::after{
+  content:"";flex:1;height:1px;background:var(--border);
+}
+
+/* Collapsible card (used for User Management + Bank Branding in admin) */
+.collapsible-card{
+  margin-top:16px;background:var(--bg);
+  border:1px solid var(--border);border-radius:var(--radius);
+  overflow:hidden;
+}
+.collapsible-header{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 16px;cursor:pointer;user-select:none;
+  background:var(--surface);
+}
+.collapsible-header h3{margin:0}
+.collapsible-chevron{
+  color:var(--muted);font-size:1rem;
+  transition:transform .2s ease;
+}
+.collapsible-card.expanded .collapsible-chevron{transform:rotate(180deg)}
+.collapsible-body{
+  display:none;padding:16px;background:var(--surface);
+  border-top:1px solid var(--border);
+}
+.collapsible-card.expanded .collapsible-body{display:block}
+
+/* Parent single-line top bar: [Switch ▼] Managing <child> [Help] [Log Out] */
+.parent-top-bar{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:14px;padding:10px 12px;
+  background:var(--bg);border-radius:var(--radius);
+  border:1px solid var(--border);
+}
+.parent-top-bar .ptb-switch{
+  flex-shrink:0;
+  padding:8px 12px;border:1.5px solid var(--primary);
+  background:var(--surface);color:var(--primary);
+  font-family:var(--font);font-size:.78rem;font-weight:700;
+  border-radius:8px;cursor:pointer;
+  width:auto;margin:0;
+}
+.parent-top-bar .ptb-label{
+  flex:1;min-width:0;
+  font-size:.88rem;font-weight:700;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.parent-top-bar .ptb-label .ptb-child-name{color:var(--primary)}
+.parent-top-bar .ptb-help,
+.parent-top-bar .ptb-logout{
+  flex-shrink:0;width:auto;margin:0;
+}
+.parent-top-bar .ptb-help{
+  padding:6px 8px;background:transparent;border:none;
+  color:var(--muted);cursor:pointer;
+}
+.parent-top-bar .ptb-logout{
+  padding:8px 12px;
+  background:transparent;border:1.5px solid var(--border);
+  color:var(--muted);
+  font-family:var(--font);font-size:.75rem;font-weight:600;
+  border-radius:8px;cursor:pointer;
+}
+
+/* Child (non-parent) top bar stays as-is but needs a little breathing room */
+.top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px}

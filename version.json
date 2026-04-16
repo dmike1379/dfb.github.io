@@ -1,5 +1,5 @@
 {
-  "version": "31.3",
-  "released": "2026-04-14",
-  "notes": "Version badge on splash + login screens • Last-login timestamp + login counter on admin user rows • PDF statement formatting: clean dates, consolidated chore rows with chk/sav split subline, signed amounts (-$0.25), boxed monthly summary stats, row dividers"
+  "version": "32.0",
+  "released": "2026-04-16",
+  "notes": "UI Overhaul • Bottom sheets for all forms (Manage Money, Savings Goals, Avatar, chore/loan creators, child profile, Add User) • Connected-to-content tab bar (sticky) • Single-line parent top bar • Collapsible User Management & Bank Branding • Per-user celebration sound (global toggle removed, migrated) • 50/50 default splits everywhere • Login counter 5-min guard fix • Login screen logo hidden • Card-style sections, larger body type, softer placeholders"
 }
