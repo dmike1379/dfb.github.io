@@ -1,5 +1,5 @@
 {
-  "version": "33.3",
+  "version": "33.0",
   "released": "2026-04-17",
-  "notes": "v33.3 • Diagnostic logging for proof photo send/receive path (not a fix — adds console/Apps Script logs so we can see where the photo is getting lost)"
+  "notes": "v33.0 • Account signup requests (parent) with admin approve/deny + email • Loan cards show Principal Paid and Interest Paid • Chore submissions support proof photos (emailed inline) • Guided Child Setup Wizard (9 steps) with live earnings calculator • Persistent Annual Earnings Calculator card in Child Profile"
 }
