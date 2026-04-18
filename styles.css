@@ -1026,3 +1026,247 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
   margin:-4px 0 10px;
 }
 .req-note .req-star{margin:0 2px 0 0;}
+
+/* ════════════════════════════════════════════════════════════════════
+   v33.0 — Signup requests, proof photo, earnings card, wizard
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Loan card — principal/interest paid split */
+.loan-paid-split {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+  font-size: .72rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.loan-paid-split strong { color: var(--text); }
+
+/* Pending requests badge */
+.pending-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  margin-left: 8px;
+  border-radius: 11px;
+  background: var(--danger, #ef4444);
+  color: #fff;
+  font-size: .7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.pending-badge.hidden { display: none; }
+
+/* Pending request card inside admin */
+.pending-request-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.pending-request-meta .pr-name {
+  font-weight: 700;
+  font-size: .95rem;
+  margin-bottom: 6px;
+}
+.pending-request-meta .pr-line {
+  display: flex;
+  gap: 8px;
+  font-size: .78rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.pending-request-meta .pr-label {
+  font-weight: 600;
+  min-width: 72px;
+}
+.pending-request-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Proof photo preview */
+.proof-preview-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.proof-thumb {
+  max-width: 100%;
+  max-height: 280px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+/* Persistent earnings card */
+.earnings-card {
+  background: linear-gradient(135deg, rgba(37,99,235,.06), rgba(34,197,94,.06));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0 0 14px;
+}
+.earnings-head {
+  font-weight: 700;
+  font-size: .82rem;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.earnings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.earnings-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.earnings-cell-primary { border-color: var(--primary); background: rgba(37,99,235,.05); }
+.earnings-cell-warn    { border-color: #f59e0b;        background: rgba(245,158,11,.05); }
+.earnings-label {
+  font-size: .68rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+.earnings-value {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+/* Wizard */
+.wizard-progress {
+  margin-bottom: 14px;
+}
+.wizard-progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.wizard-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width .3s ease;
+}
+.wizard-progress-text {
+  font-size: .7rem;
+  color: var(--muted);
+  text-align: center;
+}
+.wizard-step-title {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+.wizard-helper {
+  font-size: .78rem;
+  color: var(--muted);
+  margin: 4px 0 12px;
+  line-height: 1.5;
+}
+.wizard-pill-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.wizard-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: .82rem;
+  cursor: pointer;
+  user-select: none;
+}
+.wizard-pill input[type="radio"] {
+  accent-color: var(--primary);
+  margin: 0;
+}
+.wizard-pill:has(input:checked) {
+  background: rgba(37,99,235,.08);
+  border-color: var(--primary);
+  color: var(--primary-dark);
+  font-weight: 700;
+}
+.wizard-live-calc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+.wizard-calc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: .82rem;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.wizard-calc-row:last-child { border-bottom: none; }
+.wizard-calc-row-warn strong { color: #b45309; }
+.wizard-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.wizard-nav .btn { width: auto; flex: 1; margin: 0; }
+.wizard-chore-list { margin: 10px 0 12px; }
+.wizard-chore-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.wiz-chore-main { flex: 1; min-width: 0; }
+.wiz-chore-name { font-weight: 700; font-size: .88rem; }
+.wiz-chore-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+.wiz-chore-actions { display: flex; gap: 6px; }
+.wizard-chore-totals { margin-top: 8px; }
+.wiz-summary-totals {
+  background: rgba(37,99,235,.05);
+  border: 1px solid var(--primary);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.wiz-summary-section {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 0;
+  font-size: .8rem;
+}
+.wiz-summary-section:last-child { border-bottom: none; }
+.wiz-sum-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}

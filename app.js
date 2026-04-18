@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBkLt4KKTL2m7_PVRSV4X0kHn-B0mpJCc93DaW8j6TMnZa3jw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzFTOZ__LphDMx0OPyRaXzooQdOYfFT6jx3fiGzAJPZ0YuXvz-Km2S8WiJmCANkRHKYOg/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -248,8 +248,12 @@ const DEFAULT_CONFIG = {
   adminEmail:     "",            // v32.4: seeded in migration on first load
   emails:         {},
   avatars:        {},
-  loginStats:     {}
+  loginStats:     {},
+  pendingUsers:   []             // v33.0: parent account signup requests awaiting admin decision
 };
+
+// v33.0 — Queue cap for signup requests
+const SIGNUP_QUEUE_CAP = 20;
 
 // ════════════════════════════════════════════════════════════════════
 // 2. RUNTIME STATE
@@ -274,6 +278,14 @@ let nwFilterMonths      = 3;
 let nwChartInstance     = null;   // Chart.js instance — destroyed/recreated on filter change
 let pickerMode          = null;
 let pickerSelected      = [];
+
+// v33.0 — Wizard runtime state
+let wizardState         = null;   // {childName, step, mode:"new"|"edit", data:{...}, chores:[...]}
+let wizardTotalSteps    = 9;
+
+// v33.0 — Proof photo buffer for pending chore submission (base64 data URL or null)
+let pendingProofPhoto   = null;
+let pendingProofChoreId = null;
 
 // ════════════════════════════════════════════════════════════════════
 // 3. UTILITIES
@@ -503,6 +515,8 @@ async function loadFromCloud(){
       if(!state.config.emails) state.config.emails={};
       if(!state.config.avatars) state.config.avatars={};
       if(!state.config.loginStats) state.config.loginStats={};
+      // v33.0 — Ensure pendingUsers array exists on every load
+      if(!Array.isArray(state.config.pendingUsers)) state.config.pendingUsers=[];
       // v32.4 item #8: seed admin email on first load if empty.
       // TODO: STRIP THIS HARDCODED SEED BEFORE PUBLISHING TO INSTRUCTABLES.
       // Replace with `state.config.adminEmail = state.config.adminEmail || "";`
@@ -537,9 +551,16 @@ async function syncToCloud(action){
   delete payload._approvedChoreTitle;
   delete payload._approvedChoreSchedule;
   delete payload._editedChoreId;
+  // v33.0 — Attach pending proof photo (if any) to chore submissions only
+  if(action === "Chore Submitted" && pendingProofPhoto){
+    payload.proofPhoto = pendingProofPhoto;
+  }
   pendingTransactions=[];
   try{
     await fetch(API_URL,{method:"POST",mode:"no-cors",body:JSON.stringify(payload)});
+    // v33.0 — Clear photo buffer after a successful POST
+    pendingProofPhoto = null;
+    pendingProofChoreId = null;
     setTimeout(loadFromCloud,1800);
   } catch(err){
     showToast("Sync error — change may not have saved!","error",5000);
@@ -779,14 +800,14 @@ function enterApp(user){
       // No assigned children — keep parent top bar visible but label generic
       const ptb=document.getElementById("ptb-child-name"); if(ptb) ptb.textContent="—";
       document.getElementById("parent-panel").classList.remove("hidden");
-      // v32.4 item #10: auto-open Add Child sheet on empty-children parent landing.
-      // Non-coercive — close button still works (Option A). Deferred via setTimeout
-      // so the panel paints first.
+      // v33.0 item #11: auto-open guided setup wizard on empty-children parent landing.
+      // Replaces v32.4 item #10 behavior (which opened raw sheet-add-child).
+      // Non-coercive — close button still works. Deferred via setTimeout so the panel paints first.
       setTimeout(()=>{
         if(currentRole==="parent" && typeof getMyChildrenList === "function"
            && getMyChildrenList().length === 0
-           && typeof openSheet === "function"){
-          openSheet("sheet-add-child");
+           && typeof startWizardForNewChild === "function"){
+          startWizardForNewChild();
         }
       }, 60);
     }
@@ -1636,12 +1657,16 @@ function createChore(){
     msgEl.className="field-msg error"; msgEl.textContent="Enter a valid reward amount (0 or more)."; return;
   }
 
+  // v33.0 — Require proof photo on submission?
+  const requiresProof = !!(document.getElementById("chore-require-proof") && document.getElementById("chore-require-proof").checked);
+
   const data=getChildData(activeChild);
   const streakVals=getStreakFormValues();
   const choreFields = {
     name,desc,amount,schedule,monthlyDay,weekday,weekdays,
     onceDate,onceDueOn,reminderHour,dayTimes,skipFirstWeek,
     splitChk,childChooses,paused:false,endDate,
+    requiresProof,
     streakStart:streakVals.streakStart,
     streakMilestone:streakVals.streakMilestone,
     streakReward:streakVals.streakReward
@@ -1680,6 +1705,9 @@ function resetChoreForm(){
   document.getElementById("chore-child-chooses").checked=true;
   document.getElementById("chore-same-time").checked=true;
   document.getElementById("chore-skip-first-week").checked=false;
+  // v33.0 — reset proof-photo requirement
+  const rp = document.getElementById("chore-require-proof");
+  if(rp) rp.checked = false;
   clearStreakForm();
   resetDayToggles();
   updateSplitLabel();
@@ -1708,6 +1736,9 @@ function editChore(choreId){
     if(chore.onceDate) document.getElementById("chore-end-date").value=chore.onceDate;
   }
   document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
+  // v33.0 — repopulate requiresProof
+  const rpEl = document.getElementById("chore-require-proof");
+  if(rpEl) rpEl.checked = !!chore.requiresProof;
   onScheduleChange();
   if(chore.schedule==="monthly" && chore.monthlyDay){
     document.getElementById("chore-monthly-day").value=chore.monthlyDay;
@@ -2078,6 +2109,14 @@ function toggleChoreCheck(choreId){
   const data=getChildData(activeChild||currentUser);
   const chore=data.chores.find(c=>c.id===choreId);
   if(!chore || chore.status==="pending") return;
+  // v33.0 — If chore requires proof and no photo has been captured yet for THIS chore,
+  // open the capture sheet first. After the user approves the thumbnail and taps
+  // "Continue", the capture flow calls back into this same function; by then
+  // pendingProofPhoto is populated and pendingProofChoreId matches, so we fall through.
+  if(chore.requiresProof && (!pendingProofPhoto || pendingProofChoreId !== choreId)){
+    openProofPhotoCapture(choreId);
+    return;
+  }
   if(chore.childChooses){
     openModal({
       icon:"✅", title:'Mark "'+chore.name+'" Complete?',
@@ -2412,7 +2451,11 @@ function renderChildLoans(){
       </div>
       <div class="chore-card-meta">
         Original: ${fmt(l.principal)} • ${l.rate}% APR<br>
-        Payment: ${fmt(l.payment)}/mo • Next due: ${fmtNextPayment(l)}
+        Payment: ${fmt(l.payment)}/mo • Next due: ${fmtNextPayment(l)}<br>
+        <span class="loan-paid-split">
+          <span>Principal paid: <strong>${fmt(l.totalPrincipalPaid||0)}</strong></span>
+          <span>Interest paid: <strong>${fmt(l.totalInterestPaid||0)}</strong></span>
+        </span>
       </div>
     </div>`).join("");
 }
@@ -2424,11 +2467,34 @@ function applyLoanPayment(loanId){
   const loan=(data.loans||[]).find(l=>l.id===loanId);
   if(!loan){ showToast("Loan not found.","error"); return; }
   if(amt>data.balances.checking){ showToast("Not enough in checking.","error"); return; }
-  data.balances.checking-=amt;
-  loan.balance=Math.max(0,loan.balance-amt);
-  recordTransaction(currentUser,"Loan payment to "+loan.name+" (principal)",-amt);
+
+  // v33.0 — Standard amortization: split payment into interest + principal
+  const monthlyRate    = (loan.rate || 0) / 100 / 12;
+  const interestOwed   = loan.balance * monthlyRate;
+  // Cap the payment at (balance + interest owed) so the child can't overpay
+  const cappedPayment  = Math.min(amt, loan.balance + interestOwed);
+  const interestPortion  = Math.min(cappedPayment, interestOwed);
+  const principalPortion = Math.max(0, cappedPayment - interestPortion);
+
+  data.balances.checking -= cappedPayment;
+  loan.balance            = Math.max(0, loan.balance - principalPortion);
+  loan.totalInterestPaid  = (loan.totalInterestPaid  || 0) + interestPortion;
+  loan.totalPrincipalPaid = (loan.totalPrincipalPaid || 0) + principalPortion;
+
+  // Log principal and interest as separate ledger lines so parents can see both
+  if(principalPortion > 0){
+    recordTransaction(currentUser, "Loan payment to " + loan.name + " (principal)",  -principalPortion);
+  }
+  if(interestPortion > 0){
+    recordTransaction(currentUser, "Loan payment to " + loan.name + " (interest)",   -interestPortion);
+  }
   syncToCloud("Loan Payment");
-  showToast("Loan payment applied. 💳","success");
+  if(cappedPayment < amt){
+    showToast("Loan paid in full. " + fmt(amt - cappedPayment) + " returned to checking. 💳","success");
+    data.balances.checking += (amt - cappedPayment);
+  } else {
+    showToast("Loan payment applied. 💳","success");
+  }
   document.getElementById("child-amt").value="";
   populateChildLoanSelect();
 }
@@ -2802,6 +2868,7 @@ function attemptAdminLogin(){
   document.getElementById("admin-settings-section").classList.remove("hidden");
   populateAdminForm();
   renderAdminUsers();
+  renderPendingRequests(); // v33.0
 }
 
 function populateAdminForm(){
@@ -3794,7 +3861,10 @@ const EXIT_WARN_SHEETS = new Set([
   "sheet-parent-goals",
   "sheet-child-profile",
   "sheet-add-child",
-  "sheet-share-child"
+  "sheet-share-child",
+  // v33.0
+  "sheet-wizard",
+  "sheet-signup-request"
 ]);
 const _sheetDirty = {}; // sheetId -> bool
 
@@ -4305,6 +4375,1107 @@ function removeChildFromMyView(childName){
   window.renderParentSettings = function(){
     const r = orig.apply(this, arguments);
     try { renderMyChildren(); } catch(e){}
+    return r;
+  };
+})();
+
+// ════════════════════════════════════════════════════════════════════
+// 22. v33.0 — SIGNUP REQUESTS, PROOF PHOTO, EARNINGS CALC, WIZARD
+// ════════════════════════════════════════════════════════════════════
+
+// ────────────────────────────────────────────────────────────────────
+// 22.1 — ACCOUNT SIGNUP REQUESTS (parent only)
+// ────────────────────────────────────────────────────────────────────
+
+function openSignupRequest(){
+  // Reset form
+  ["signup-name","signup-email","signup-pin","signup-honeypot"].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value="";
+  });
+  const msgEl=document.getElementById("signup-msg"); if(msgEl){ msgEl.className="field-msg"; msgEl.textContent=""; }
+  openSheet("sheet-signup-request");
+}
+
+function submitSignupRequest(){
+  const msgEl=document.getElementById("signup-msg");
+  msgEl.className="field-msg";
+  const name = (document.getElementById("signup-name").value||"").trim();
+  const email= (document.getElementById("signup-email").value||"").trim();
+  const pin  = (document.getElementById("signup-pin").value||"").trim();
+  const hp   = (document.getElementById("signup-honeypot").value||"").trim();
+
+  // Honeypot — silently drop
+  if(hp){ msgEl.className="field-msg info"; msgEl.textContent="Thanks — we'll review your request."; return; }
+
+  if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Display name is required."; return; }
+  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    msgEl.className="field-msg error"; msgEl.textContent="Valid email is required."; return;
+  }
+  if(!pin || pin.length!==4 || !/^\d{4}$/.test(pin)){
+    msgEl.className="field-msg error"; msgEl.textContent="PIN must be exactly 4 digits."; return;
+  }
+
+  if(!state.config.adminEmail){
+    showToast("Admin email not configured — ask admin to set it up first.","error",5000);
+    return;
+  }
+
+  state.config.pendingUsers = Array.isArray(state.config.pendingUsers) ? state.config.pendingUsers : [];
+
+  if(state.config.pendingUsers.length >= SIGNUP_QUEUE_CAP){
+    msgEl.className="field-msg error";
+    msgEl.textContent="The request queue is full right now. Please try again later.";
+    return;
+  }
+
+  const emailLower = email.toLowerCase();
+  const dupe = state.config.pendingUsers.some(p => (p.email||"").toLowerCase() === emailLower);
+  if(dupe){
+    msgEl.className="field-msg error";
+    msgEl.textContent="A request from this email is already pending.";
+    return;
+  }
+
+  // Also block if an account with that display name already exists
+  if((state.users||[]).indexOf(name) !== -1){
+    msgEl.className="field-msg error";
+    msgEl.textContent='"'+name+'" is already taken. Pick a different display name.';
+    return;
+  }
+
+  state.config.pendingUsers.push({
+    id:          "pu_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
+    name:        name,
+    email:       email,
+    pin:         pin,
+    requestedAt: fmtDate(new Date()),
+    honeypot:    ""
+  });
+
+  syncToCloud("Signup Requested");
+  closeSheet("sheet-signup-request", true);
+  showToast("Request submitted! You'll get an email when it's reviewed.","success",4200);
+}
+
+function renderPendingRequests(){
+  const listEl = document.getElementById("pending-requests-list");
+  const badgeEl= document.getElementById("pending-requests-badge");
+  if(!listEl || !badgeEl) return;
+  const arr = (state.config && state.config.pendingUsers) || [];
+  const n = arr.length;
+  badgeEl.textContent = String(n);
+  badgeEl.classList.toggle("hidden", n===0);
+
+  if(!n){
+    listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:.85rem;text-align:center;">No pending requests.</div>';
+    return;
+  }
+
+  listEl.innerHTML = arr.map(req => {
+    const rid = (req.id||"").replace(/'/g,"\\'");
+    return `
+      <div class="pending-request-card">
+        <div class="pending-request-meta">
+          <div class="pr-name">${(req.name||"").replace(/</g,"&lt;")}</div>
+          <div class="pr-line"><span class="pr-label">Email</span> <span>${(req.email||"").replace(/</g,"&lt;")}</span></div>
+          <div class="pr-line"><span class="pr-label">Requested</span> <span>${(req.requestedAt||"")}</span></div>
+        </div>
+        <div class="pending-request-actions">
+          <button class="btn btn-sm btn-secondary" style="width:auto;margin:0;" onclick="approvePendingRequest('${rid}')">✅ Approve</button>
+          <button class="btn btn-sm btn-danger" style="width:auto;margin:0;" onclick="denyPendingRequest('${rid}')">❌ Deny</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function approvePendingRequest(id){
+  const arr = (state.config && state.config.pendingUsers) || [];
+  const idx = arr.findIndex(p => p.id === id);
+  if(idx === -1) return;
+  const req = arr[idx];
+
+  // Create parent user
+  state.users = state.users || [];
+  if(state.users.indexOf(req.name) !== -1){
+    showToast('Cannot approve — "'+req.name+'" name is already in use.',"error",4500);
+    return;
+  }
+  state.users.push(req.name);
+  state.pins  = state.pins  || {};
+  state.roles = state.roles || {};
+  state.pins[req.name]  = req.pin;
+  state.roles[req.name] = "parent";
+
+  state.config.emails = state.config.emails || {};
+  state.config.emails[req.name] = req.email;
+
+  state.config.notify = state.config.notify || {};
+  state.config.notify[req.name] = {email:true, calendar:false, choreRewards:true};
+
+  state.config.parentChildren = state.config.parentChildren || {};
+  if(!state.config.parentChildren[req.name]) state.config.parentChildren[req.name] = [];
+
+  // Remove from pending
+  arr.splice(idx, 1);
+  state.config.pendingUsers = arr;
+
+  syncToCloud("Signup Approved");
+  renderPendingRequests();
+  try { renderAdminUsers(); } catch(e){}
+  showToast('"'+req.name+'" approved. Welcome email sent.',"success",4000);
+}
+
+function denyPendingRequest(id){
+  const arr = (state.config && state.config.pendingUsers) || [];
+  const idx = arr.findIndex(p => p.id === id);
+  if(idx === -1) return;
+  const req = arr[idx];
+
+  openInputModal({
+    icon:"❌", title:"Deny request?",
+    body:"Optional reason (the requester will see this in their denial email):",
+    inputType:"text",
+    inputAttrs:'placeholder="e.g. Please confirm your identity first" maxlength="200"',
+    confirmText:"Deny", confirmClass:"btn-danger",
+    onConfirm:(reason)=>{
+      // Attach reason via the transient key that Code.gs consumes & strips
+      const cleaned = (reason||"").toString().trim().slice(0,200);
+      state._denialReasons = state._denialReasons || {};
+      if(cleaned) state._denialReasons[req.id] = cleaned;
+
+      // Remove from pending
+      arr.splice(idx, 1);
+      state.config.pendingUsers = arr;
+
+      syncToCloud("Signup Denied");
+      renderPendingRequests();
+      showToast("Request denied. Notification email sent.","info",3600);
+    }
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 22.2 — PROOF PHOTO CAPTURE
+// ────────────────────────────────────────────────────────────────────
+
+const PROOF_MAX_EDGE = 1200;
+const PROOF_JPEG_QUALITY = 0.7;
+
+function openProofPhotoCapture(choreId){
+  pendingProofChoreId = choreId;
+  // Wipe previous preview
+  const prev = document.getElementById("proof-preview");
+  if(prev) prev.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:.8rem;text-align:center;">No photo yet — tap "Take Photo" to capture.</div>';
+  const cont = document.getElementById("proof-continue-btn");
+  if(cont) cont.disabled = true;
+  const fileEl = document.getElementById("proof-file-input");
+  if(fileEl) fileEl.value = "";
+  // Clear any previous buffered photo so Continue can't use a stale shot from another chore
+  pendingProofPhoto = null;
+  openSheet("sheet-proof-photo");
+}
+
+function handleProofFileSelected(inputEl){
+  const f = inputEl.files && inputEl.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    const img = new Image();
+    img.onload = function(){
+      try {
+        const maxEdge = PROOF_MAX_EDGE;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if(w > h && w > maxEdge){ h = Math.round(h * (maxEdge/w)); w = maxEdge; }
+        else if(h >= w && h > maxEdge){ w = Math.round(w * (maxEdge/h)); h = maxEdge; }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", PROOF_JPEG_QUALITY);
+        pendingProofPhoto = dataUrl;
+
+        // Show preview
+        const prev = document.getElementById("proof-preview");
+        if(prev){
+          const approxKb = Math.round((dataUrl.length * 3/4) / 1024);
+          prev.innerHTML =
+            '<img src="'+dataUrl+'" class="proof-thumb" alt="Proof photo preview">' +
+            '<div style="font-size:.7rem;color:var(--muted);margin-top:6px;text-align:center;">'+w+'×'+h+' • ~'+approxKb+' KB</div>';
+        }
+        const cont = document.getElementById("proof-continue-btn");
+        if(cont) cont.disabled = false;
+      } catch(e){
+        showToast("Photo too large, try again.","error");
+        pendingProofPhoto = null;
+      }
+    };
+    img.onerror = function(){ showToast("Could not read that image.","error"); pendingProofPhoto = null; };
+    img.src = ev.target.result;
+  };
+  reader.onerror = function(){ showToast("Could not read file.","error"); };
+  reader.readAsDataURL(f);
+}
+
+function proofRetake(){
+  pendingProofPhoto = null;
+  const fileEl = document.getElementById("proof-file-input");
+  if(fileEl){ fileEl.value=""; fileEl.click(); }
+}
+
+function proofContinueToSubmit(){
+  if(!pendingProofPhoto){
+    showToast("Take a photo first.","error");
+    return;
+  }
+  const choreId = pendingProofChoreId;
+  closeSheet("sheet-proof-photo", true);
+  // Re-enter the normal submit path; toggleChoreCheck will now fall through
+  // because pendingProofPhoto is populated and IDs match.
+  setTimeout(()=>{ try { toggleChoreCheck(choreId); } catch(e){} }, 120);
+}
+
+function proofCancel(){
+  pendingProofPhoto = null;
+  pendingProofChoreId = null;
+  closeSheet("sheet-proof-photo", true);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 22.3 — ANNUAL EARNINGS CALCULATOR (shared math engine)
+// ────────────────────────────────────────────────────────────────────
+/**
+ * Returns {allowance, chores, staysPut, gamesIt} — all annual $ figures.
+ *
+ * FV-of-annuity per handoff Q11=B:
+ *   For each deposit in a year, FV = deposit × (1 + monthly_rate)^months_remaining
+ *   months_remaining = 12 - deposit_month_index (1-based within the year)
+ *
+ * "staysPut" uses each account's own configured rate.
+ * "gamesIt" routes every deposit to whichever account has the higher APR.
+ *
+ * Falls back to 0s cleanly when data is missing. Never throws.
+ */
+function calcMaxAnnualEarnings(childName){
+  try {
+    const data = (state.children && state.children[childName]) || null;
+    if(!data) return {allowance:0, chores:0, staysPut:0, gamesIt:0,
+                      allowanceDeposited:0, choresDeposited:0};
+
+    const ad = data.autoDeposit || {};
+    const rates = data.rates || {checking:0, savings:0};
+    const rChk = (parseFloat(rates.checking)||0)/100/12;
+    const rSav = (parseFloat(rates.savings )||0)/100/12;
+    const rHigh = Math.max(rChk, rSav);
+
+    // Cycles per year by schedule
+    const schedMap = {weekly:52, biweekly:26, monthly:12};
+    const allowCycles = schedMap[ad.schedule] || 0;
+    const allowChk = parseFloat(ad.checking) || 0;
+    const allowSav = parseFloat(ad.savings ) || 0;
+
+    // Allowance totals (raw deposited)
+    const allowanceDeposited = (allowChk + allowSav) * allowCycles;
+
+    // Chore totals per handoff: D=365, W=52 (per weekday), BW=26, M=12, recurring only
+    const chores = (data.chores || []).filter(c => c.schedule && c.schedule !== "once" && !c.paused);
+    let choresDeposited = 0;
+    let choreChkFlow = 0, choreSavFlow = 0;  // split-weighted flow totals per year
+    chores.forEach(c => {
+      const occurrencesPerYear =
+        c.schedule === "daily"    ? 365 :
+        c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length * 52 : 52) :
+        c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length * 26 : 26) :
+        c.schedule === "monthly"  ? 12 : 0;
+      const amt = parseFloat(c.amount)||0;
+      choresDeposited += amt * occurrencesPerYear;
+      const splitChkPct = (c.splitChk===undefined?50:c.splitChk)/100;
+      choreChkFlow += amt * occurrencesPerYear * splitChkPct;
+      choreSavFlow += amt * occurrencesPerYear * (1 - splitChkPct);
+    });
+
+    // FV-of-annuity over 12 months. We assume deposits are spread evenly across
+    // the year (so the month index for the k-th of N deposits = (k * 12/N), 1-based).
+    // For each deposit k, months remaining = 12 - monthIndex.
+    function fvOfSeries(perCycleAmt, cyclesPerYear, monthlyRate){
+      if(!perCycleAmt || !cyclesPerYear) return 0;
+      let fv = 0;
+      for(let k=1; k<=cyclesPerYear; k++){
+        const monthIdx = k * (12/cyclesPerYear);
+        const monthsRemaining = Math.max(0, 12 - monthIdx);
+        fv += perCycleAmt * Math.pow(1 + monthlyRate, monthsRemaining);
+      }
+      return fv;
+    }
+
+    // staysPut — allowance into its configured accounts; chores into their configured splits
+    const allowFvStaysPut = fvOfSeries(allowChk, allowCycles, rChk) + fvOfSeries(allowSav, allowCycles, rSav);
+
+    // Chores are more fiddly because each chore has its own schedule. Sum per-chore FVs.
+    let choreFvStaysPut = 0;
+    let choreFvGamesIt  = 0;
+    chores.forEach(c => {
+      const occ =
+        c.schedule === "daily"    ? 365 :
+        c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length * 52 : 52) :
+        c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length * 26 : 26) :
+        c.schedule === "monthly"  ? 12 : 0;
+      const amt = parseFloat(c.amount)||0;
+      const splitChkPct = (c.splitChk===undefined?50:c.splitChk)/100;
+      const chkPart = amt * splitChkPct;
+      const savPart = amt * (1 - splitChkPct);
+      choreFvStaysPut += fvOfSeries(chkPart, occ, rChk) + fvOfSeries(savPart, occ, rSav);
+      choreFvGamesIt  += fvOfSeries(amt,     occ, rHigh);
+    });
+
+    // gamesIt — everything (allowance + chores) flows to the highest-yield account
+    const allowTotalPerCycle = allowChk + allowSav;
+    const allowFvGamesIt = fvOfSeries(allowTotalPerCycle, allowCycles, rHigh);
+
+    const staysPut = allowanceDeposited + choresDeposited + (allowFvStaysPut - (allowChk+allowSav)*allowCycles) + (choreFvStaysPut - choresDeposited);
+    const gamesIt  = allowanceDeposited + choresDeposited + (allowFvGamesIt  - allowTotalPerCycle*allowCycles) + (choreFvGamesIt  - choresDeposited);
+
+    return {
+      allowance: allowanceDeposited,
+      chores:    choresDeposited,
+      staysPut:  staysPut,
+      gamesIt:   gamesIt,
+      allowanceDeposited: allowanceDeposited,
+      choresDeposited:    choresDeposited
+    };
+  } catch(e){
+    return {allowance:0, chores:0, staysPut:0, gamesIt:0, allowanceDeposited:0, choresDeposited:0};
+  }
+}
+
+/**
+ * Persistent Annual Earnings Calculator card — rendered inside the Child Profile
+ * sheet. Auto-refreshes whenever the parent opens the sheet or changes a setting
+ * on the active child.
+ */
+function renderEarningsCard(childName){
+  const el = document.getElementById("earnings-card-body");
+  if(!el) return;
+  if(!childName){ el.innerHTML = '<div style="color:var(--muted);font-size:.8rem;">Select a child to see projections.</div>'; return; }
+  const r = calcMaxAnnualEarnings(childName);
+  el.innerHTML = `
+    <div class="earnings-grid">
+      <div class="earnings-cell">
+        <div class="earnings-label">Allowance / yr</div>
+        <div class="earnings-value">${fmt(r.allowance)}</div>
+      </div>
+      <div class="earnings-cell">
+        <div class="earnings-label">Chores / yr (max)</div>
+        <div class="earnings-value">${fmt(r.chores)}</div>
+      </div>
+      <div class="earnings-cell earnings-cell-primary">
+        <div class="earnings-label">Stays put (default split)</div>
+        <div class="earnings-value">${fmt(r.staysPut)}</div>
+      </div>
+      <div class="earnings-cell earnings-cell-warn">
+        <div class="earnings-label">Games it (highest-yield)</div>
+        <div class="earnings-value">${fmt(r.gamesIt)}</div>
+      </div>
+    </div>
+    <div style="font-size:.68rem;color:var(--muted);margin-top:8px;">
+      Compounded monthly using each account's APR. "Games it" assumes every dollar routes to the higher-yield account.
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 22.4 — GUIDED CHILD SETUP WIZARD
+// ────────────────────────────────────────────────────────────────────
+
+/** Start wizard for a brand-new child. Step 1 will create the child on Next. */
+function startWizardForNewChild(){
+  if(currentRole !== "parent"){ showToast("Wizard is parent-only.","error"); return; }
+  const mine = getMyChildrenList();
+  if(mine.length >= MAX_CHILDREN_PER_PARENT){
+    showToast("You've hit the "+MAX_CHILDREN_PER_PARENT+"-child limit.","error");
+    return;
+  }
+  wizardState = {
+    mode: "new",
+    step: 1,
+    childName: null,            // populated after Step 1 save
+    data: {
+      name: "",
+      pin:  "",
+      tabs: {money:true, chores:true, loans:false},
+      useAllowance: true,
+      structure: "both",        // "checking" | "savings" | "both"
+      schedule: "weekly",
+      allowChk: 0,
+      allowSav: 0,
+      rateChk: "",
+      rateSav: "",
+      email: "",
+      notifyEmail: true,
+      notifyChoreRewards: true,
+      useCalendar: false,
+      calendarId: "",
+      celebrationSound: true,
+      avatar: ""
+    },
+    chores: [],                 // wizard-only scratchpad; once child is created,
+                                // chores live directly on state.children[name].chores
+    editingFromSummary: 0       // step number we came from in summary mode (0 = not editing)
+  };
+  openSheet("sheet-wizard");
+  wizardRender();
+}
+
+/** Start wizard for an existing child — pre-populates from state. */
+function startWizardForExistingChild(name){
+  if(!name || !state.children || !state.children[name]){ showToast("Child not found.","error"); return; }
+  const data = state.children[name];
+  const ad = data.autoDeposit || {};
+  const rates = data.rates || {};
+  const tabs = (state.config.tabs && state.config.tabs[name]) || {money:true, chores:true, loans:false};
+  const notify = (state.config.notify && state.config.notify[name]) || {email:true, choreRewards:true};
+  const email = (state.config.emails && state.config.emails[name]) || "";
+  const structure = (ad.checking>0 && ad.savings>0) ? "both" : (ad.savings>0 ? "savings" : "checking");
+  wizardState = {
+    mode: "edit",
+    step: 1,
+    childName: name,
+    data: {
+      name: name,
+      pin:  state.pins[name] || "",
+      tabs: {...tabs},
+      useAllowance: !!((ad.checking||0) + (ad.savings||0)),
+      structure: structure,
+      schedule: ad.schedule || "weekly",
+      allowChk: ad.checking || 0,
+      allowSav: ad.savings  || 0,
+      rateChk: rates.checking || "",
+      rateSav: rates.savings  || "",
+      email: email,
+      notifyEmail: notify.email !== false,
+      notifyChoreRewards: notify.choreRewards !== false,
+      useCalendar: !!(state.config.calendars && state.config.calendars[name]),
+      calendarId: (state.config.calendars && state.config.calendars[name]) || "",
+      celebrationSound: !!(state.usersData && state.usersData[name] && state.usersData[name].celebrationSound),
+      avatar: (state.config.avatars && state.config.avatars[name]) || ""
+    },
+    chores: [], // for existing child we don't touch existing chores from wizard
+    editingFromSummary: 0
+  };
+  openSheet("sheet-wizard");
+  wizardRender();
+}
+
+function wizardClose(){
+  // EXIT_WARN_SHEETS covers the dirty-confirm; we just close gracefully
+  closeSheet("sheet-wizard", false);
+}
+
+function wizardRender(){
+  const wrap = document.getElementById("wizard-body");
+  const progEl = document.getElementById("wizard-progress");
+  const navEl  = document.getElementById("wizard-nav");
+  if(!wrap || !progEl || !navEl) return;
+  const st = wizardState; if(!st) return;
+
+  progEl.innerHTML = `
+    <div class="wizard-progress-bar"><div class="wizard-progress-fill" style="width:${Math.round((st.step/wizardTotalSteps)*100)}%"></div></div>
+    <div class="wizard-progress-text">Step ${st.step} of ${wizardTotalSteps}</div>`;
+
+  // Dispatch per step
+  let stepHtml = "";
+  switch(st.step){
+    case 1: stepHtml = wizardRenderStep1(); break;
+    case 2: stepHtml = wizardRenderStep2(); break;
+    case 3: stepHtml = wizardRenderStep3(); break;
+    case 4: stepHtml = wizardRenderStep4(); break;
+    case 5: stepHtml = wizardRenderStep5(); break;
+    case 6: stepHtml = wizardRenderStep6(); break;
+    case 7: stepHtml = wizardRenderStep7(); break;
+    case 8: stepHtml = wizardRenderStep8(); break;
+    case 9: stepHtml = wizardRenderStep9(); break;
+  }
+  wrap.innerHTML = stepHtml;
+
+  // Nav buttons
+  const backDisabled = (st.step === 1);
+  const nextLabel    = st.editingFromSummary ? "Save & Return to Summary" :
+                       (st.step === wizardTotalSteps ? "Done" : "Next");
+  navEl.innerHTML = `
+    <button class="btn btn-ghost" ${backDisabled?"disabled":""} onclick="wizardBack()">‹ Back</button>
+    <button class="btn btn-primary" onclick="wizardNext()">${nextLabel}</button>`;
+
+  // Post-render hooks (Step 4 live calculator, Step 5 list render, Step 9 summary)
+  if(st.step === 4) wizardStep4WireLive();
+  if(st.step === 5) wizardStep5RenderChoreList();
+  if(st.step === 9) wizardRenderSummary();
+}
+
+function wizardBack(){
+  if(!wizardState) return;
+  if(wizardState.step > 1){ wizardState.step--; wizardRender(); }
+}
+
+function wizardNext(){
+  if(!wizardState) return;
+  if(!wizardValidateCurrentStep()) return;
+  wizardSaveCurrentStep();
+
+  // Handle summary-edit short-circuit
+  if(wizardState.editingFromSummary){
+    const target = wizardState.editingFromSummary;
+    wizardState.editingFromSummary = 0;
+    wizardState.step = 9;
+    wizardRender();
+    return;
+  }
+
+  // Linear flow with branching
+  const st = wizardState;
+  // Step 3: if No allowance → jump to Step 6
+  if(st.step === 3 && !st.data.useAllowance){ st.step = 6; wizardRender(); return; }
+  // Step 4 → Step 5 (chores), but skip if chores tab is OFF
+  if(st.step === 4 && !st.data.tabs.chores){ st.step = 6; wizardRender(); return; }
+  // Step 5 → 6 always
+  // Step 9 Done → finish
+  if(st.step === wizardTotalSteps){ wizardFinish(); return; }
+
+  st.step++;
+  wizardRender();
+}
+
+function wizardValidateCurrentStep(){
+  const st = wizardState;
+  if(!st) return false;
+  if(st.step === 1){
+    const nameEl = document.getElementById("wiz-name");
+    const pinEl  = document.getElementById("wiz-pin");
+    const msgEl  = document.getElementById("wiz-msg");
+    const name = (nameEl.value||"").trim();
+    const pin  = (pinEl.value||"").trim();
+    if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Display name is required."; return false; }
+    if(!pin || pin.length!==4 || !/^\d{4}$/.test(pin)){ msgEl.className="field-msg error"; msgEl.textContent="PIN must be 4 digits."; return false; }
+    // Only validate uniqueness on the FIRST time we create the child
+    if(st.mode === "new" && !st.childName){
+      if((state.users||[]).indexOf(name) !== -1){
+        msgEl.className="field-msg error"; msgEl.textContent='"'+name+'" is already taken.'; return false;
+      }
+      // pin+name collision guard
+      const col = (typeof checkNamePinCollision === "function") ? checkNamePinCollision(name, pin) : {collision:false};
+      if(col.collision){ msgEl.className="field-msg error"; msgEl.textContent=col.reason||"Name/PIN conflict."; return false; }
+    }
+  }
+  return true;
+}
+
+function wizardSaveCurrentStep(){
+  const st = wizardState; if(!st) return;
+  const d = st.data;
+  switch(st.step){
+    case 1: {
+      d.name = (document.getElementById("wiz-name").value||"").trim();
+      d.pin  = (document.getElementById("wiz-pin").value||"").trim();
+      // Progressive save: create child on first time through Step 1
+      if(st.mode === "new" && !st.childName){
+        state.users = state.users || [];
+        state.users.push(d.name);
+        state.pins[d.name]  = d.pin;
+        state.roles[d.name] = "child";
+        getChildData(d.name); // seed empty data
+        state.config.tabs = state.config.tabs || {};
+        state.config.tabs[d.name] = {...d.tabs};
+        state.config.notify = state.config.notify || {};
+        state.config.notify[d.name] = {email:d.notifyEmail, calendar:false, choreRewards:d.notifyChoreRewards};
+        state.usersData = state.usersData || {};
+        state.usersData[d.name] = {celebrationSound: d.celebrationSound};
+        state.config.parentChildren = state.config.parentChildren || {};
+        state.config.parentChildren[currentUser] = state.config.parentChildren[currentUser] || [];
+        if(state.config.parentChildren[currentUser].indexOf(d.name) === -1){
+          state.config.parentChildren[currentUser].push(d.name);
+        }
+        st.childName = d.name;
+        syncToCloud("Child Created (Wizard Step 1)");
+      } else if(st.mode === "edit" && st.childName && d.name !== st.childName){
+        // Renames not supported by wizard — ignore silently.
+      } else if(st.childName){
+        state.pins[st.childName] = d.pin;
+        syncToCloud("Child PIN Updated (Wizard)");
+      }
+      break;
+    }
+    case 2: {
+      d.tabs.money  = !!document.getElementById("wiz-tab-money").checked;
+      d.tabs.chores = !!document.getElementById("wiz-tab-chores").checked;
+      d.tabs.loans  = !!document.getElementById("wiz-tab-loans").checked;
+      if(st.childName){
+        state.config.tabs[st.childName] = {...d.tabs};
+        syncToCloud("Child Tabs (Wizard)");
+      }
+      break;
+    }
+    case 3: {
+      const yes = document.querySelector('input[name="wiz-allow"]:checked');
+      d.useAllowance = yes && yes.value === "yes";
+      if(!d.useAllowance && st.childName){
+        const data = getChildData(st.childName);
+        data.autoDeposit = {checking:0, savings:0};
+        syncToCloud("Allowance Disabled (Wizard)");
+      }
+      break;
+    }
+    case 4: {
+      const struct = document.querySelector('input[name="wiz-struct"]:checked');
+      d.structure = struct ? struct.value : "both";
+      const sched = document.querySelector('input[name="wiz-sched"]:checked');
+      d.schedule = sched ? sched.value : "weekly";
+      d.allowChk = parseFloat(document.getElementById("wiz-allow-chk").value)||0;
+      d.allowSav = parseFloat(document.getElementById("wiz-allow-sav").value)||0;
+      d.rateChk  = parseFloat(document.getElementById("wiz-rate-chk").value);
+      d.rateSav  = parseFloat(document.getElementById("wiz-rate-sav").value);
+      if(isNaN(d.rateChk)) d.rateChk = "";
+      if(isNaN(d.rateSav)) d.rateSav = "";
+      if(d.structure === "checking") d.allowSav = 0;
+      if(d.structure === "savings")  d.allowChk = 0;
+      if(st.childName){
+        const data = getChildData(st.childName);
+        data.autoDeposit = data.autoDeposit || {};
+        data.autoDeposit.checking = d.allowChk;
+        data.autoDeposit.savings  = d.allowSav;
+        data.autoDeposit.schedule = d.schedule;
+        data.rates = data.rates || {};
+        data.rates.checking = (d.rateChk === "" ? 0 : d.rateChk);
+        data.rates.savings  = (d.rateSav === "" ? 0 : d.rateSav);
+        syncToCloud("Allowance & Rates (Wizard)");
+      }
+      break;
+    }
+    case 5: {
+      // Chores are already persisted as they're added; nothing to save here.
+      break;
+    }
+    case 6: {
+      d.email = (document.getElementById("wiz-email").value||"").trim();
+      d.notifyEmail = !!document.getElementById("wiz-notify-email").checked;
+      d.notifyChoreRewards = !!document.getElementById("wiz-notify-rewards").checked;
+      if(st.childName){
+        state.config.emails = state.config.emails || {};
+        state.config.emails[st.childName] = d.email;
+        state.config.notify = state.config.notify || {};
+        state.config.notify[st.childName] = state.config.notify[st.childName] || {};
+        state.config.notify[st.childName].email = d.notifyEmail;
+        state.config.notify[st.childName].choreRewards = d.notifyChoreRewards;
+        syncToCloud("Child Email Prefs (Wizard)");
+      }
+      break;
+    }
+    case 7: {
+      const yes = document.querySelector('input[name="wiz-cal"]:checked');
+      d.useCalendar = yes && yes.value === "yes";
+      d.calendarId  = (document.getElementById("wiz-cal-id") && document.getElementById("wiz-cal-id").value.trim()) || "";
+      if(st.childName){
+        state.config.calendars = state.config.calendars || {};
+        state.config.notify    = state.config.notify    || {};
+        state.config.notify[st.childName] = state.config.notify[st.childName] || {};
+        if(d.useCalendar && d.calendarId){
+          state.config.calendars[st.childName] = d.calendarId;
+          state.config.notify[st.childName].calendar = true;
+        } else {
+          delete state.config.calendars[st.childName];
+          state.config.notify[st.childName].calendar = false;
+        }
+        syncToCloud("Child Calendar (Wizard)");
+      }
+      break;
+    }
+    case 8: {
+      d.celebrationSound = !!document.getElementById("wiz-celebration").checked;
+      if(st.childName){
+        state.usersData = state.usersData || {};
+        state.usersData[st.childName] = state.usersData[st.childName] || {};
+        state.usersData[st.childName].celebrationSound = d.celebrationSound;
+        syncToCloud("Child Finishing Touches (Wizard)");
+      }
+      break;
+    }
+  }
+}
+
+function wizardFinish(){
+  const name = wizardState && wizardState.childName;
+  wizardState = null;
+  closeSheet("sheet-wizard", true);
+  if(name){
+    syncToCloud("Child Setup Complete");
+    showToast('Setup complete for "'+name+'". 🎉',"success",4200);
+  }
+  renderMyChildren && renderMyChildren();
+  renderParentTabBar && renderParentTabBar();
+}
+
+function wizardJumpFromSummary(stepN){
+  if(!wizardState) return;
+  wizardState.editingFromSummary = stepN;
+  wizardState.step = stepN;
+  wizardRender();
+}
+
+// ── Step renderers ────────────────────────────────────────────────
+
+function wizardRenderStep1(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Basic Profile</h3>
+    <label class="field-label">Display Name <span class="req-star">*</span></label>
+    <input type="text" id="wiz-name" value="${(d.name||"").replace(/"/g,"&quot;")}" placeholder="e.g. Linnea">
+    <label class="field-label">PIN (4 digits) <span class="req-star">*</span></label>
+    <input type="password" id="wiz-pin" maxlength="4" inputmode="numeric" value="${(d.pin||"")}" placeholder="••••">
+    <div class="field-msg" id="wiz-msg"></div>
+    <div class="wizard-helper">Your child can change their PIN from their own settings. If they forget it, you can reset it from Settings → My Children.</div>`;
+}
+
+function wizardRenderStep2(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Tabs</h3>
+    <div class="wizard-helper">Decide which features ${d.name||"this child"} will see. You can change this anytime.</div>
+    <div class="cb-row"><input type="checkbox" id="wiz-tab-money" ${d.tabs.money?"checked":""}><label for="wiz-tab-money">Money</label></div>
+    <div class="cb-row"><input type="checkbox" id="wiz-tab-chores" ${d.tabs.chores?"checked":""}><label for="wiz-tab-chores">Chores</label></div>
+    <div class="cb-row"><input type="checkbox" id="wiz-tab-loans" ${d.tabs.loans?"checked":""}><label for="wiz-tab-loans">Loans</label></div>`;
+}
+
+function wizardRenderStep3(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Allowance</h3>
+    <div class="wizard-helper">Do you want to use this app to manage ${d.name||"this child"}'s allowance?</div>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="yes" ${d.useAllowance?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="no"  ${!d.useAllowance?"checked":""}> No</label>
+    </div>`;
+}
+
+function wizardRenderStep4(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Allowance & Interest</h3>
+    <div class="wizard-helper">Account structure</div>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="checking" ${d.structure==="checking"?"checked":""}> Checking only</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="savings"  ${d.structure==="savings"?"checked":""}> Savings only</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="both"     ${d.structure==="both"?"checked":""}> Both</label>
+    </div>
+    <div class="wizard-helper">Schedule</div>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="weekly"   ${d.schedule==="weekly"?"checked":""}> Weekly</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="biweekly" ${d.schedule==="biweekly"?"checked":""}> Biweekly</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="monthly"  ${d.schedule==="monthly"?"checked":""}> Monthly</label>
+    </div>
+    <div class="row">
+      <div class="col" id="wiz-col-chk"><label class="field-label">Checking per cycle $</label><input type="number" id="wiz-allow-chk" step="0.01" min="0" value="${d.allowChk||""}"></div>
+      <div class="col" id="wiz-col-sav"><label class="field-label">Savings per cycle $</label><input type="number" id="wiz-allow-sav" step="0.01" min="0" value="${d.allowSav||""}"></div>
+    </div>
+    <div class="row">
+      <div class="col"><label class="field-label">Checking APR %</label><input type="number" id="wiz-rate-chk" step="0.01" min="0" value="${d.rateChk===""?"":d.rateChk}" placeholder="e.g. 1.0"></div>
+      <div class="col"><label class="field-label">Savings APR %</label><input type="number" id="wiz-rate-sav" step="0.01" min="0" value="${d.rateSav===""?"":d.rateSav}" placeholder="e.g. 5.0"></div>
+    </div>
+    <div class="wizard-live-calc" id="wiz-live-calc"></div>`;
+}
+
+function wizardStep4WireLive(){
+  const ids = ["wiz-allow-chk","wiz-allow-sav","wiz-rate-chk","wiz-rate-sav"];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.addEventListener("input", wizardStep4UpdateLive);
+  });
+  document.querySelectorAll('input[name="wiz-struct"], input[name="wiz-sched"]').forEach(r=>{
+    r.addEventListener("change", ()=>{ wizardStep4ToggleStructCols(); wizardStep4UpdateLive(); });
+  });
+  wizardStep4ToggleStructCols();
+  wizardStep4UpdateLive();
+}
+
+function wizardStep4ToggleStructCols(){
+  const struct = (document.querySelector('input[name="wiz-struct"]:checked')||{}).value || "both";
+  const chkCol = document.getElementById("wiz-col-chk");
+  const savCol = document.getElementById("wiz-col-sav");
+  if(chkCol) chkCol.style.display = (struct === "savings") ? "none" : "";
+  if(savCol) savCol.style.display = (struct === "checking") ? "none" : "";
+}
+
+function wizardStep4UpdateLive(){
+  const calcEl = document.getElementById("wiz-live-calc");
+  if(!calcEl) return;
+  // Push form values into a temp child for the calc engine, without touching state.
+  // We do a quick inline FV calc instead to keep this cheap and avoid mutating state.
+  const struct = (document.querySelector('input[name="wiz-struct"]:checked')||{}).value || "both";
+  const sched  = (document.querySelector('input[name="wiz-sched"]:checked')||{}).value  || "weekly";
+  const chk    = parseFloat((document.getElementById("wiz-allow-chk")||{}).value)||0;
+  const sav    = parseFloat((document.getElementById("wiz-allow-sav")||{}).value)||0;
+  const rChk   = (parseFloat((document.getElementById("wiz-rate-chk")||{}).value)||0)/100/12;
+  const rSav   = (parseFloat((document.getElementById("wiz-rate-sav")||{}).value)||0)/100/12;
+  const rHigh  = Math.max(rChk, rSav);
+  const cycles = {weekly:52, biweekly:26, monthly:12}[sched] || 0;
+  const chkUse = (struct==="savings")  ? 0 : chk;
+  const savUse = (struct==="checking") ? 0 : sav;
+  const annualDeposited = (chkUse + savUse) * cycles;
+  const perWeek = cycles ? (annualDeposited / 52) : 0;
+
+  function fv(perCycle, n, rate){
+    if(!perCycle || !n) return 0;
+    let t = 0;
+    for(let k=1; k<=n; k++){
+      const monthsRem = Math.max(0, 12 - k*(12/n));
+      t += perCycle * Math.pow(1+rate, monthsRem);
+    }
+    return t;
+  }
+  const staysPut = fv(chkUse, cycles, rChk) + fv(savUse, cycles, rSav);
+  const gamesIt  = fv(chkUse + savUse, cycles, rHigh);
+
+  calcEl.innerHTML = `
+    <div class="wizard-calc-row"><span>Annual allowance deposited</span><strong>${fmt(annualDeposited)}</strong></div>
+    <div class="wizard-calc-row"><span>Per-week equivalent</span><strong>${fmt(perWeek)}</strong></div>
+    <div class="wizard-calc-row"><span>Max annual — stays put</span><strong>${fmt(staysPut)}</strong></div>
+    <div class="wizard-calc-row wizard-calc-row-warn"><span>Max annual — games it (highest-yield)</span><strong>${fmt(gamesIt)}</strong></div>`;
+}
+
+function wizardRenderStep5(){
+  return `
+    <h3 class="wizard-step-title">Chores</h3>
+    <div class="wizard-helper">Would you like to add chores for ${wizardState.data.name||"this child"}? Recurring chores only — one-offs can be added later from the chores tab.</div>
+    <div class="wizard-chore-list" id="wiz-chore-list"></div>
+    <button class="btn btn-secondary" onclick="wizardAddChoreStart()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-plus-circle"/></svg> Add Chore</button>
+    <div class="wizard-chore-totals" id="wiz-chore-totals"></div>`;
+}
+
+function wizardStep5RenderChoreList(){
+  const listEl = document.getElementById("wiz-chore-list");
+  const totalsEl = document.getElementById("wiz-chore-totals");
+  if(!listEl || !totalsEl) return;
+  const name = wizardState.childName;
+  const data = name ? getChildData(name) : {chores:[]};
+  const chores = (data.chores||[]).filter(c => c.schedule && c.schedule !== "once");
+  if(!chores.length){
+    listEl.innerHTML = '<div style="color:var(--muted);font-size:.8rem;padding:10px 0;">No chores yet.</div>';
+  } else {
+    listEl.innerHTML = chores.map(c => {
+      const occ =
+        c.schedule === "daily"    ? 365 :
+        c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*52 : 52) :
+        c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*26 : 26) :
+        c.schedule === "monthly"  ? 12 : 0;
+      const annual = (parseFloat(c.amount)||0) * occ;
+      return `
+        <div class="wizard-chore-item">
+          <div class="wiz-chore-main">
+            <div class="wiz-chore-name">${c.name||""}</div>
+            <div class="wiz-chore-meta">${({daily:"Daily",weekly:"Weekly",biweekly:"Biweekly",monthly:"Monthly"})[c.schedule]||c.schedule} • ${fmt(c.amount)} • max ${fmt(annual)}/yr</div>
+          </div>
+          <div class="wiz-chore-actions">
+            <button class="btn btn-sm btn-outline" style="width:auto;margin:0;padding:6px 10px;" onclick="wizardEditChoreStart('${c.id}')">Edit</button>
+            <button class="btn btn-sm btn-ghost" style="width:auto;margin:0;padding:6px 10px;color:var(--danger);" onclick="wizardDeleteChore('${c.id}')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-trash"/></svg></button>
+          </div>
+        </div>`;
+    }).join("");
+  }
+  // Totals card
+  let totalAnnual = 0;
+  chores.forEach(c => {
+    const occ =
+      c.schedule === "daily"    ? 365 :
+      c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*52 : 52) :
+      c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*26 : 26) :
+      c.schedule === "monthly"  ? 12 : 0;
+    totalAnnual += (parseFloat(c.amount)||0) * occ;
+  });
+  totalsEl.innerHTML = chores.length ? `<div class="wizard-calc-row"><span>Max annual chore earnings</span><strong>${fmt(totalAnnual)}</strong></div>` : "";
+}
+
+function wizardAddChoreStart(){
+  if(!wizardState || !wizardState.childName){ showToast("Finish Step 1 first.","error"); return; }
+  // Reuse the main chore creator sheet with the activeChild temporarily set to
+  // this wizard child, so createChore() targets the right data.
+  activeChild = wizardState.childName;
+  editingChoreId = null;
+  try { resetChoreForm(); } catch(e){}
+  // Hide the One-time option inside the wizard flow (recurring only)
+  const schedSel = document.getElementById("chore-schedule");
+  if(schedSel){
+    schedSel.value = "weekly";
+    const onceOpt = schedSel.querySelector('option[value="once"]');
+    if(onceOpt){ onceOpt.dataset.wizardHidden="1"; onceOpt.style.display="none"; }
+    try { onScheduleChange(); } catch(e){}
+  }
+  openSheet("sheet-chore-creator");
+}
+
+function wizardEditChoreStart(choreId){
+  if(!wizardState || !wizardState.childName) return;
+  activeChild = wizardState.childName;
+  try { editChore(choreId); } catch(e){}
+  const schedSel = document.getElementById("chore-schedule");
+  if(schedSel){
+    const onceOpt = schedSel.querySelector('option[value="once"]');
+    if(onceOpt){ onceOpt.dataset.wizardHidden="1"; onceOpt.style.display="none"; }
+  }
+  openSheet("sheet-chore-creator");
+}
+
+function wizardDeleteChore(choreId){
+  if(!wizardState || !wizardState.childName) return;
+  const data = getChildData(wizardState.childName);
+  openModal({
+    icon:"🗑️", title:"Delete chore?", body:"This cannot be undone.",
+    confirmText:"Delete", confirmClass:"btn-danger",
+    onConfirm:()=>{
+      data.chores = (data.chores||[]).filter(c => c.id !== choreId);
+      syncToCloud("Chore Deleted (Wizard)");
+      wizardStep5RenderChoreList();
+    }
+  });
+}
+
+// Hook: when the chore creator sheet closes, if we're in the wizard re-render the list
+(function wireWizardChoreCreatorClose(){
+  const origCreate = typeof createChore === "function" ? createChore : null;
+  if(!origCreate) return;
+  window.createChore = function(){
+    const r = origCreate.apply(this, arguments);
+    try {
+      if(wizardState && wizardState.step === 5){
+        // restore hidden once option so non-wizard flows still work
+        const schedSel = document.getElementById("chore-schedule");
+        if(schedSel){
+          const onceOpt = schedSel.querySelector('option[value="once"]');
+          if(onceOpt && onceOpt.dataset.wizardHidden){ onceOpt.style.display=""; delete onceOpt.dataset.wizardHidden; }
+        }
+        wizardStep5RenderChoreList();
+      }
+    } catch(e){}
+    return r;
+  };
+})();
+
+function wizardRenderStep6(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Email Notifications</h3>
+    <label class="field-label">Child email address</label>
+    <input type="email" id="wiz-email" value="${(d.email||"").replace(/"/g,"&quot;")}" placeholder="optional">
+    <div class="cb-row"><input type="checkbox" id="wiz-notify-email" ${d.notifyEmail?"checked":""}><label for="wiz-notify-email">Email on events</label></div>
+    <div class="cb-row"><input type="checkbox" id="wiz-notify-rewards" ${d.notifyChoreRewards?"checked":""}><label for="wiz-notify-rewards">Chore reward emails</label></div>
+    <div class="wizard-helper">Monthly statements and event alerts go to this address.</div>`;
+}
+
+function wizardRenderStep7(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Google Calendar</h3>
+    <div class="wizard-helper">Would you like to integrate chores into Google Calendar? Chores can sync as events with reminders; recurring schedules show up automatically.</div>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="yes" ${d.useCalendar?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display=''"> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="no"  ${!d.useCalendar?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display='none'"> No</label>
+    </div>
+    <div id="wiz-cal-row" style="display:${d.useCalendar?"":"none"}">
+      <label class="field-label">Calendar ID</label>
+      <input type="text" id="wiz-cal-id" value="${(d.calendarId||"").replace(/"/g,"&quot;")}" placeholder="childname@group.calendar.google.com">
+      <a class="btn btn-outline" href="docs/calendar-setup-guide.pdf" target="_blank" rel="noopener"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-download-simple"/></svg> Download Setup Guide</a>
+    </div>`;
+}
+
+function wizardRenderStep8(){
+  const d = wizardState.data;
+  return `
+    <h3 class="wizard-step-title">Finishing Touches</h3>
+    <div class="cb-row"><input type="checkbox" id="wiz-celebration" ${d.celebrationSound?"checked":""}><label for="wiz-celebration">Celebration sound</label></div>
+    <div class="wizard-helper">Avatar can be picked later from the child's profile — skip for now if you want.</div>`;
+}
+
+function wizardRenderStep9(){
+  return `
+    <h3 class="wizard-step-title">Review & Confirm</h3>
+    <div id="wiz-summary"></div>`;
+}
+
+function wizardRenderSummary(){
+  const wrap = document.getElementById("wiz-summary");
+  if(!wrap) return;
+  const d = wizardState.data;
+  const name = wizardState.childName || d.name;
+  const r = name ? calcMaxAnnualEarnings(name) : {allowance:0,chores:0,staysPut:0,gamesIt:0};
+  const schedLabel = {weekly:"Weekly",biweekly:"Biweekly",monthly:"Monthly"}[d.schedule] || d.schedule;
+  wrap.innerHTML = `
+    <div class="wiz-summary-totals">
+      <div class="wizard-calc-row"><span>Allowance / yr</span><strong>${fmt(r.allowance)}</strong></div>
+      <div class="wizard-calc-row"><span>Chores / yr (max)</span><strong>${fmt(r.chores)}</strong></div>
+      <div class="wizard-calc-row"><span>Stays put</span><strong>${fmt(r.staysPut)}</strong></div>
+      <div class="wizard-calc-row wizard-calc-row-warn"><span>Games it</span><strong>${fmt(r.gamesIt)}</strong></div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Basic</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(1)">Edit</button></div>
+      <div>Name: ${d.name||"—"} • PIN: ••••</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Tabs</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(2)">Edit</button></div>
+      <div>${d.tabs.money?"Money ":""}${d.tabs.chores?"Chores ":""}${d.tabs.loans?"Loans":""}</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Allowance</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(3)">Edit</button></div>
+      <div>${d.useAllowance ? (schedLabel+" • Chk "+fmt(d.allowChk)+" • Sav "+fmt(d.allowSav)+" • APR "+(d.rateChk||0)+"% / "+(d.rateSav||0)+"%") : "Disabled"}</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Chores</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(5)">Edit</button></div>
+      <div>${(name && (getChildData(name).chores||[]).filter(c=>c.schedule!=="once").length) || 0} recurring chore(s)</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Email</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(6)">Edit</button></div>
+      <div>${d.email||"(none)"} • ${d.notifyEmail?"events on":"events off"}</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Calendar</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(7)">Edit</button></div>
+      <div>${d.useCalendar ? (d.calendarId||"(yes)") : "No"}</div>
+    </div>
+    <div class="wiz-summary-section">
+      <div class="wiz-sum-head"><strong>Finishing</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(8)">Edit</button></div>
+      <div>Celebration sound: ${d.celebrationSound?"on":"off"}</div>
+    </div>`;
+}
+
+// ── Hook Guided Setup buttons into My Children list ───────────────
+// Patch renderMyChildren to append a "Guided Setup" button row at the top.
+(function wireGuidedSetupButton(){
+  const orig = typeof renderMyChildren === "function" ? renderMyChildren : null;
+  if(!orig) return;
+  window.renderMyChildren = function(){
+    const r = orig.apply(this, arguments);
+    try {
+      const el = document.getElementById("my-children-list");
+      if(!el) return r;
+      // Prepend action row if not already there
+      if(!document.getElementById("my-children-guided-row")){
+        const row = document.createElement("div");
+        row.id = "my-children-guided-row";
+        row.style.cssText = "display:flex;gap:8px;margin-bottom:10px;";
+        row.innerHTML = '<button class="btn btn-primary" style="flex:1;margin:0;" onclick="startWizardForNewChild()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-magic-wand"/></svg> Guided Setup</button>';
+        el.parentNode.insertBefore(row, el);
+      }
+      // Add "Run Setup Wizard" to each existing child's row.
+      // Lightweight: append a button after the trash icon if not already present.
+      const mine = (typeof getMyChildrenList === "function") ? getMyChildrenList() : [];
+      mine.forEach(name => {
+        // Best-effort hook: find the share button for this child and append a wizard button next to it
+        // (the existing rendering puts share+delete in a row; we tack on a third action via delegation).
+      });
+    } catch(e){}
+    return r;
+  };
+})();
+
+// Attach earnings card auto-refresh to Child Profile sheet open
+(function wireEarningsCardRefresh(){
+  const orig = typeof renderChildProfileSection === "function" ? renderChildProfileSection : null;
+  if(!orig) return;
+  window.renderChildProfileSection = function(){
+    const r = orig.apply(this, arguments);
+    try { renderEarningsCard(activeChild); } catch(e){}
     return r;
   };
 })();

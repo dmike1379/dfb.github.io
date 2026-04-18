@@ -93,6 +93,11 @@
 
       <button class="btn btn-primary" onclick="attemptLogin()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-sign-in"/></svg> Log In</button>
 
+      <!-- v33.0 — Request an account (parent signup request) -->
+      <div class="text-center" style="margin-top:10px;">
+        <button class="admin-link" onclick="openSignupRequest()" type="button">Request an account</button>
+      </div>
+
       <div class="text-center" style="margin-top:14px;">
         <span class="status-pill" id="status-pill">
           <span class="status-dot loading" id="status-dot"></span>
@@ -432,6 +437,22 @@
     <div id="admin-user-list"></div>
       </div><!-- /collapsible-body (User Management) -->
     </div><!-- /collapsible-card -->
+
+    <!-- v33.0 — Pending Requests (parent account signup requests) -->
+    <div class="collapsible-card" id="cc-pending-requests">
+      <div class="collapsible-header" onclick="toggleCollapsible('cc-pending-requests')">
+        <h3 style="margin:0;">
+          <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user-plus"/></svg>
+          Pending Requests
+          <span id="pending-requests-badge" class="pending-badge hidden">0</span>
+        </h3>
+        <span class="collapsible-chevron">▾</span>
+      </div>
+      <div class="collapsible-body">
+        <div class="info-box">Review account requests from people who want a parent login.</div>
+        <div id="pending-requests-list"></div>
+      </div>
+    </div>
 
     <!-- v32: Bank Branding as collapsible card -->
     <div class="collapsible-card" id="cc-branding">
@@ -783,6 +804,12 @@
       <label for="chore-child-chooses">Let child choose their own split</label>
     </div>
 
+    <!-- v33.0 — Require proof photo on submission -->
+    <div class="cb-row">
+      <input type="checkbox" id="chore-require-proof">
+      <label for="chore-require-proof"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-camera"/></svg> Require proof photo</label>
+    </div>
+
     <div class="section-block" id="chore-streak-section" style="padding-top:14px;">
       <h3 style="font-size:.82rem;margin-bottom:10px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-fire"/></svg> Streak Settings (optional)</h3>
       <div class="row">
@@ -851,6 +878,15 @@
   </div>
   <div class="sheet-body">
     <div class="info-box">Update contact info, notifications, and visible tabs for this child. Admin PIN not required for these fields.</div>
+
+    <!-- v33.0 — Persistent Annual Earnings Calculator -->
+    <div class="earnings-card">
+      <div class="earnings-head"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-chart-line-up"/></svg> Annual Earnings (max)</div>
+      <div id="earnings-card-body"></div>
+    </div>
+
+    <!-- v33.0 — Re-run wizard for this child -->
+    <button class="btn btn-outline" style="margin-bottom:14px;" onclick="startWizardForExistingChild(activeChild)"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-magic-wand"/></svg> Run Setup Wizard</button>
 
     <label class="field-label">Email Address</label>
     <input type="email" id="profile-email" placeholder="child@email.com">
@@ -1098,6 +1134,68 @@
     <input type="text" id="share-child-usernames" placeholder="e.g. Mom, GrandpaJoe">
     <div class="field-msg" id="share-child-msg"></div>
     <button class="btn btn-primary" onclick="submitShareChild()">Share</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════ v33.0 SHEETS ═══════════════════════ -->
+
+<!-- Signup request (parent account request from login screen) -->
+<div class="bottom-sheet" id="sheet-signup-request">
+  <span class="sheet-grab"></span>
+  <div class="sheet-header">
+    <h3>Request an Account</h3>
+    <button class="btn btn-sm btn-ghost" onclick="closeSheet('sheet-signup-request')">✕ Close</button>
+  </div>
+  <div class="sheet-body">
+    <div class="info-box">Parent accounts require admin approval. You'll get an email when it's reviewed.</div>
+    <label class="field-label">Display Name <span class="req-star">*</span></label>
+    <input type="text" id="signup-name" placeholder="e.g. Alex">
+    <label class="field-label">Email <span class="req-star">*</span></label>
+    <input type="email" id="signup-email" placeholder="you@example.com">
+    <label class="field-label">PIN (4 digits) <span class="req-star">*</span></label>
+    <input type="password" id="signup-pin" maxlength="4" inputmode="numeric" placeholder="••••">
+    <!-- Honeypot — hidden from real users -->
+    <div style="position:absolute;left:-9999px;height:0;overflow:hidden;" aria-hidden="true">
+      <label>Leave this empty</label>
+      <input type="text" id="signup-honeypot" tabindex="-1" autocomplete="off">
+    </div>
+    <div class="field-msg" id="signup-msg"></div>
+    <button class="btn btn-primary" onclick="submitSignupRequest()">Submit Request</button>
+  </div>
+</div>
+
+<!-- Proof photo capture (for chores with requiresProof = true) -->
+<div class="bottom-sheet" id="sheet-proof-photo">
+  <span class="sheet-grab"></span>
+  <div class="sheet-header">
+    <h3><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-camera"/></svg> Proof Photo</h3>
+    <button class="btn btn-sm btn-ghost" onclick="proofCancel()">✕ Cancel</button>
+  </div>
+  <div class="sheet-body">
+    <div class="info-box">Take a photo showing your completed work. The photo will be emailed to your grown-up with the chore.</div>
+    <div id="proof-preview" class="proof-preview-wrap">
+      <div style="padding:16px;color:var(--muted);font-size:.8rem;text-align:center;">No photo yet — tap "Take Photo" to capture.</div>
+    </div>
+    <input type="file" id="proof-file-input" accept="image/*" capture="environment" style="display:none;" onchange="handleProofFileSelected(this)">
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn btn-secondary" style="flex:1;margin:0;" onclick="document.getElementById('proof-file-input').click()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-camera"/></svg> Take Photo</button>
+      <button class="btn btn-outline" style="flex:1;margin:0;" onclick="proofRetake()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-arrow-counter-clockwise"/></svg> Retake</button>
+    </div>
+    <button class="btn btn-primary" id="proof-continue-btn" style="margin-top:10px;" onclick="proofContinueToSubmit()" disabled>Continue</button>
+  </div>
+</div>
+
+<!-- Guided Child Setup Wizard -->
+<div class="bottom-sheet" id="sheet-wizard">
+  <span class="sheet-grab"></span>
+  <div class="sheet-header">
+    <h3><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-magic-wand"/></svg> Guided Setup</h3>
+    <button class="btn btn-sm btn-ghost" onclick="wizardClose()">✕ Close</button>
+  </div>
+  <div class="sheet-body">
+    <div id="wizard-progress" class="wizard-progress"></div>
+    <div id="wizard-body"></div>
+    <div id="wizard-nav" class="wizard-nav"></div>
   </div>
 </div>
 

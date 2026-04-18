@@ -1,5 +1,5 @@
 /* ╔═══════════════════════════════════════════════════════════════════╗
-   ║                FAMILY BANK — service-worker.js  v31.0            ║
+   ║                FAMILY BANK — service-worker.js  v33.0            ║
    ║                                                                   ║
    ║  HOW THE AUTO-UPDATE WORKS:                                       ║
    ║  1. SW fetches version.json on every page load (network-first).  ║
@@ -15,7 +15,7 @@
    ║  script.google.com is always bypassed — never cached.            ║
    ╚═══════════════════════════════════════════════════════════════════╝ */
 
-const SW_VERSION  = 'v32.4';
+const SW_VERSION  = 'v33.0';
 const CACHE_NAME  = 'family-bank-' + SW_VERSION;
 const CORE_ASSETS = [
   './',
