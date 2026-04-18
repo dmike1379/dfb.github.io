@@ -1,5 +1,5 @@
 {
-  "version": "33.1",
+  "version": "33.3",
   "released": "2026-04-17",
-  "notes": "v33.1 • Empty assigned-children list now = sees none (not all) • One-parent migration preserves existing Dad account • Wizard offers 'Add Another Child?' prompt after Done"
+  "notes": "v33.3 • Diagnostic logging for proof photo send/receive path (not a fix — adds console/Apps Script logs so we can see where the photo is getting lost)"
 }

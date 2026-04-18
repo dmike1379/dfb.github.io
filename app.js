@@ -573,6 +573,15 @@ async function syncToCloud(action){
   // v33.0 — Attach pending proof photo (if any) to chore submissions only
   if(action === "Chore Submitted" && pendingProofPhoto){
     payload.proofPhoto = pendingProofPhoto;
+    // v33.3 — diagnostic: log size of photo and full payload so we can see
+    // whether truncation or send-side issues are eating the image.
+    try {
+      const photoKb   = Math.round(pendingProofPhoto.length / 1024);
+      const payloadKb = Math.round(JSON.stringify(payload).length / 1024);
+      console.log("[proofPhoto] attaching — photo ~"+photoKb+"KB, total payload ~"+payloadKb+"KB");
+    } catch(e){}
+  } else if(action === "Chore Submitted"){
+    console.log("[proofPhoto] Chore Submitted but no pendingProofPhoto buffered");
   }
   pendingTransactions=[];
   try{
@@ -3929,6 +3938,20 @@ function openSheet(id){
   const sheet = document.getElementById(id);
   if(!sheet) return;
   clearSheetDirty(id);
+  // v33.2 — If another sheet is already open, promote this one above it so
+  // sheet-over-sheet (e.g. chore creator launched from inside the wizard)
+  // doesn't pop behind. Base z-index is 500 in styles.css.
+  const openSiblings = document.querySelectorAll(".bottom-sheet.open");
+  if(openSiblings.length){
+    let maxZ = 500;
+    openSiblings.forEach(s => {
+      const z = parseInt(s.style.zIndex || getComputedStyle(s).zIndex || "500", 10);
+      if(!isNaN(z) && z > maxZ) maxZ = z;
+    });
+    sheet.style.zIndex = String(maxZ + 10);
+  } else {
+    sheet.style.zIndex = ""; // reset to stylesheet default
+  }
   sheet.classList.add("open");
   document.getElementById("sheet-backdrop")?.classList.add("open");
 }
@@ -3951,6 +3974,7 @@ function closeSheet(id, force){
       onConfirm:()=>{
         clearSheetDirty(id);
         sheet.classList.remove("open");
+        sheet.style.zIndex = ""; // v33.2 — reset stacking promotion
         if(!document.querySelector(".bottom-sheet.open")){
           document.getElementById("sheet-backdrop")?.classList.remove("open");
         }
@@ -3960,6 +3984,7 @@ function closeSheet(id, force){
   }
   clearSheetDirty(id);
   sheet.classList.remove("open");
+  sheet.style.zIndex = ""; // v33.2 — reset stacking promotion
   if(!document.querySelector(".bottom-sheet.open")){
     document.getElementById("sheet-backdrop")?.classList.remove("open");
   }
@@ -3969,6 +3994,7 @@ function closeAllSheets(){
   // v32.3: Force-close all, no dirty check (used by selectChild / logout flows)
   document.querySelectorAll(".bottom-sheet.open").forEach(s=>{
     s.classList.remove("open");
+    s.style.zIndex = ""; // v33.2 — reset stacking promotion
     if(s.id) clearSheetDirty(s.id);
   });
   document.getElementById("sheet-backdrop")?.classList.remove("open");
@@ -5219,8 +5245,8 @@ function wizardRenderStep4(){
     <h3 class="wizard-step-title">Allowance & Interest</h3>
     <div class="wizard-helper">Account structure</div>
     <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="checking" ${d.structure==="checking"?"checked":""}> Checking only</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="savings"  ${d.structure==="savings"?"checked":""}> Savings only</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="checking" ${d.structure==="checking"?"checked":""}> Checking</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="savings"  ${d.structure==="savings"?"checked":""}> Savings</label>
       <label class="wizard-pill"><input type="radio" name="wiz-struct" value="both"     ${d.structure==="both"?"checked":""}> Both</label>
     </div>
     <div class="wizard-helper">Schedule</div>
