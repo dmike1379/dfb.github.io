@@ -1520,17 +1520,4 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
 .split-presets-lg .split-preset-btn:hover{background:var(--bg)}
 .split-presets-lg .split-preset-btn:active{transform:scale(.97)}
 
-/* v35.0 — Chained sheet-to-sheet crossfade (no slide-down/up jerk) */
-.bottom-sheet.sheet-swap-enter{
-  transform: translateY(0) !important;
-  transition: none !important;
-  animation: fb-sheet-fade-in 140ms ease forwards;
-}
-.bottom-sheet.sheet-swap-exit{
-  transform: translateY(0) !important;
-  transition: none !important;
-  animation: fb-sheet-fade-out 120ms ease forwards;
-  pointer-events: none;
-}
-@keyframes fb-sheet-fade-in  { from{opacity:0} to{opacity:1} }
-@keyframes fb-sheet-fade-out { from{opacity:1} to{opacity:0} }
+/* v35.0 chained crossfade removed in v36.0 — caused wizard sheet-over-sheet crashes */

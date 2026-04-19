@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbxzaghKdOwC2liRFZVDLXL15H4Dh_sOZr8zsNZZxjlDwekH1ylc2PsGpfQluaN6LSsIsg/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwTGZPU_7ZiMUMjbr4og2cFPMOGBdXXjcmY3GWNjFoOP3SnWYPDKnSOCGgO-CjTPNTQRw/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -4355,34 +4355,9 @@ function openSheet(id){
   const sheet = document.getElementById(id);
   if(!sheet) return;
   clearSheetDirty(id);
-
-  // v35.0 — Detect chained open (another sheet already open). If so, run a
-  // quick crossfade instead of the default slide-down + slide-up double-hop.
-  // Dirty-check sequencing: (1) check sibling dirty FIRST, (2) if user cancels
-  // we bail and stay on the old sheet, (3) only on confirm-discard do we swap.
-  const siblings = Array.from(document.querySelectorAll(".bottom-sheet.open"))
-    .filter(s => s.id !== id);
-  if(siblings.length){
-    const dirtySibs = siblings.filter(s => EXIT_WARN_SHEETS.has(s.id) && isSheetDirty(s.id));
-    if(dirtySibs.length){
-      openModal({
-        icon:"⚠️", title:"Discard changes?",
-        body:"You have unsaved changes. Close without saving?",
-        confirmText:"Discard", confirmClass:"btn-warning",
-        onConfirm:()=>{ closeModal(); _fbChainedOpen(sheet, id, siblings); }
-      });
-      return;
-    }
-    _fbChainedOpen(sheet, id, siblings);
-    return;
-  }
-
-  // Cold open — default slide-up
-  _fbOpenSheetBare(sheet);
-}
-
-// v35.0 — bare open (no sibling handling, just z-index + class toggle)
-function _fbOpenSheetBare(sheet){
+  // v33.2 — If another sheet is already open, promote this one above it so
+  // sheet-over-sheet (e.g. chore creator launched from inside the wizard)
+  // doesn't pop behind. Base z-index is 500 in styles.css.
   const openSiblings = document.querySelectorAll(".bottom-sheet.open");
   if(openSiblings.length){
     let maxZ = 500;
@@ -4392,27 +4367,10 @@ function _fbOpenSheetBare(sheet){
     });
     sheet.style.zIndex = String(maxZ + 10);
   } else {
-    sheet.style.zIndex = "";
+    sheet.style.zIndex = ""; // reset to stylesheet default
   }
   sheet.classList.add("open");
   document.getElementById("sheet-backdrop")?.classList.add("open");
-}
-
-// v35.0 — chained swap: fade old siblings out while fading new sheet in.
-// No slide-down, no slide-up — both happen in place via opacity only.
-function _fbChainedOpen(newSheet, newId, oldSheets){
-  oldSheets.forEach(s => s.classList.add("sheet-swap-exit"));
-  newSheet.classList.add("sheet-swap-enter");
-  _fbOpenSheetBare(newSheet);
-  setTimeout(() => {
-    oldSheets.forEach(s => {
-      clearSheetDirty(s.id);
-      s.classList.remove("open");
-      s.classList.remove("sheet-swap-exit");
-      s.style.zIndex = "";
-    });
-    newSheet.classList.remove("sheet-swap-enter");
-  }, 150);
 }
 
 /**

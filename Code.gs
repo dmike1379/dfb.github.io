@@ -448,9 +448,6 @@ function doPost(e) {
     // v33.0 — Process signup request diffs (new request → admin email; approval/denial → requester email)
     try { processSignupDiff(priorState, body); } catch(se) { Logger.log("processSignupDiff ERROR: " + se); }
 
-    // v35.0 Item 3 — Process share-child diffs (new child assignment → welcome email to receiving parent)
-    try { processShareChildDiff(priorState, body); } catch(ce) { Logger.log("processShareChildDiff ERROR: " + ce); }
-
     // Sync Google Calendar events based on the action
     syncCalendarEvent(body, lastAction, activeChild);
 
@@ -2296,50 +2293,11 @@ function DANGER_resetEverything() {
 }
 
 // ================================================================
-// [SHARE CHILD] v35.0 Item 3 — Welcome email to the receiving parent
-// when another parent grants them access to a child via Share Child.
-// Diffs state.config.parentChildren[receiver] between prior and new.
-// Sends one email per child newly added to the receiver's list.
+// [SHARE CHILD] v35.0 Item 3 — REMOVED in v36.0
+// The diff-based approach fired welcome emails on child deletion and
+// other stale-priorState cases. Feature reverted; revisit with an
+// explicit lastAction === "Child Shared" marker in a future version.
 // ================================================================
-function processShareChildDiff(priorState, newState) {
-  try {
-    if (!newState || !newState.config) return;
-    var priorPC = (priorState && priorState.config && priorState.config.parentChildren) || {};
-    var newPC   = newState.config.parentChildren || {};
-    var bankName = getBankName(newState);
-
-    Object.keys(newPC).forEach(function(parentName){
-      var was = priorPC[parentName] || [];
-      var now = newPC[parentName]   || [];
-      var added = now.filter(function(c){ return was.indexOf(c) === -1; });
-      if (!added.length) return;
-
-      var parentEmail = getEmailFor(newState, parentName);
-      if (!parentEmail) {
-        Logger.log("processShareChildDiff: " + parentName + " has no email on file — skipping");
-        return;
-      }
-
-      added.forEach(function(childName){
-        try {
-          var html = buildSimpleEmailHtml(newState,
-            "👋 You've been added as a co-parent",
-            "You've been granted access to manage <strong>" + childName + "</strong> in " + bankName + ".",
-            [
-              {label: "Child",  val: childName},
-              {label: "Access", val: "Full co-parent (approve chores, deposits, adjust balances)"}
-            ],
-            "Log in to " + bankName + " to start managing this child."
-          );
-          sendSimpleEmail(parentEmail, bankName + " — " + childName + " was shared with you", html);
-          Logger.log("Share Child email → " + parentEmail + " for " + childName);
-        } catch(se){ Logger.log("Share Child inner ERROR: " + se); }
-      });
-    });
-  } catch(err) {
-    Logger.log("processShareChildDiff ERROR: " + err);
-  }
-}
 
 // ================================================================
 // v35.0 Item 2 — handleWithdrawalEmailAction
