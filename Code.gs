@@ -2,6 +2,7 @@
  * ╔═══════════════════════════════════════════════════════════════════╗
  * ║              FAMILY BANK — Code.gs (Google Apps Script)          ║
  * ║                     Backend & Email Engine                        ║
+ * ║                     v37.0.1 — Row-per-family + welcome-email intercept ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
  * HOW TO DEPLOY (do this in order, every time you update this file):
@@ -13,13 +14,33 @@
  *             (approve any permissions it asks for)
  *   STEP 5 — Select "setupBank" in the dropdown → click Run
  *             Check the Execution Log — it should say "setupBank: done."
- *   STEP 6 — Click Deploy → Manage Deployments
+ *   STEP 6 — v37.0 ONLY — Select "migrateToRowPerFamily" → click Run
+ *             Reads existing A1 blob, splits into per-family rows.
+ *             Check Execution Log for "migrateToRowPerFamily: done."
+ *             (Safe to re-run — detects if migration already complete.)
+ *   STEP 7 — Click Deploy → Manage Deployments
  *             Click the pencil/edit icon on your deployment
  *             Change Version to "New version" → click Deploy
- *   STEP 7 — Copy the Web App URL → paste into index.html at API_URL
+ *   STEP 8 — Copy the Web App URL → paste into index.html at API_URL
  *
  * NOTE: If this is your very first deployment, use "New Deployment"
- *       instead of editing an existing one in Step 6.
+ *       instead of editing an existing one in Step 7.
+ *
+ * v37.0 ARCHITECTURE NOTES:
+ *   - Row-per-family: col A = familyId, col B = state JSON
+ *   - Ledger has new "FamilyId" column (col B, existing columns shift)
+ *   - New "AuditLog" sheet tracks destructive/structural actions
+ *   - Every doPost/doGet requires familyId (body or query param)
+ *
+ * v37.0.1 CHANGE (additive, no migration impact):
+ *   - New doPost intercept: body._sendWelcomeEmail = {recipient, name, role, defaultPin}
+ *     Fires a single welcome email server-side. Client sends one POST per recipient
+ *     at wizard completion (Family Setup Wizard, v37.0 frontend). Fire-and-forget
+ *     pattern — mirrors _auditLogAppend. No state write, no ledger row.
+ *   - If you are redeploying from the v37.0-alpha Code.gs, you MUST replace with
+ *     this version before the v37.0 frontend ships. Otherwise welcome emails are
+ *     silently dropped (client sees status:ok because Apps Script still returns 200
+ *     from the normal flow, but the intercept never fires).
  */
 
 // ╔═══════════════════════════════════════════════════════════════════╗
@@ -100,7 +121,7 @@ var APP_URL = "https://dmike1379.github.io/dfb.github.io/"; // ← Your app URL
 // ------------------------------------------------------------------
 // VERSION — update when deploying
 // ------------------------------------------------------------------
-var CODE_VERSION = "v33.0";   // ← increment on each Code.gs redeploy
+var CODE_VERSION = "v37.0.1"; // ← increment on each Code.gs redeploy
 
 // ------------------------------------------------------------------
 // EMAIL APPROVAL SECRET KEY
@@ -126,30 +147,46 @@ function doGet(e) {
   try {
     var params = e && e.parameter ? e.parameter : {};
 
-    // ── Email approve/deny action handler (chores) ──
+    // ── Email approve/deny action handlers (chores/deposits/withdrawals) ──
+    // These use tokens that encode the familyId, so no familyId param required.
     if (params.action === "approve" || params.action === "deny") {
       return handleEmailAction(params);
     }
-
-    // ── Email approve/deny action handler (deposits) ──
     if (params.action === "depositApprove" || params.action === "depositDeny") {
       return handleDepositEmailAction(params);
     }
-
-    // ── Email approve/deny action handler (withdrawals) — v35.0 Item 2 ──
     if (params.action === "withdrawApprove" || params.action === "withdrawDeny") {
       return handleWithdrawalEmailAction(params);
     }
 
+    // v37.0 — admin-only: list all families (for Admin Panel cross-family visibility)
+    if (params.action === "listFamilies") {
+      return ContentService
+        .createTextOutput(JSON.stringify({familyIds: listAllFamilyIds_()}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // ── Normal state fetch ──
-    var state = loadState();
-    state.history = loadHistory();
+    // v37.0 — familyId required. If missing, return the list of families so
+    // the client can route the user (login flow or admin selection).
+    var familyId = params.familyId || null;
+    if (!familyId) {
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          error: "familyId required",
+          familyIds: listAllFamilyIds_()
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var state = loadFamilyState(familyId);
+    state.history = loadHistory(familyId);
     // Net worth history per child for chart
     state.netWorthHistory = {};
     getChildNames(state).forEach(function(c) {
-      state.netWorthHistory[c] = calcNetWorthHistory(c);
+      state.netWorthHistory[c] = calcNetWorthHistory(c, familyId);
     });
-    if (DEBUG_LOGGING) Logger.log("doGet OK — users: " + JSON.stringify(state.users));
+    if (DEBUG_LOGGING) Logger.log("doGet OK — family: " + familyId + " users: " + JSON.stringify(state.users));
     return ContentService
       .createTextOutput(JSON.stringify(state))
       .setMimeType(ContentService.MimeType.JSON);
@@ -163,16 +200,24 @@ function doGet(e) {
 
 /**
  * handleEmailAction — processes approve/deny links clicked in notification emails
- * URL format: ?action=approve&choreId=chore_123&child=Linnea&token=ABC123
+ * URL format: ?action=approve&familyId=fam_xxx&choreId=chore_123&child=Linnea&token=ABC123
+ * v37.0 — familyId required in the URL.
  */
 function handleEmailAction(params) {
-  var action  = params.action;
-  var choreId = params.choreId;
-  var child   = params.child;
-  var token   = params.token;
+  var action   = params.action;
+  var choreId  = params.choreId;
+  var child    = params.child;
+  var token    = params.token;
+  var familyId = params.familyId;
 
-  // Validate token
-  var expectedToken = generateToken(choreId, action);
+  if (!familyId) {
+    return buildActionPage("❌ Invalid Link",
+      "This link is missing family information. Please open the app.",
+      "#ef4444");
+  }
+
+  // Validate token (v37.0 — token now binds familyId too)
+  var expectedToken = generateToken(familyId + "|" + choreId, action);
   if (token !== expectedToken) {
     return buildActionPage("❌ Invalid or Expired Link",
       "This link is no longer valid. Please open the app to manage chores.",
@@ -180,7 +225,7 @@ function handleEmailAction(params) {
   }
 
   try {
-    var state  = loadState();
+    var state  = loadFamilyState(familyId);
     var data   = state.children && state.children[child];
     if (!data) return buildActionPage("❌ Error", "Child account not found.", "#ef4444");
 
@@ -193,8 +238,6 @@ function handleEmailAction(params) {
     if (chore.status !== "pending") return buildActionPage("✅ Already Processed",
       chore.name + " was already " + chore.status + ".", "#10b981");
 
-    var bankName = getBankName(state);
-    var primary  = getPrimary(state);
     var ledger   = getLedgerSheet();
     var tz       = getTimezone(state);
     var now      = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
@@ -204,8 +247,8 @@ function handleEmailAction(params) {
       var sv = chore.amount * ((100 - chore.splitChk) / 100);
       data.balances.checking += ck;
       data.balances.savings  += sv;
-      if (ck > 0) ledger.appendRow([now, "Bank", child, "Chore: " + chore.name + " (Chk)", ck]);
-      if (sv > 0) ledger.appendRow([now, "Bank", child, "Chore: " + chore.name + " (Sav)", sv]);
+      if (ck > 0) ledger.appendRow([now, familyId, "Bank", child, "Chore: " + chore.name + " (Chk)", ck]);
+      if (sv > 0) ledger.appendRow([now, familyId, "Bank", child, "Chore: " + chore.name + " (Sav)", sv]);
 
       if (chore.schedule === "once") {
         data.chores = data.chores.filter(function(c) { return c.id !== choreId; });
@@ -215,16 +258,14 @@ function handleEmailAction(params) {
         chore.completedAt   = null;
         chore.denialNote    = null;
         chore.lastCompleted = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
-        // Check streak milestone — auto-deposit bonus if milestone hit
-        checkStreakMilestone(state, child, chore, ledger, now);
+        checkStreakMilestone(state, child, chore, ledger, now, familyId);
       }
 
       state.children[child] = data;
-      saveState(state);
+      saveFamilyState(familyId, state);
 
-      // Send approval email to child
+      state.familyId = familyId;
       sendEventEmail(state, "Chore Approved", child);
-      // Sync calendar
       state._approvedChoreId       = choreId;
       state._approvedChoreTitle    = "🏦 " + chore.name + " — Earn $" + (chore.amount||0).toFixed(2);
       state._approvedChoreSchedule = chore.schedule;
@@ -247,7 +288,8 @@ function handleEmailAction(params) {
         chore.lastCompleted = null;
       }
       state.children[child] = data;
-      saveState(state);
+      saveFamilyState(familyId, state);
+      state.familyId = familyId;
       sendEventEmail(state, "Chore Denied", child);
 
       return buildActionPage("❌ Denied",
@@ -264,15 +306,21 @@ function handleEmailAction(params) {
 
 /**
  * handleDepositEmailAction — processes approve/deny links for child deposit requests
- * URL format: ?action=depositApprove&depositId=dep_123&child=Linnea&token=ABC123
+ * URL format: ?action=depositApprove&familyId=fam_xxx&depositId=dep_123&child=Linnea&token=ABC123
  */
 function handleDepositEmailAction(params) {
   var action    = params.action;
   var depositId = params.depositId;
   var child     = params.child;
   var token     = params.token;
+  var familyId  = params.familyId;
 
-  var expectedToken = generateToken(depositId, action);
+  if (!familyId) {
+    return buildActionPage("❌ Invalid Link",
+      "This link is missing family information.", "#ef4444");
+  }
+
+  var expectedToken = generateToken(familyId + "|" + depositId, action);
   if (token !== expectedToken) {
     return buildActionPage("❌ Invalid or Expired Link",
       "This link is no longer valid. Please open the app to manage deposits.",
@@ -280,7 +328,7 @@ function handleDepositEmailAction(params) {
   }
 
   try {
-    var state = loadState();
+    var state = loadFamilyState(familyId);
     var data  = state.children && state.children[child];
     if (!data) return buildActionPage("❌ Error", "Child account not found.", "#ef4444");
 
@@ -304,12 +352,11 @@ function handleDepositEmailAction(params) {
       var sv = deposit.amount * ((100 - deposit.splitChk) / 100);
       data.balances.checking += ck;
       data.balances.savings  += sv;
-      if (ck > 0) ledger.appendRow([now, "Bank", child, "Deposit: " + deposit.source + " (Chk)", ck]);
-      if (sv > 0) ledger.appendRow([now, "Bank", child, "Deposit: " + deposit.source + " (Sav)", sv]);
+      if (ck > 0) ledger.appendRow([now, familyId, "Bank", child, "Deposit: " + deposit.source + " (Chk)", ck]);
+      if (sv > 0) ledger.appendRow([now, familyId, "Bank", child, "Deposit: " + deposit.source + " (Sav)", sv]);
       deposit.status = "approved";
       state.children[child] = data;
-      saveState(state);
-      // Notify child
+      saveFamilyState(familyId, state);
       var childEmail = getEmailFor(state, child);
       if (childEmail && notifyEmail(state, child)) {
         var html = buildSimpleEmailHtml(state,
@@ -335,7 +382,7 @@ function handleDepositEmailAction(params) {
     } else { // depositDeny
       deposit.status = "denied";
       state.children[child] = data;
-      saveState(state);
+      saveFamilyState(familyId, state);
       var childEmail = getEmailFor(state, child);
       if (childEmail && notifyEmail(state, child)) {
         var html = buildSimpleEmailHtml(state,
@@ -396,22 +443,71 @@ function doPost(e) {
     var lastAction   = body.lastAction || "Update";
     var activeChild  = body.activeChild || null;
 
-    if (DEBUG_LOGGING) Logger.log("doPost: " + lastAction + " | child: " + activeChild);
+    // v37.0 — Require familyId on every request
+    var familyId = body.familyId || null;
+    if (!familyId) {
+      return ContentService
+        .createTextOutput(JSON.stringify({error: "familyId required"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
 
-    // v33.0 — Pull proof photo off body BEFORE saveState (sheet A1 has ~50K char limit)
-    // Keep a local reference so we can attach it inline to the chore-submitted email.
+    // v37.0 — Intercept special actions before normal flow
+    if (body._deleteFamilyFullRequest && body._deleteFamilyFullRequest === familyId) {
+      var ok = deleteFamilyFull(familyId);
+      return ContentService
+        .createTextOutput(JSON.stringify({status: ok ? "deleted" : "error"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // v37.0 — Audit log append (no state write)
+    if (body._auditLogAppend) {
+      var a = body._auditLogAppend;
+      appendAuditLog(familyId, a.parent, a.action, a.target);
+      return ContentService
+        .createTextOutput(JSON.stringify({status: "logged"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // v37.0 — Audit log fetch (no state write)
+    if (body._auditLogFetch) {
+      var entries = getAuditLogForFamily(familyId, body._auditLogFetch.limit || 50);
+      return ContentService
+        .createTextOutput(JSON.stringify({auditLog: entries}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // v37.0.1 — Welcome email intercept (no state write)
+    // Client (Family Setup Wizard, Step 4 commit) sends one POST per newly-added
+    // parent/child. Server loads the family's branding/config, sends a single
+    // welcome email, returns. Failure-isolated per recipient.
+    if (body._sendWelcomeEmail) {
+      var w = body._sendWelcomeEmail || {};
+      var okSent = sendWelcomeEmail_(familyId, w.recipient, w.name, w.role, w.defaultPin);
+      return ContentService
+        .createTextOutput(JSON.stringify({status: okSent ? "sent" : "error"}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (DEBUG_LOGGING) Logger.log("doPost: " + lastAction + " | child: " + activeChild + " | family: " + familyId);
+
+    // v33.0 — Pull proof photo off body BEFORE saveState (sheet cell has ~50K char limit)
     var proofPhoto = body.proofPhoto || null;
     delete body.proofPhoto;
 
     // v33.0 — Load prior state once so we can diff signup requests (added/approved/denied)
     var priorState = null;
-    try { priorState = loadState(); } catch(le) { priorState = null; }
+    try { priorState = loadFamilyState(familyId); } catch(le) { priorState = null; }
 
     // Strip frontend-only keys before saving
     delete body.tempTransactions;
     delete body.lastAction;
     delete body.history;
     delete body.activeChild;
+    // v37.0 — strip intercept keys too (already handled above but be safe)
+    delete body._deleteFamilyFullRequest;
+    delete body._auditLogAppend;
+    delete body._auditLogFetch;
+    delete body._sendWelcomeEmail;
     // Strip any orphaned calendar helper keys — these must never persist in state
     delete body._deletedChoreName;
     delete body._deletedChoreTitle;
@@ -426,15 +522,16 @@ function doPost(e) {
     delete body._deletedCalEventId;
     delete body._approvedCalEventId;
 
-    saveState(body);
+    saveFamilyState(familyId, body);
 
-    // Write transactions to Ledger
+    // Write transactions to Ledger (v37.0 — with familyId)
     var ledger = getLedgerSheet();
     var tz     = getTimezone(body);
     transactions.forEach(function(tx) {
       var ts = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
       ledger.appendRow([
         tx.date || ts,
+        familyId,
         tx.user  || "System",
         tx.child || activeChild || "",
         tx.note  || lastAction,
@@ -443,9 +540,10 @@ function doPost(e) {
     });
 
     // Trigger any email notifications based on the action
+    body.familyId = familyId; // re-attach for downstream handlers
     sendEventEmail(body, lastAction, activeChild, proofPhoto);
 
-    // v33.0 — Process signup request diffs (new request → admin email; approval/denial → requester email)
+    // v33.0 — Process signup request diffs
     try { processSignupDiff(priorState, body); } catch(se) { Logger.log("processSignupDiff ERROR: " + se); }
 
     // Sync Google Calendar events based on the action
@@ -464,24 +562,33 @@ function doPost(e) {
 
 // ================================================================
 // [HISTORY] — Load Ledger, return rows grouped by child name
+// v37.0 — filtered by familyId; ledger schema is
+//         [Date, FamilyId, User, Child, Note, Amount]
 // ================================================================
-function loadHistory() {
+function loadHistory(familyId) {
   var sheet = getLedgerSheet();
   var data  = sheet.getDataRange().getValues();
   var history = {};
   // Skip header row
-  var start = (data.length > 0 && String(data[0][0]).toLowerCase().includes("date")) ? 1 : 0;
+  var start = (data.length > 0 && String(data[0][0]).toLowerCase().indexOf("date") !== -1) ? 1 : 0;
   for (var i = start; i < data.length; i++) {
     var row = data[i];
-    if (!row[0] && !row[1] && !row[4]) continue; // skip blank rows
-    var child = String(row[2] || DEFAULT_CHILD_NAME);
+    if (!row[0] && !row[1] && !row[5]) continue; // skip blank rows
+
+    // v37.0 — filter rows by familyId (when supplied)
+    var rowFamilyId = String(row[1] || "");
+    if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+    // Legacy rows (pre-migration) have no familyId — skip if familyId requested
+    if (familyId && !rowFamilyId) continue;
+
+    var child = String(row[3] || DEFAULT_CHILD_NAME);
     if (!history[child]) history[child] = [];
     history[child].push({
       date:  String(row[0] || ""),
-      user:  String(row[1] || ""),
+      user:  String(row[2] || ""),
       child: child,
-      note:  String(row[3] || ""),
-      amt:   parseFloat(row[4]) || 0
+      note:  String(row[4] || ""),
+      amt:   parseFloat(row[5]) || 0
     });
   }
   return history;
@@ -492,50 +599,53 @@ function loadHistory() {
 // ================================================================
 
 /**
- * TRIGGER: Every Monday 8 AM — weekly allowance per child
+ * TRIGGER: Every Monday 8 AM — weekly allowance per child, per family.
+ * v37.0 — iterates all families via forEachFamily.
  */
 function automatedMondayDeposit() {
   try {
-    var state   = loadState();
-    var ledger  = getLedgerSheet();
-    var tz      = getTimezone(state);
-    var now     = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
-    var changed = false;
+    forEachFamily(function(familyId, state) {
+      var ledger  = getLedgerSheet();
+      var tz      = getTimezone(state);
+      var now     = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
+      var changed = false;
 
-    getChildNames(state).forEach(function(childName) {
-      var data = state.children[childName];
-      var chk  = parseFloat(data.autoDeposit && data.autoDeposit.checking) || 0;
-      var sav  = parseFloat(data.autoDeposit && data.autoDeposit.savings)  || 0;
-      if (chk === 0 && sav === 0) return;
-      data.balances.checking += chk;
-      data.balances.savings  += sav;
-      if (chk > 0) ledger.appendRow([now, "Bank", childName, "Weekly Allowance (Chk)", chk]);
-      if (sav > 0) ledger.appendRow([now, "Bank", childName, "Weekly Allowance (Sav)", sav]);
-      // Email child: allowance deposited
-      var childEmail = getEmailFor(state, childName);
-      if (childEmail && notifyEmail(state, childName)) {
-        var bankName = getBankName(state);
-        var total    = chk + sav;
-        sendSimpleEmail(childEmail,
-          bankName + " — Your allowance of $" + total.toFixed(2) + " arrived! 💵",
-          buildSimpleEmailHtml(state,
-            "💵 Allowance Deposited!",
-            "Hi " + childName + "! Your weekly allowance of <strong>$" + total.toFixed(2) + "</strong> has been added to your account.",
-            [
-              {label: "Checking", val: "+$" + chk.toFixed(2)},
-              {label: "Savings",  val: "+$" + sav.toFixed(2)},
-              {label: "New Checking Balance", val: "$" + data.balances.checking.toFixed(2)},
-              {label: "New Savings Balance",  val: "$" + data.balances.savings.toFixed(2)}
-            ],
-            "Keep saving! 🌟"
-          )
-        );
-      }
-      changed = true;
-      Logger.log("Allowance: " + childName + " CHK+$" + chk + " SAV+$" + sav);
+      getChildNames(state).forEach(function(childName) {
+        var data = state.children[childName];
+        if (!data) return;
+        var chk  = parseFloat(data.autoDeposit && data.autoDeposit.checking) || 0;
+        var sav  = parseFloat(data.autoDeposit && data.autoDeposit.savings)  || 0;
+        if (chk === 0 && sav === 0) return;
+        data.balances.checking += chk;
+        data.balances.savings  += sav;
+        if (chk > 0) ledger.appendRow([now, familyId, "Bank", childName, "Weekly Allowance (Chk)", chk]);
+        if (sav > 0) ledger.appendRow([now, familyId, "Bank", childName, "Weekly Allowance (Sav)", sav]);
+        // Email child: allowance deposited
+        var childEmail = getEmailFor(state, childName);
+        if (childEmail && notifyEmail(state, childName)) {
+          var bankName = getBankName(state);
+          var total    = chk + sav;
+          sendSimpleEmail(childEmail,
+            bankName + " — Your allowance of $" + total.toFixed(2) + " arrived! 💵",
+            buildSimpleEmailHtml(state,
+              "💵 Allowance Deposited!",
+              "Hi " + childName + "! Your weekly allowance of <strong>$" + total.toFixed(2) + "</strong> has been added to your account.",
+              [
+                {label: "Checking", val: "+$" + chk.toFixed(2)},
+                {label: "Savings",  val: "+$" + sav.toFixed(2)},
+                {label: "New Checking Balance", val: "$" + data.balances.checking.toFixed(2)},
+                {label: "New Savings Balance",  val: "$" + data.balances.savings.toFixed(2)}
+              ],
+              "Keep saving! 🌟"
+            )
+          );
+        }
+        changed = true;
+        Logger.log("Allowance [" + familyId + "]: " + childName + " CHK+$" + chk + " SAV+$" + sav);
+      });
+
+      if (changed) saveFamilyState(familyId, state);
     });
-
-    if (changed) saveState(state);
   } catch(err) { Logger.log("automatedMondayDeposit ERROR: " + err); }
 }
 
@@ -544,120 +654,121 @@ function automatedMondayDeposit() {
  */
 function monthlyMaintenance() {
   try {
-    var state  = loadState();
-    var ledger = getLedgerSheet();
-    var tz     = getTimezone(state);
-    var now    = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
+    forEachFamily(function(familyId, state) {
+      var ledger = getLedgerSheet();
+      var tz     = getTimezone(state);
+      var now    = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
 
-    getChildNames(state).forEach(function(childName) {
-      var data    = state.children[childName];
-      var prevChk = parseFloat(data.balances.checking) || 0;
-      var prevSav = parseFloat(data.balances.savings)  || 0;
-      var rc      = parseFloat(data.rates && data.rates.checking) || 0;
-      var rs      = parseFloat(data.rates && data.rates.savings)  || 0;
-      var ic      = prevChk * (rc / 100 / 12);
-      var is_     = prevSav * (rs / 100 / 12);
+      getChildNames(state).forEach(function(childName) {
+        var data    = state.children[childName];
+        if (!data) return;
+        var prevChk = parseFloat(data.balances.checking) || 0;
+        var prevSav = parseFloat(data.balances.savings)  || 0;
+        var rc      = parseFloat(data.rates && data.rates.checking) || 0;
+        var rs      = parseFloat(data.rates && data.rates.savings)  || 0;
+        var ic      = prevChk * (rc / 100 / 12);
+        var is_     = prevSav * (rs / 100 / 12);
 
-      data.balances.checking += ic;
-      data.balances.savings  += is_;
+        data.balances.checking += ic;
+        data.balances.savings  += is_;
 
-      if (ic  > 0) ledger.appendRow([now, "Bank", childName, "Monthly Interest (Chk)", ic]);
-      if (is_ > 0) ledger.appendRow([now, "Bank", childName, "Monthly Interest (Sav)", is_]);
+        if (ic  > 0) ledger.appendRow([now, familyId, "Bank", childName, "Monthly Interest (Chk)", ic]);
+        if (is_ > 0) ledger.appendRow([now, familyId, "Bank", childName, "Monthly Interest (Sav)", is_]);
 
-      Logger.log("Interest: " + childName + " CHK+$" + ic.toFixed(4) + " SAV+$" + is_.toFixed(4));
+        Logger.log("Interest [" + familyId + "]: " + childName + " CHK+$" + ic.toFixed(4) + " SAV+$" + is_.toFixed(4));
 
-      // Send statement to all parents + the child
-      sendMonthlyStatement(state, childName, data, prevChk, prevSav, ic, is_);
+        // Send statement to all parents + the child
+        sendMonthlyStatement(state, childName, data, prevChk, prevSav, ic, is_);
+      });
+
+      saveFamilyState(familyId, state);
     });
-
-    saveState(state);
   } catch(err) { Logger.log("monthlyMaintenance ERROR: " + err); }
 }
 
 /**
- * TRIGGER: Every day 6 AM — reset recurring chores by schedule
+ * TRIGGER: Every day 6 AM — reset recurring chores by schedule.
+ * v37.0 — iterates all families.
  */
 function dailyChoreReset() {
   try {
-    var state   = loadState();
-    var changed = false;
-    var today   = new Date();
+    forEachFamily(function(familyId, state) {
+      var changed = false;
+      var today   = new Date();
 
-    getChildNames(state).forEach(function(childName) {
-      var chores = state.children[childName].chores || [];
-      chores.forEach(function(chore) {
-        if (chore.schedule === "once") return;
-        if (chore.status === "available" || chore.status === "pending") return;
-        if (chore.endDate && chore.endDate < todayDateStr()) return;
-        var reset = false;
-        if (chore.schedule === "daily")    reset = true;
-        if (chore.schedule === "weekly")   reset = isDayInterval(today, chore.createdAt, 7);
-        if (chore.schedule === "biweekly") reset = isDayInterval(today, chore.createdAt, 14);
-        if (chore.schedule === "monthly")  reset = (today.getDate() === parseInt(chore.monthlyDay || 1));
-        if (reset) {
-          // Clear lastCompleted so chore reappears on next scheduled day
-          chore.status        = "available";
-          chore.completedBy   = null;
-          chore.completedAt   = null;
-          chore.denialNote    = null;
-          chore.lastCompleted = null;
-          changed = true;
-          Logger.log("dailyChoreReset: reset '" + chore.name + "' for " + childName);
-        }
+      getChildNames(state).forEach(function(childName) {
+        var chores = (state.children[childName] || {}).chores || [];
+        chores.forEach(function(chore) {
+          if (chore.schedule === "once") return;
+          if (chore.status === "available" || chore.status === "pending") return;
+          if (chore.endDate && chore.endDate < todayDateStr()) return;
+          var reset = false;
+          if (chore.schedule === "daily")    reset = true;
+          if (chore.schedule === "weekly")   reset = isDayInterval(today, chore.createdAt, 7);
+          if (chore.schedule === "biweekly") reset = isDayInterval(today, chore.createdAt, 14);
+          if (chore.schedule === "monthly")  reset = (today.getDate() === parseInt(chore.monthlyDay || 1));
+          if (reset) {
+            chore.status        = "available";
+            chore.completedBy   = null;
+            chore.completedAt   = null;
+            chore.denialNote    = null;
+            chore.lastCompleted = null;
+            changed = true;
+            Logger.log("dailyChoreReset [" + familyId + "]: reset '" + chore.name + "' for " + childName);
+          }
+        });
       });
-    });
 
-    if (changed) saveState(state);
+      if (changed) saveFamilyState(familyId, state);
+    });
   } catch(err) { Logger.log("dailyChoreReset ERROR: " + err); }
 }
 
 /**
- * TRIGGER: Every Sunday 9 AM — chore reminder email per child
+ * TRIGGER: Every Sunday 9 AM — chore reminder email per child, per family.
  */
 function sundayChoreReminder() {
   try {
-    var state = loadState();
+    forEachFamily(function(familyId, state) {
+      getChildNames(state).forEach(function(childName) {
+        var data      = state.children[childName];
+        if (!data) return;
+        var chores    = data.chores || [];
+        var available = chores.filter(function(c) {
+          return c.status !== "pending" && (!c.endDate || c.endDate >= todayDateStr());
+        });
 
-    getChildNames(state).forEach(function(childName) {
-      var data      = state.children[childName];
-      var chores    = data.chores || [];
-      var available = chores.filter(function(c) {
-        return c.status !== "pending" && (!c.endDate || c.endDate >= todayDateStr());
+        if (!available.length) {
+          Logger.log("sundayChoreReminder [" + familyId + "]: no chores for " + childName + " — skipping");
+          return;
+        }
+
+        var childEmail  = getEmailFor(state, childName);
+        var parentEmails= getParentEmails(state, childName);
+        var bankName    = getBankName(state);
+        var totalPossible = available.reduce(function(s, c) { return s + (parseFloat(c.amount) || 0); }, 0);
+
+        var subject = "🏦 " + bankName + " — Your chores this week, " + childName + "!";
+
+        var choreRows = available.map(function(c) {
+          var sched = {once:"One-time",daily:"Daily",weekly:"Weekly",biweekly:"Bi-weekly",monthly:"Monthly"}[c.schedule] || c.schedule;
+          var split = c.childChooses ? "You choose" : c.splitChk + "% Checking / " + (100 - c.splitChk) + "% Savings";
+          return {label: c.name + " (" + sched + ")", val: "$" + (c.amount || 0).toFixed(2) + " — " + split};
+        });
+
+        var html = buildReminderEmailHtml(state, childName, data, totalPossible, choreRows);
+
+        var childWantsEmail = notifyEmail(state, childName);
+        if (childEmail && childWantsEmail) {
+          var opts = {to: childEmail, subject: subject, htmlBody: html};
+          if (parentEmails.length) opts.cc = parentEmails.join(",");
+          MailApp.sendEmail(opts);
+          Logger.log("sundayChoreReminder [" + familyId + "]: sent for " + childName + " → " + childEmail);
+        } else if (parentEmails.length) {
+          MailApp.sendEmail({to: parentEmails.join(","), subject: subject, htmlBody: html});
+          Logger.log("sundayChoreReminder [" + familyId + "]: sent to parent only for " + childName);
+        }
       });
-
-      if (!available.length) {
-        Logger.log("sundayChoreReminder: no chores for " + childName + " — skipping");
-        return;
-      }
-
-      var childEmail  = getEmailFor(state, childName);
-      var parentEmails= getParentEmails(state, childName);
-      var bankName    = getBankName(state);
-      var primary     = getPrimary(state);
-      var secondary   = getSecondary(state);
-      var totalPossible = available.reduce(function(s, c) { return s + (parseFloat(c.amount) || 0); }, 0);
-
-      var subject = "🏦 " + bankName + " — Your chores this week, " + childName + "!";
-
-      var choreRows = available.map(function(c) {
-        var sched = {once:"One-time",daily:"Daily",weekly:"Weekly",biweekly:"Bi-weekly",monthly:"Monthly"}[c.schedule] || c.schedule;
-        var split = c.childChooses ? "You choose" : c.splitChk + "% Checking / " + (100 - c.splitChk) + "% Savings";
-        return {label: c.name + " (" + sched + ")", val: "$" + (c.amount || 0).toFixed(2) + " — " + split};
-      });
-
-      var html = buildReminderEmailHtml(state, childName, data, totalPossible, choreRows);
-
-      var childWantsEmail = notifyEmail(state, childName);
-      if (childEmail && childWantsEmail) {
-        var opts = {to: childEmail, subject: subject, htmlBody: html};
-        if (parentEmails.length) opts.cc = parentEmails.join(",");
-        MailApp.sendEmail(opts);
-        Logger.log("sundayChoreReminder: sent for " + childName + " → " + childEmail);
-      } else if (parentEmails.length) {
-        // Send to parent only (child has no email or email notifications off)
-        MailApp.sendEmail({to: parentEmails.join(","), subject: subject, htmlBody: html});
-        Logger.log("sundayChoreReminder: sent to parent only for " + childName);
-      }
     });
   } catch(err) { Logger.log("sundayChoreReminder ERROR: " + err); }
 }
@@ -682,14 +793,14 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
       if (!pending.length || !parentEmails.length) return;
       var chore   = pending[pending.length - 1];
       var split   = chore.splitChk + "% Checking / " + (100 - chore.splitChk) + "% Savings";
-      var approveToken = generateToken(chore.id, "approve");
-      var denyToken    = generateToken(chore.id, "deny");
-      var approveUrl   = APP_URL + "?action=approve&choreId=" + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
-      var denyUrl      = APP_URL + "?action=deny&choreId="    + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
-      // Replace APP_URL with the Apps Script Web App URL for action handling
+      // v37.0 — familyId in token + URL
+      var familyId     = state.familyId || "";
+      var tokenKey     = familyId + "|" + chore.id;
+      var approveToken = generateToken(tokenKey, "approve");
+      var denyToken    = generateToken(tokenKey, "deny");
       var scriptUrl    = ScriptApp.getService().getUrl();
-      approveUrl       = scriptUrl + "?action=approve&choreId=" + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
-      denyUrl          = scriptUrl + "?action=deny&choreId="    + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
+      var approveUrl   = scriptUrl + "?action=approve&familyId=" + encodeURIComponent(familyId) + "&choreId=" + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
+      var denyUrl      = scriptUrl + "?action=deny&familyId="    + encodeURIComponent(familyId) + "&choreId=" + chore.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
 
       var primary   = getPrimary(state);
       var secondary = getSecondary(state);
@@ -784,9 +895,9 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
 
     } else if (lastAction === "Chore Approved" && childEmail && notifyEmail(state, childName)) {
       // → Child gets approval confirmation with new balances
-      var row = getLastChoreEntry(childName);
-      var choreName = row ? String(row[3]).replace(/Chore: | \(Chk\)| \(Sav\)/g, "") : "your chore";
-      var earned    = row ? Math.abs(parseFloat(row[4]) || 0) : 0;
+      var row = getLastChoreEntry(childName, state.familyId);
+      var choreName = row ? String(row[4]).replace(/Chore: | \(Chk\)| \(Sav\)/g, "") : "your chore";
+      var earned    = row ? Math.abs(parseFloat(row[5]) || 0) : 0;
       var html = buildSimpleEmailHtml(state,
         "🎉 Chore approved, " + childName + "!",
         "Great work! Your chore <strong>" + choreName + "</strong> was approved.",
@@ -821,10 +932,12 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
       var dep = pending[pending.length - 1];
       var split = dep.splitChk + "% Checking / " + (100 - dep.splitChk) + "% Savings";
       var scriptUrl     = ScriptApp.getService().getUrl();
-      var approveToken  = generateToken(dep.id, "depositApprove");
-      var denyToken     = generateToken(dep.id, "depositDeny");
-      var approveUrl    = scriptUrl + "?action=depositApprove&depositId=" + dep.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
-      var denyUrl       = scriptUrl + "?action=depositDeny&depositId="    + dep.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
+      var familyId      = state.familyId || "";
+      var tokenKey      = familyId + "|" + dep.id;
+      var approveToken  = generateToken(tokenKey, "depositApprove");
+      var denyToken     = generateToken(tokenKey, "depositDeny");
+      var approveUrl    = scriptUrl + "?action=depositApprove&familyId=" + encodeURIComponent(familyId) + "&depositId=" + dep.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
+      var denyUrl       = scriptUrl + "?action=depositDeny&familyId="    + encodeURIComponent(familyId) + "&depositId=" + dep.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
       var secondary     = getSecondary(state);
       var html = buildSimpleEmailHtml(state,
         "💰 " + childName + " wants to make a deposit!",
@@ -856,10 +969,12 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
       if (!pendingW.length || !parentEmails.length) return;
       var wd        = pendingW[pendingW.length - 1];
       var scriptUrl    = ScriptApp.getService().getUrl();
-      var approveToken = generateToken(wd.id, "withdrawApprove");
-      var denyToken    = generateToken(wd.id, "withdrawDeny");
-      var approveUrl   = scriptUrl + "?action=withdrawApprove&withdrawalId=" + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
-      var denyUrl      = scriptUrl + "?action=withdrawDeny&withdrawalId="    + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
+      var familyId     = state.familyId || "";
+      var tokenKey     = familyId + "|" + wd.id;
+      var approveToken = generateToken(tokenKey, "withdrawApprove");
+      var denyToken    = generateToken(tokenKey, "withdrawDeny");
+      var approveUrl   = scriptUrl + "?action=withdrawApprove&familyId=" + encodeURIComponent(familyId) + "&withdrawalId=" + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
+      var denyUrl      = scriptUrl + "?action=withdrawDeny&familyId="    + encodeURIComponent(familyId) + "&withdrawalId=" + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
       var secondary    = getSecondary(state);
       var html = buildSimpleEmailHtml(state,
         "💸 " + childName + " wants to make a withdrawal",
@@ -888,9 +1003,9 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
 
     } else if (lastAction === "Withdrawal Approved" && childEmail && notifyEmail(state, childName)) {
       // v35.0 Item 2 — child gets confirmation
-      var rowW = getLastWithdrawEntry(childName);
-      var wAmt = rowW ? Math.abs(parseFloat(rowW[4]) || 0) : 0;
-      var wNote = rowW ? String(rowW[2]).replace(/^Withdraw:\s*/, "") : "your withdrawal";
+      var rowW = getLastWithdrawEntry(childName, state.familyId);
+      var wAmt = rowW ? Math.abs(parseFloat(rowW[5]) || 0) : 0;
+      var wNote = rowW ? String(rowW[4]).replace(/^Withdraw:\s*/, "") : "your withdrawal";
       var html = buildSimpleEmailHtml(state,
         "✅ Withdrawal approved, " + childName + "!",
         "Your withdrawal request was approved.",
@@ -1022,6 +1137,56 @@ function processSignupDiff(priorState, newState) {
       }
     } catch(e) { Logger.log("signup decision email ERROR: " + e); }
   });
+}
+
+// ================================================================
+// [WELCOME EMAIL] v37.0.1 — Family Setup Wizard completion
+// ================================================================
+// Fired via doPost intercept: body._sendWelcomeEmail = {recipient, name, role, defaultPin}
+// One POST per newly-added parent/child at wizard completion.
+// Returns true on success, false on failure. Caller is fire-and-forget client.
+// Failures are logged, never thrown — one recipient failing must not cascade.
+function sendWelcomeEmail_(familyId, recipient, name, role, defaultPin) {
+  try {
+    if (!recipient || !name || !role) {
+      Logger.log("_sendWelcomeEmail: missing field (recipient/name/role) — skipping");
+      return false;
+    }
+    var state = loadFamilyState(familyId);
+    if (!state) {
+      Logger.log("_sendWelcomeEmail: family " + familyId + " not found — skipping");
+      return false;
+    }
+    var bankName = getBankName(state);
+    var pin      = (defaultPin != null) ? String(defaultPin) : "0000";
+    var isChild  = (role === "child");
+    var title    = isChild
+      ? "🎉 Welcome to " + bankName + ", " + name + "!"
+      : "🎉 You've been added to " + bankName;
+    var intro    = isChild
+      ? "A parent added you to <strong>" + bankName + "</strong>. Here's how to log in:"
+      : "You've been added as a parent in <strong>" + bankName + "</strong>. Here's how to log in:";
+    var rows = [
+      {label: "Your name", val: name},
+      {label: "Your PIN",  val: pin}
+    ];
+    var footer = "You can change your PIN after your first login (Settings → Change PIN).";
+    var html = buildSimpleEmailHtml(state, title, intro, rows, footer);
+    html = html.replace("<!-- ACTION_BUTTONS -->",
+      "<div style='text-align:center;margin:0 0 16px;'>"
+      + "<a href='" + APP_URL + "' style='display:inline-block;background:" + getPrimary(state)
+      + ";color:white;text-decoration:none;padding:14px 24px;border-radius:10px;font-weight:800;'>"
+      + "Log in to " + bankName + "</a></div>");
+    var subject = isChild
+      ? bankName + " — Welcome, " + name + "! 🎉"
+      : bankName + " — You've been added 🎉";
+    sendSimpleEmail(recipient, subject, html);
+    Logger.log("_sendWelcomeEmail: sent to " + recipient + " (" + role + ", family " + familyId + ")");
+    return true;
+  } catch(err) {
+    Logger.log("_sendWelcomeEmail ERROR (" + recipient + "): " + err);
+    return false;
+  }
 }
 
 // ================================================================
@@ -1313,32 +1478,165 @@ function sendSimpleEmail(to, subject, htmlBody) {
 // ================================================================
 // [HELPERS]
 // ================================================================
-function loadState() {
+// ═══════════════════════════════════════════════════════════════════
+// v37.0 — ROW-PER-FAMILY STATE LAYER
+// ═══════════════════════════════════════════════════════════════════
+//
+// Sheet layout (first tab, "Sheet1" or whatever is index 0):
+//   Row 1: headers — "FamilyId" | "State"
+//   Rows 2+: one row per family — col A = familyId, col B = JSON state
+//
+// familyId format: fam_<8 char base36 id>, e.g., fam_k9m3x7q2
+// Generated once at family creation, never changes.
+//
+// Every doPost/doGet requires familyId (in body or ?familyId= param).
+// Email action handlers embed familyId in the signed token.
+// ═══════════════════════════════════════════════════════════════════
+
+var FAMILY_SHEET_HEADER = ["FamilyId", "State"];
+
+/** Generate a new short familyId */
+function generateFamilyId() {
+  var ts = Date.now().toString(36);
+  var rnd = Math.floor(Math.random() * 1296).toString(36); // 2 base36 chars
+  return "fam_" + (ts.slice(-6) + rnd).slice(0, 8);
+}
+
+/** Get the first (data) sheet */
+function getFamilySheet_() {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+}
+
+/** Ensure header row exists (safe to call repeatedly) */
+function ensureFamilySheetHeader_() {
+  var sh = getFamilySheet_();
+  var hdr = sh.getRange(1, 1, 1, 2).getValues()[0];
+  if (hdr[0] !== FAMILY_SHEET_HEADER[0] || hdr[1] !== FAMILY_SHEET_HEADER[1]) {
+    sh.getRange(1, 1, 1, 2).setValues([FAMILY_SHEET_HEADER]).setFontWeight("bold");
+  }
+}
+
+/** Find the row number (1-indexed) for a given familyId, or -1 */
+function findFamilyRow_(familyId) {
+  if (!familyId) return -1;
+  var sh = getFamilySheet_();
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i][0] === familyId) return i + 2;
+  }
+  return -1;
+}
+
+/** List all familyIds in the sheet */
+function listAllFamilyIds_() {
+  var sh = getFamilySheet_();
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  return ids.map(function(r){ return r[0]; }).filter(function(x){ return !!x; });
+}
+
+/**
+ * Load state for a given family.
+ * Returns postProcessed state object, or buildDefaultState() if family not found.
+ */
+function loadFamilyState(familyId) {
   try {
-    // Check cache first — avoids Sheet read if data was recently loaded
-    var cache = CacheService.getScriptCache();
-    var cached = cache.get("familyBankState");
-    if (cached) {
-      if (DEBUG_LOGGING) Logger.log("loadState: cache hit");
-      var s = JSON.parse(cached);
-      if (s && s.pins) return postProcessState(s);
+    if (!familyId) {
+      if (DEBUG_LOGGING) Logger.log("loadFamilyState: no familyId provided");
+      return buildDefaultState();
     }
-    var raw = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0].getRange("A1").getValue();
+    var cache = CacheService.getScriptCache();
+    var cacheKey = "familyBankState_" + familyId;
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      if (DEBUG_LOGGING) Logger.log("loadFamilyState: cache hit " + familyId);
+      var c = JSON.parse(cached);
+      if (c && c.pins) {
+        c.familyId = familyId;
+        return postProcessState(c);
+      }
+    }
+    ensureFamilySheetHeader_();
+    var row = findFamilyRow_(familyId);
+    if (row < 0) {
+      if (DEBUG_LOGGING) Logger.log("loadFamilyState: family not found " + familyId);
+      return buildDefaultState();
+    }
+    var raw = getFamilySheet_().getRange(row, 2).getValue();
     if (!raw) return buildDefaultState();
     var s = JSON.parse(raw);
-    // postProcessState handles migration and defaults
-    if (DEBUG_LOGGING) Logger.log("loadState OK: " + JSON.stringify(Object.keys(s)));
-    // Cache for 60 seconds to speed up repeat reads
+    s.familyId = familyId;
     try {
-      var cache = CacheService.getScriptCache();
       var toCache = JSON.stringify(s);
-      if (toCache.length < 100000) cache.put("familyBankState", toCache, 60);
+      if (toCache.length < 100000) cache.put(cacheKey, toCache, 60);
     } catch(ce) {}
     return postProcessState(s);
   } catch(err) {
-    Logger.log("loadState ERROR: " + err);
+    Logger.log("loadFamilyState ERROR (" + familyId + "): " + err);
     return buildDefaultState();
   }
+}
+
+/** Save state for a given family. Creates row if new. */
+function saveFamilyState(familyId, state) {
+  if (!familyId) throw new Error("saveFamilyState: familyId required");
+  ensureFamilySheetHeader_();
+  var clean = Object.assign({}, state);
+  delete clean.familyId; // don't persist it inside the JSON
+  var sh = getFamilySheet_();
+  var row = findFamilyRow_(familyId);
+  if (row < 0) {
+    sh.appendRow([familyId, JSON.stringify(clean)]);
+  } else {
+    sh.getRange(row, 2).setValue(JSON.stringify(clean));
+  }
+  try { CacheService.getScriptCache().remove("familyBankState_" + familyId); } catch(e) {}
+}
+
+/** Delete a family row (and clear its cache). Does NOT touch ledger. */
+function deleteFamilyRow(familyId) {
+  if (!familyId) return false;
+  var row = findFamilyRow_(familyId);
+  if (row < 0) return false;
+  getFamilySheet_().deleteRow(row);
+  try { CacheService.getScriptCache().remove("familyBankState_" + familyId); } catch(e) {}
+  return true;
+}
+
+// ── Legacy shims — keep old call sites working ──────────────────────
+// These default to the first family in the sheet. Any trigger/cron
+// that runs without context (automated deposits, interest, etc.) will
+// iterate via the plural forms below.
+
+function loadState() {
+  var ids = listAllFamilyIds_();
+  if (ids.length === 0) return buildDefaultState();
+  return loadFamilyState(ids[0]);
+}
+
+function saveState(state) {
+  // Legacy: if state has familyId, route to per-family save
+  if (state && state.familyId) return saveFamilyState(state.familyId, state);
+  // Otherwise default to first family — only used in edge cases
+  var ids = listAllFamilyIds_();
+  var familyId = ids[0] || generateFamilyId();
+  saveFamilyState(familyId, state);
+}
+
+// Iterate all families — used by cron jobs
+function forEachFamily(fn) {
+  var ids = listAllFamilyIds_();
+  ids.forEach(function(id) {
+    try {
+      var s = loadFamilyState(id);
+      fn(id, s);
+    } catch(e) {
+      Logger.log("forEachFamily error on " + id + ": " + e);
+    }
+  });
 }
 
 /** Post-process state after loading — migration and defaults */
@@ -1368,19 +1666,24 @@ function postProcessState(s) {
   return s;
 }
 
-function saveState(state) {
-  SpreadsheetApp.getActiveSpreadsheet().getSheets()[0].getRange("A1").setValue(JSON.stringify(state));
-  // Invalidate cache so next read gets fresh data
-  try { CacheService.getScriptCache().remove("familyBankState"); } catch(e) {}
-}
+// saveState is defined above in the v37.0 state layer (legacy shim).
 
 function getLedgerSheet() {
   var ss    = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName("Ledger");
   if (!sheet) {
     sheet = ss.insertSheet("Ledger");
-    sheet.appendRow(["Date", "User", "Child", "Note", "Amount"]);
+    // v37.0 — FamilyId column added
+    sheet.appendRow(["Date", "FamilyId", "User", "Child", "Note", "Amount"]);
     sheet.getRange("1:1").setFontWeight("bold");
+  } else {
+    // v37.0 — Migrate existing ledger to include FamilyId column if missing
+    var hdr = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0];
+    if (hdr.length < 6 || hdr[1] !== "FamilyId") {
+      // Insert a new column B for FamilyId
+      sheet.insertColumnAfter(1);
+      sheet.getRange(1, 2).setValue("FamilyId").setFontWeight("bold");
+    }
   }
   return sheet;
 }
@@ -1470,29 +1773,35 @@ function todayDateStr() {
   return Utilities.formatDate(new Date(), BANK_TIMEZONE, "yyyy-MM-dd");
 }
 
-function getLastChoreEntry(childName) {
+function getLastChoreEntry(childName, familyId) {
   var data = getLedgerSheet().getDataRange().getValues();
   for (var i = data.length - 1; i >= 1; i--) {
     var row   = data[i];
-    var note  = String(row[3] || "");
-    var child = String(row[2] || "");
+    var rowFamilyId = String(row[1] || "");
+    if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+    if (familyId && !rowFamilyId) continue;
+    var note  = String(row[4] || "");
+    var child = String(row[3] || "");
     if ((child === childName || !child) && note.indexOf("Chore:") === 0) return row;
   }
   return null;
 }
 
-function calcYTDInterest(childName) {
+function calcYTDInterest(childName, familyId) {
   try {
     var data  = getLedgerSheet().getDataRange().getValues();
     var year  = new Date().getFullYear();
     var total = 0;
     for (var i = 1; i < data.length; i++) {
-      var child = String(data[i][2] || "");
-      var note  = String(data[i][3] || "").toLowerCase();
-      var amt   = parseFloat(data[i][4]) || 0;
+      var rowFamilyId = String(data[i][1] || "");
+      if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+      if (familyId && !rowFamilyId) continue;
+      var child = String(data[i][3] || "");
+      var note  = String(data[i][4] || "").toLowerCase();
+      var amt   = parseFloat(data[i][5]) || 0;
       var rowYear = 0;
       try { rowYear = new Date(data[i][0]).getFullYear(); } catch(e) {}
-      if ((child === childName || !child) && note.includes("interest") && rowYear === year) {
+      if ((child === childName || !child) && note.indexOf("interest") !== -1 && rowYear === year) {
         total += amt;
       }
     }
@@ -2065,23 +2374,22 @@ function printReadableState() {
  * auto-deposits streakReward into checking.
  * Returns the bonus amount deposited (0 if no milestone hit).
  */
-function checkStreakMilestone(state, child, chore, ledger, now) {
+function checkStreakMilestone(state, child, chore, ledger, now, familyId) {
   try {
     if (!chore.streakMilestone || !chore.streakReward) return 0;
     var milestone = parseInt(chore.streakMilestone) || 0;
     var reward    = parseFloat(chore.streakReward) || 0;
     if (milestone <= 0 || reward <= 0) return 0;
 
-    // Increment instance count
     chore.streakCount = (parseInt(chore.streakCount) || 0) + 1;
     var effective = chore.streakCount + (parseInt(chore.streakStart) || 0);
 
     if (effective % milestone !== 0) return 0;
 
-    // Milestone hit — deposit bonus to checking
     var data = state.children[child];
     data.balances.checking += reward;
-    ledger.appendRow([now, "Bank", child,
+    var fid = familyId || state.familyId || "";
+    ledger.appendRow([now, fid, "Bank", child,
       "🔥 Streak Bonus: " + chore.name + " (" + effective + " in a row!) (Chk)", reward]);
     Logger.log("checkStreakMilestone: " + child + " — " + chore.name + " hit " + effective + " streak! Bonus $" + reward);
     return reward;
@@ -2091,7 +2399,7 @@ function checkStreakMilestone(state, child, chore, ledger, now) {
   }
 }
 
-function calcChoreStreaks(childName, data) {
+function calcChoreStreaks(childName, data, familyId) {
   try {
     var chores = data.chores || [];
     var ledger = getLedgerSheet().getDataRange().getValues();
@@ -2101,8 +2409,11 @@ function calcChoreStreaks(childName, data) {
       var completions = [];
       for (var i = 1; i < ledger.length; i++) {
         var row = ledger[i];
-        var child = String(row[2] || "");
-        var note  = String(row[3] || "");
+        var rowFamilyId = String(row[1] || "");
+        if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+        if (familyId && !rowFamilyId) continue;
+        var child = String(row[3] || "");
+        var note  = String(row[4] || "");
         if ((child === childName || !child) && note.indexOf("Chore: " + chore.name) === 0) {
           try { completions.push(new Date(row[0])); } catch(e) {}
         }
@@ -2122,16 +2433,19 @@ function calcChoreStreaks(childName, data) {
   } catch(e) { Logger.log("calcChoreStreaks ERROR: " + e); return []; }
 }
 
-function calcNetWorthHistory(childName) {
+function calcNetWorthHistory(childName, familyId) {
   try {
     var ledger = getLedgerSheet().getDataRange().getValues();
     var running = 0;
     var monthly = {};
     for (var i = 1; i < ledger.length; i++) {
       var row   = ledger[i];
-      var child = String(row[2] || "");
+      var rowFamilyId = String(row[1] || "");
+      if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+      if (familyId && !rowFamilyId) continue;
+      var child = String(row[3] || "");
       if (child !== childName && child !== "") continue;
-      var amt = parseFloat(row[4]) || 0;
+      var amt = parseFloat(row[5]) || 0;
       running += amt;
       try {
         var d   = new Date(row[0]);
@@ -2140,10 +2454,9 @@ function calcNetWorthHistory(childName) {
       } catch(e) {}
     }
     // v30.1: Always ensure a current-month data point exists so day-one charts
-    // aren't empty. If the current month already has ledger activity, its
-    // running total is already correct. Otherwise, fall back to current balance.
+    // aren't empty.
     try {
-      var state = loadState();
+      var state = familyId ? loadFamilyState(familyId) : loadState();
       var child = state.children && state.children[childName];
       if (child && child.balances) {
         var now = new Date();
@@ -2163,18 +2476,45 @@ function calcNetWorthHistory(childName) {
 
 // ================================================================
 // [SETUP] — Run once from Apps Script editor after pasting this file
+// v37.0 — Initialize row-per-family sheet. Existing data is untouched;
+//          run migrateToRowPerFamily() separately after setupBank if
+//          upgrading from pre-v37.0.
 // ================================================================
 function setupBank() {
-  // Create Ledger tab if it doesn't exist
+  // Create Ledger tab (with FamilyId column) if it doesn't exist
   getLedgerSheet();
 
-  // Write default state to A1 only if it's empty
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
-  if (!sheet.getRange("A1").getValue()) {
-    saveState(buildDefaultState());
-    Logger.log("setupBank: default state written to A1");
+  // v37.0 — Initialize header row on the data sheet
+  ensureFamilySheetHeader_();
+  Logger.log("setupBank: family sheet header verified");
+
+  // If this is a FRESH install (no family rows yet, no legacy A1 data):
+  // seed with a default Bank of Dad family using the CONFIG block above.
+  var sheet = getFamilySheet_();
+  var lastRow = sheet.getLastRow();
+  var a1Value = sheet.getRange("A1").getValue();
+  var hasFamilyData = (lastRow >= 2);
+
+  // Detect legacy A1 blob (unmigrated v36 or earlier):
+  //   cell A1 contains JSON state instead of the "FamilyId" header.
+  var looksLikeLegacyA1 = false;
+  try {
+    if (typeof a1Value === "string" && a1Value.length > 10 && a1Value.charAt(0) === "{") {
+      JSON.parse(a1Value);
+      looksLikeLegacyA1 = true;
+    }
+  } catch(e) { looksLikeLegacyA1 = false; }
+
+  if (looksLikeLegacyA1) {
+    Logger.log("setupBank: legacy A1 blob detected. Run migrateToRowPerFamily() to upgrade.");
+  } else if (!hasFamilyData) {
+    // Fresh install — seed one family
+    var defaultId = generateFamilyId();
+    var defaultState = buildDefaultState();
+    saveFamilyState(defaultId, defaultState);
+    Logger.log("setupBank: seeded fresh family " + defaultId);
   } else {
-    Logger.log("setupBank: A1 already has data — not overwriting (existing bank data is safe)");
+    Logger.log("setupBank: found " + (lastRow - 1) + " existing family row(s); not overwriting.");
   }
 
   // Install triggers (skips any that already exist)
@@ -2309,8 +2649,14 @@ function handleWithdrawalEmailAction(params) {
   var withdrawalId = params.withdrawalId;
   var child        = params.child;
   var token        = params.token;
+  var familyId     = params.familyId;
 
-  var expectedToken = generateToken(withdrawalId, action);
+  if (!familyId) {
+    return buildActionPage("❌ Invalid Link",
+      "This link is missing family information.", "#ef4444");
+  }
+
+  var expectedToken = generateToken(familyId + "|" + withdrawalId, action);
   if (token !== expectedToken) {
     return buildActionPage("❌ Invalid or Expired Link",
       "This link is no longer valid. Please open the app to manage withdrawals.",
@@ -2318,7 +2664,7 @@ function handleWithdrawalEmailAction(params) {
   }
 
   try {
-    var state = loadState();
+    var state = loadFamilyState(familyId);
     var data  = state.children && state.children[child];
     if (!data) return buildActionPage("❌ Error", "Child account not found.", "#ef4444");
 
@@ -2342,12 +2688,11 @@ function handleWithdrawalEmailAction(params) {
           "#ef4444");
       }
       data.balances.checking -= wd.amount;
-      ledger.appendRow([now, child, child, "Withdraw: " + (wd.note || ""), -wd.amount]);
+      ledger.appendRow([now, familyId, child, child, "Withdraw: " + (wd.note || ""), -wd.amount]);
       data.pendingWithdrawals = pending.filter(function(p){ return p.id !== withdrawalId; });
       state.children[child] = data;
-      saveState(state);
+      saveFamilyState(familyId, state);
 
-      // Notify child
       var childEmail = getEmailFor(state, child);
       if (childEmail && notifyEmail(state, child)) {
         var html = buildSimpleEmailHtml(state,
@@ -2370,7 +2715,7 @@ function handleWithdrawalEmailAction(params) {
     } else { // withdrawDeny
       data.pendingWithdrawals = pending.filter(function(p){ return p.id !== withdrawalId; });
       state.children[child] = data;
-      saveState(state);
+      saveFamilyState(familyId, state);
 
       var childEmail = getEmailFor(state, child);
       if (childEmail && notifyEmail(state, child)) {
@@ -2392,15 +2737,466 @@ function handleWithdrawalEmailAction(params) {
 }
 
 // v35.0 Item 2 — lookup last "Withdraw:" ledger row for a child (used by approval email)
-function getLastWithdrawEntry(childName) {
+// v37.0 — takes optional familyId for per-family filtering; ledger columns shifted
+function getLastWithdrawEntry(childName, familyId) {
   try {
     var ledger = getLedgerSheet();
     var rows = ledger.getDataRange().getValues();
     for (var i = rows.length - 1; i >= 1; i--) {
-      if (rows[i][2] === childName && String(rows[i][3] || "").indexOf("Withdraw:") === 0) {
+      var rowFamilyId = String(rows[i][1] || "");
+      if (familyId && rowFamilyId && rowFamilyId !== familyId) continue;
+      if (familyId && !rowFamilyId) continue;
+      if (rows[i][3] === childName && String(rows[i][4] || "").indexOf("Withdraw:") === 0) {
         return rows[i];
       }
     }
   } catch(e) { Logger.log("getLastWithdrawEntry ERROR: " + e); }
   return null;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v37.0 — MIGRATION: A1 blob → row-per-family
+// ════════════════════════════════════════════════════════════════════
+//
+// One-shot migration. Safe to re-run: detects if migration already done.
+//
+// For Bank of Dad's current data:
+//   • Dad + Linnea         → family 1 (primary: Dad)
+//   • Jacee (solo parent)  → family 2 (primary: Jacee)
+//   • Anthony (solo parent)→ family 3 (primary: Anthony)
+//   • Mark (solo parent)   → family 4 (primary: Mark)
+//
+// Algorithm:
+//   1. Read legacy A1 blob
+//   2. Build connected components from parentChildren map
+//      (parents sharing a child = same family)
+//   3. Each component becomes one family with its own config,
+//      children, chores, balances, etc.
+//   4. Solo parents (no children) get their own family
+//   5. Write each family to its own row in col A/B
+//   6. Backfill Ledger rows with familyId (col B) based on child→family map
+//   7. Clear A1 blob (set to "FamilyId" header)
+// ════════════════════════════════════════════════════════════════════
+function migrateToRowPerFamily() {
+  var sheet = getFamilySheet_();
+  var a1 = sheet.getRange("A1").getValue();
+
+  // Detect already-migrated state
+  if (a1 === FAMILY_SHEET_HEADER[0]) {
+    Logger.log("migrateToRowPerFamily: already migrated (header present). Aborting safely.");
+    return;
+  }
+
+  if (!a1 || typeof a1 !== "string" || a1.charAt(0) !== "{") {
+    Logger.log("migrateToRowPerFamily: no legacy A1 blob found. Setting header and exiting.");
+    ensureFamilySheetHeader_();
+    return;
+  }
+
+  var legacy;
+  try { legacy = JSON.parse(a1); }
+  catch(e) {
+    Logger.log("migrateToRowPerFamily ERROR: cannot parse A1 — " + e);
+    return;
+  }
+
+  Logger.log("migrateToRowPerFamily: starting. Users: " + (legacy.users || []).join(", "));
+
+  var users        = legacy.users || [];
+  var roles        = legacy.roles || {};
+  var pins         = legacy.pins || {};
+  var emails       = (legacy.config && legacy.config.emails) || {};
+  var avatars      = (legacy.config && legacy.config.avatars) || {};
+  var avatarPhotos = (legacy.config && legacy.config.avatarPhotos) || {};
+  var parentChildren = (legacy.config && legacy.config.parentChildren) || {};
+  var children       = legacy.children || {};
+
+  var parents = users.filter(function(u){ return roles[u] === "parent"; });
+  var kids    = users.filter(function(u){ return roles[u] === "child"; });
+
+  // ── Build connected components ─────────────────────────────────────
+  // Parents connect to kids via parentChildren.
+  // Two parents who share a kid are in the same family.
+  // Solo parents (no shared kid) get their own family.
+  var parentToFamily = {};
+  var kidToFamily    = {};
+  var families       = [];
+  var familyIdx      = 0;
+
+  function ensureFamilyForParent(parent) {
+    if (parentToFamily.hasOwnProperty(parent)) return parentToFamily[parent];
+    var fam = { parents: [], kids: [] };
+    families.push(fam);
+    var idx = familyIdx++;
+    parentToFamily[parent] = idx;
+    fam.parents.push(parent);
+
+    // Pull all kids assigned to this parent
+    var assignedKids = parentChildren[parent] || [];
+    assignedKids.forEach(function(k) {
+      if (!kidToFamily.hasOwnProperty(k)) {
+        kidToFamily[k] = idx;
+        fam.kids.push(k);
+      }
+    });
+
+    // Pull all other parents who share any of those kids
+    parents.forEach(function(otherP) {
+      if (otherP === parent) return;
+      if (parentToFamily.hasOwnProperty(otherP)) return;
+      var otherKids = parentChildren[otherP] || [];
+      var shares = otherKids.some(function(k){ return assignedKids.indexOf(k) !== -1; });
+      if (shares) {
+        parentToFamily[otherP] = idx;
+        fam.parents.push(otherP);
+        otherKids.forEach(function(k) {
+          if (!kidToFamily.hasOwnProperty(k)) {
+            kidToFamily[k] = idx;
+            fam.kids.push(k);
+          }
+        });
+      }
+    });
+
+    return idx;
+  }
+
+  parents.forEach(function(p) { ensureFamilyForParent(p); });
+
+  // Any orphan kids (no parent assignment) — attach to first family, or create one
+  kids.forEach(function(k) {
+    if (!kidToFamily.hasOwnProperty(k)) {
+      if (families.length === 0) {
+        families.push({ parents: [], kids: [k] });
+        kidToFamily[k] = 0;
+        familyIdx = 1;
+      } else {
+        kidToFamily[k] = 0;
+        families[0].kids.push(k);
+      }
+    }
+  });
+
+  Logger.log("migrateToRowPerFamily: " + families.length + " families detected");
+
+  // ── Build each family's state JSON ─────────────────────────────────
+  var familyIds = [];
+  families.forEach(function(fam, idx) {
+    var familyId = generateFamilyId();
+    // Nudge: ensure unique within this run even if timestamps collide
+    if (familyIds.indexOf(familyId) !== -1) familyId = familyId + idx;
+    familyIds.push(familyId);
+
+    var primaryParent = fam.parents[0] || null;
+
+    var famUsers = [].concat(fam.parents, fam.kids);
+    var famRoles = {}, famPins = {}, famEmails = {}, famAvatars = {}, famAvatarPhotos = {};
+    famUsers.forEach(function(u) {
+      famRoles[u]        = roles[u];
+      famPins[u]         = pins[u];
+      if (emails[u])       famEmails[u]       = emails[u];
+      if (avatars[u])      famAvatars[u]      = avatars[u];
+      if (avatarPhotos[u]) famAvatarPhotos[u] = avatarPhotos[u];
+    });
+
+    // Per-family parentChildren (only for this family's parents+kids)
+    var famParentChildren = {};
+    fam.parents.forEach(function(p) {
+      var pKids = (parentChildren[p] || []).filter(function(k) {
+        return fam.kids.indexOf(k) !== -1;
+      });
+      if (pKids.length) famParentChildren[p] = pKids;
+    });
+
+    // Children data — only this family's kids
+    var famChildren = {};
+    fam.kids.forEach(function(k) {
+      if (children[k]) famChildren[k] = children[k];
+    });
+
+    // Compose full state for this family
+    var famState = {
+      users:    famUsers,
+      roles:    famRoles,
+      pins:     famPins,
+      children: famChildren,
+      config: {
+        bankName:       (legacy.config && legacy.config.bankName)       || BANK_NAME,
+        tagline:        (legacy.config && legacy.config.tagline)        || BANK_TAGLINE,
+        colorPrimary:   (legacy.config && legacy.config.colorPrimary)   || DEFAULT_COLOR_PRIMARY,
+        colorSecondary: (legacy.config && legacy.config.colorSecondary) || DEFAULT_COLOR_SECONDARY,
+        imgBanner:      (legacy.config && legacy.config.imgBanner)      || "",
+        imgLogo:        (legacy.config && legacy.config.imgLogo)        || "",
+        timezone:       (legacy.config && legacy.config.timezone)       || BANK_TIMEZONE,
+        autoLogout:     (legacy.config && legacy.config.autoLogout)     || 0,
+        adminEmail:     (legacy.config && legacy.config.adminEmail)     || "",
+        adminPin:       (legacy.config && legacy.config.adminPin)       || DEFAULT_ADMIN_PIN,
+        parentChildren: famParentChildren,
+        emails:         famEmails,
+        avatars:        famAvatars,
+        avatarPhotos:   famAvatarPhotos,
+        notify:         (legacy.config && legacy.config.notify)         || {},
+        tabs:           (legacy.config && legacy.config.tabs)           || {},
+        calendars:      {},
+        // v37.0 — primary parent marker
+        primaryParent:  primaryParent,
+        // v37.0 — setup complete flag: existing families are already set up
+        familySetupComplete: true,
+        // v37.0 — per-child setup flags: existing kids are already set up
+        childSetupComplete: (function(){ var m={}; fam.kids.forEach(function(k){m[k]=true;}); return m; })(),
+        // v37.0 — deactivated children list
+        deactivatedChildren: [],
+        // v37.0 — login stats preserved from legacy if available
+        loginStats: (legacy.config && legacy.config.loginStats)
+          ? (function(){
+              var ls = {};
+              famUsers.forEach(function(u){
+                if (legacy.config.loginStats[u]) ls[u] = legacy.config.loginStats[u];
+              });
+              return ls;
+            })()
+          : {}
+      }
+    };
+
+    // Per-child calendar ids
+    if (legacy.config && legacy.config.calendars) {
+      fam.kids.forEach(function(k) {
+        if (legacy.config.calendars[k]) famState.config.calendars[k] = legacy.config.calendars[k];
+      });
+    }
+
+    // Preserve pendingUsers ONLY on the first family (admin-level data)
+    if (idx === 0 && legacy.config && legacy.config.pendingUsers) {
+      famState.config.pendingUsers = legacy.config.pendingUsers;
+    }
+
+    saveFamilyState(familyId, famState);
+    Logger.log("migrateToRowPerFamily: wrote family " + familyId +
+               " parents=[" + fam.parents.join(",") + "] kids=[" + fam.kids.join(",") + "]");
+  });
+
+  // ── Backfill Ledger with familyId column ───────────────────────────
+  // Build child → familyId map
+  var childToFamilyId = {};
+  families.forEach(function(fam, idx) {
+    var fid = familyIds[idx];
+    fam.kids.forEach(function(k) { childToFamilyId[k] = fid; });
+  });
+
+  try {
+    var ledger = getLedgerSheet(); // ensures FamilyId column exists
+    var rng = ledger.getDataRange();
+    var data = rng.getValues();
+    var updated = 0;
+    // Row 1 = header. Data rows start at 2.
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1]) continue; // already has familyId
+      var childName = String(data[i][3] || "");
+      var fid = childToFamilyId[childName] || familyIds[0] || "";
+      if (fid) {
+        ledger.getRange(i + 1, 2).setValue(fid);
+        updated++;
+      }
+    }
+    Logger.log("migrateToRowPerFamily: backfilled " + updated + " ledger rows with familyId");
+  } catch(e) { Logger.log("migrateToRowPerFamily: ledger backfill ERROR: " + e); }
+
+  // ── Write header to col A row 1, clearing the legacy A1 blob ───────
+  // saveFamilyState already appended data rows. Now ensure row 1 is headers.
+  // saveFamilyState writes rows starting at the first empty row — if A1 had
+  // the JSON blob, row 2 may now contain the first family, but row 1 still
+  // has the blob. Overwrite row 1 with headers.
+  sheet.getRange(1, 1, 1, 2).setValues([FAMILY_SHEET_HEADER]).setFontWeight("bold");
+
+  Logger.log("migrateToRowPerFamily: done. " + families.length + " families migrated.");
+  Logger.log("Family IDs: " + familyIds.join(", "));
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v37.0 — AUDIT LOG
+// ════════════════════════════════════════════════════════════════════
+//
+// Sheet: "AuditLog"
+// Columns: Timestamp | FamilyId | Parent | Action | Target
+// Capped at 200 rows per family; oldest pruned on write.
+// ════════════════════════════════════════════════════════════════════
+var AUDIT_LOG_MAX_PER_FAMILY = 200;
+
+function getAuditLogSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName("AuditLog");
+  if (!sh) {
+    sh = ss.insertSheet("AuditLog");
+    sh.appendRow(["Timestamp", "FamilyId", "Parent", "Action", "Target"]);
+    sh.getRange("1:1").setFontWeight("bold");
+  }
+  return sh;
+}
+
+function appendAuditLog(familyId, parent, action, target) {
+  try {
+    if (!familyId) return;
+    var sh = getAuditLogSheet_();
+    var tz = "America/New_York";
+    try {
+      var state = loadFamilyState(familyId);
+      tz = getTimezone(state);
+    } catch(e) {}
+    var ts = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
+    sh.appendRow([ts, familyId, parent || "", action || "", target || ""]);
+
+    // Prune oldest entries for this family if over cap
+    pruneAuditLog_(familyId);
+  } catch(e) {
+    Logger.log("appendAuditLog ERROR: " + e);
+  }
+}
+
+function pruneAuditLog_(familyId) {
+  try {
+    var sh = getAuditLogSheet_();
+    var data = sh.getDataRange().getValues();
+    // Find all rows for this family (skip header at row 0)
+    var familyRows = [];
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][1]) === familyId) familyRows.push(i + 1); // 1-indexed
+    }
+    if (familyRows.length <= AUDIT_LOG_MAX_PER_FAMILY) return;
+    var toDelete = familyRows.length - AUDIT_LOG_MAX_PER_FAMILY;
+    // familyRows is in ascending order → oldest first (rows appended chronologically)
+    // Delete from bottom up to keep row indices valid
+    var victims = familyRows.slice(0, toDelete).sort(function(a,b){return b-a;});
+    victims.forEach(function(r) { sh.deleteRow(r); });
+    Logger.log("pruneAuditLog: pruned " + toDelete + " rows for " + familyId);
+  } catch(e) {
+    Logger.log("pruneAuditLog ERROR: " + e);
+  }
+}
+
+/**
+ * Get last N audit entries for a family, newest first.
+ * Called from frontend via a POST (state.action === "getAuditLog").
+ */
+function getAuditLogForFamily(familyId, limit) {
+  try {
+    if (!familyId) return [];
+    limit = limit || 50;
+    var sh = getAuditLogSheet_();
+    var data = sh.getDataRange().getValues();
+    var out = [];
+    for (var i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][1]) !== familyId) continue;
+      out.push({
+        timestamp: String(data[i][0] || ""),
+        parent:    String(data[i][2] || ""),
+        action:    String(data[i][3] || ""),
+        target:    String(data[i][4] || "")
+      });
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch(e) {
+    Logger.log("getAuditLogForFamily ERROR: " + e);
+    return [];
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v37.0 — DELETE FAMILY (server-side scrub)
+// ════════════════════════════════════════════════════════════════════
+//
+// Called by frontend POST with { deleteFamilyRequest: { familyId } }.
+// Scrubs:
+//   • Family row on main sheet
+//   • All Ledger rows with this familyId
+//   • All AuditLog rows with this familyId
+//   • Calendar events for each child (if any)
+//
+// The frontend handles reauth before posting this; backend trusts the call.
+// ════════════════════════════════════════════════════════════════════
+function deleteFamilyFull(familyId) {
+  try {
+    if (!familyId) throw new Error("familyId required");
+    Logger.log("deleteFamilyFull: starting for " + familyId);
+
+    // Capture state for calendar cleanup before we delete
+    var state = null;
+    try { state = loadFamilyState(familyId); } catch(e) { state = null; }
+
+    // 1. Delete family row on main sheet
+    deleteFamilyRow(familyId);
+
+    // 2. Scrub Ledger rows
+    try {
+      var ledger = getLedgerSheet();
+      var data = ledger.getDataRange().getValues();
+      var victims = [];
+      for (var i = 1; i < data.length; i++) {
+        if (String(data[i][1]) === familyId) victims.push(i + 1);
+      }
+      victims.sort(function(a,b){return b-a;}).forEach(function(r) { ledger.deleteRow(r); });
+      Logger.log("deleteFamilyFull: scrubbed " + victims.length + " ledger rows");
+    } catch(e) { Logger.log("deleteFamilyFull ledger ERROR: " + e); }
+
+    // 3. Scrub AuditLog rows
+    try {
+      var al = getAuditLogSheet_();
+      var adata = al.getDataRange().getValues();
+      var avictims = [];
+      for (var j = 1; j < adata.length; j++) {
+        if (String(adata[j][1]) === familyId) avictims.push(j + 1);
+      }
+      avictims.sort(function(a,b){return b-a;}).forEach(function(r) { al.deleteRow(r); });
+      Logger.log("deleteFamilyFull: scrubbed " + avictims.length + " audit log rows");
+    } catch(e) { Logger.log("deleteFamilyFull audit ERROR: " + e); }
+
+    // 4. Delete calendar events (best-effort)
+    if (state && state.config && state.config.calendars) {
+      try {
+        Object.keys(state.config.calendars).forEach(function(child) {
+          var calId = state.config.calendars[child];
+          if (!calId) return;
+          try {
+            var cal = CalendarApp.getCalendarById(calId);
+            if (cal) {
+              // Delete all family-bank events in the next 2 years
+              var now = new Date();
+              var end = new Date(); end.setFullYear(end.getFullYear() + 2);
+              var events = cal.getEvents(now, end, {search: "🏦"});
+              events.forEach(function(ev) {
+                try { ev.deleteEvent(); } catch(eve) {}
+              });
+              Logger.log("deleteFamilyFull: deleted " + events.length + " calendar events for " + child);
+            }
+          } catch(ce) { Logger.log("deleteFamilyFull cal ERROR (" + child + "): " + ce); }
+        });
+      } catch(e) { Logger.log("deleteFamilyFull calendar block ERROR: " + e); }
+    }
+
+    Logger.log("deleteFamilyFull: done for " + familyId);
+    return true;
+  } catch(err) {
+    Logger.log("deleteFamilyFull ERROR: " + err);
+    return false;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// v37.0 — MAINTENANCE HELPERS
+// ════════════════════════════════════════════════════════════════════
+
+/** List all families with basic info — used by admin dashboard */
+function listFamiliesWithSummary() {
+  var out = [];
+  forEachFamily(function(fid, state) {
+    out.push({
+      familyId:       fid,
+      bankName:       getBankName(state),
+      primaryParent:  state.config && state.config.primaryParent,
+      parentCount:    getParentNames(state).length,
+      childCount:     getChildNames(state).length
+    });
+  });
+  return out;
 }

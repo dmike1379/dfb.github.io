@@ -1,5 +1,5 @@
 {
-  "version": "36.1",
+  "version": "37.0",
   "released": "2026-04-19",
-  "notes": "v36.1 MINOR • Frontend only, no Code.gs change. Fixes wizard random crash: restoreRememberedUser() now guards against re-running the enter flow when a user is already logged in. Previously, every syncToCloud (which fires on wizard save, chore add, pill toggle, etc.) scheduled loadFromCloud 1.8s later, which re-ran restoreRememberedUser -> enterApp -> selectChild -> closeAllSheets, removing the .open class from the wizard sheet with no error log."
+  "notes": "v37.0 MAJOR • Row-per-family architecture. Each family lives in its own sheet row (col A = familyId, col B = state JSON). Ledger gains a FamilyId column. New AuditLog sheet. Family Account wizard replaces single-parent signup. Primary parent role with transfer. Reauth gate on all destructive actions (Delete Child / Delete Own Account / Delete Family). Child deactivate vs delete. Genericized default branding. Splash/login version now read from version.json at runtime. Top bar consolidated to a single row. Admin Panel pending requests auto-expand when count > 0. Admin user-card meta split into three labeled lines. Wizard Step 1 tightened. Split preset buttons restyled as blue-underlined text links with five presets (100% Sav / 75% Sav / 50/50 / 75% Chk / 100% Chk). Apps Script redeploy REQUIRED. Run migrateToRowPerFamily() once post-deploy."
 }

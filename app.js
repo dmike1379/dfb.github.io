@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbxzaghKdOwC2liRFZVDLXL15H4Dh_sOZr8zsNZZxjlDwekH1ylc2PsGpfQluaN6LSsIsg/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbwTsyS08c8w0-iRK1rpMhm6DRGW2JuFfsU5m5uNk8Uu67ku1gbAs4RdYPtohGwboSMR8w/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -58,7 +58,10 @@ const CFG_IMG_LOGO   = "images/logo.png";
 const CFG_IMG_ICON   = "images/icon.png";
 
 // ── Version ──
-const APP_VERSION = "34.1";
+// v37.0 — No longer a hardcoded constant. Read from version.json at runtime
+//         and stamped onto splash/login in stampVersion() below. Kept as a
+//         non-authoritative fallback in case the fetch fails.
+let APP_VERSION = "37.0";
 
 // ╔═══════════════════════════════════════════════════════════════════╗
 // ║         END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE       ║
@@ -267,6 +270,21 @@ let state = {
 let currentUser         = null;   // logged-in username
 let currentRole         = null;   // "child" | "parent"
 let activeChild         = null;   // child being managed (parent view)
+// v37.0 — row-per-family routing. Every network call to the backend must carry
+// this id. Persisted in sessionStorage ("fb_session_family") so a refresh
+// re-enters the same family without re-hitting the listFamilies discovery flow.
+let currentFamilyId     = null;
+// v37.0 — Mirror Code.gs generateFamilyId(): "fam_" + 8 base36 chars.
+// Client and server must format ids identically so handoff between the two
+// (approve-pending flow posts a new family under a client-generated id) stays
+// consistent.
+function generateFamilyId(){
+  let suffix = "";
+  for(let i=0; i<8; i++){
+    suffix += Math.floor(Math.random()*36).toString(36);
+  }
+  return "fam_" + suffix;
+}
 let pendingTransactions = [];
 let editingChoreId      = null;
 let editingLoanId       = null;  // v30.1
@@ -420,6 +438,125 @@ function fireModalConfirm(){
 }
 function handleOverlayClick(e){ if(e.target===document.getElementById("modal-overlay")) closeModal(); }
 
+// ────────────────────────────────────────────────────────────────────
+// v37.0 — REAUTH MODAL
+// ────────────────────────────────────────────────────────────────────
+// Friction gate against accidental clicks on destructive actions (Delete
+// Own Account, Delete Child, Delete Family). Not a security boundary —
+// the user is already authenticated. Intentionally low-stakes messaging:
+// no "access denied" language, no attempt counter, no lockout.
+//
+// Usage:
+//   confirmReauth("Delete Family", () => { /* proceed */ });
+//
+// Contract:
+//   - Username is pre-filled with currentUser and read-only.
+//   - PIN is the live input; validated against state.pins[currentUser].
+//   - Wrong PIN: shows inline error, clears PIN, stays open for retry.
+//   - Correct PIN: closes modal and fires callback().
+//   - Cancel: closes modal, callback NOT fired.
+//
+// Markup lives in index.html (reauth-overlay + child elements). Until the
+// index.html pass lands, calls to confirmReauth() will silently no-op if
+// the DOM surface is missing — guarded below.
+let reauthCallback = null;
+
+function confirmReauth(actionLabel, callback){
+  const overlay = document.getElementById("reauth-overlay");
+  if(!overlay){
+    // Index.html markup not yet in place — fail safe by running callback
+    // directly so the app remains usable during frontend rollout. Once the
+    // index.html pass lands this branch is dead code. Logging so QA can
+    // catch it if markup ships broken.
+    console.warn("[FamilyBank v37.0] confirmReauth: #reauth-overlay missing; firing callback directly for action:", actionLabel);
+    if(typeof callback === "function") callback();
+    return;
+  }
+  if(!currentUser || !state.pins || state.pins[currentUser] === undefined){
+    // No logged-in user or no PIN on record — can't reauth. Shouldn't reach
+    // here in practice since destructive actions are parent-gated.
+    console.warn("[FamilyBank v37.0] confirmReauth called without valid currentUser");
+    return;
+  }
+  reauthCallback = (typeof callback === "function") ? callback : null;
+
+  const labelEl = document.getElementById("reauth-action-label");
+  if(labelEl) labelEl.textContent = actionLabel || "this action";
+
+  const userEl = document.getElementById("reauth-username");
+  if(userEl){
+    userEl.value = currentUser;
+    userEl.readOnly = true;
+  }
+
+  const pinEl = document.getElementById("reauth-pin");
+  if(pinEl){
+    pinEl.value = "";
+  }
+
+  const errEl = document.getElementById("reauth-error");
+  if(errEl){
+    errEl.textContent = "";
+    errEl.classList.add("hidden");
+  }
+
+  overlay.classList.add("open");
+  // Defer focus so the modal is painted first
+  setTimeout(()=>{ document.getElementById("reauth-pin")?.focus(); }, 150);
+}
+window.confirmReauth = confirmReauth;
+
+function closeReauth(){
+  const overlay = document.getElementById("reauth-overlay");
+  if(overlay) overlay.classList.remove("open");
+  // Clear the PIN field on close so it never lingers in the DOM
+  const pinEl = document.getElementById("reauth-pin");
+  if(pinEl) pinEl.value = "";
+  reauthCallback = null;
+}
+window.closeReauth = closeReauth;
+
+function fireReauthConfirm(){
+  const pinEl = document.getElementById("reauth-pin");
+  const errEl = document.getElementById("reauth-error");
+  const entered = pinEl ? (pinEl.value || "") : "";
+
+  if(!entered){
+    if(errEl){
+      errEl.textContent = "Enter your PIN to continue.";
+      errEl.classList.remove("hidden");
+    }
+    pinEl?.focus();
+    return;
+  }
+
+  const expected = (state.pins && state.pins[currentUser] !== undefined)
+    ? String(state.pins[currentUser]) : null;
+
+  if(expected !== null && entered === expected){
+    const cb = reauthCallback;
+    closeReauth();
+    if(typeof cb === "function") cb();
+    return;
+  }
+
+  // Wrong PIN: stay open, clear field, show inline message.
+  if(errEl){
+    errEl.textContent = "PIN doesn't match. Try again.";
+    errEl.classList.remove("hidden");
+  }
+  if(pinEl){
+    pinEl.value = "";
+    pinEl.focus();
+  }
+}
+window.fireReauthConfirm = fireReauthConfirm;
+
+function handleReauthOverlayClick(e){
+  if(e.target === document.getElementById("reauth-overlay")) closeReauth();
+}
+window.handleReauthOverlayClick = handleReauthOverlayClick;
+
 function showToast(msg,type="",dur=3200){
   const t=document.getElementById("toast");
   t.textContent=msg;
@@ -496,10 +633,49 @@ function playCelebrationSound(){
 // ════════════════════════════════════════════════════════════════════
 // 5. CLOUD LOAD & SYNC
 // ════════════════════════════════════════════════════════════════════
+// v37.0 — Restore familyId from sessionStorage synchronously before the first
+// network call, so the initial loadFromCloud fetches the right family's state
+// instead of hitting listFamilies and bouncing through a picker on every refresh.
+try {
+  const savedFid = sessionStorage.getItem("fb_session_family");
+  if(savedFid && /^fam_[a-z0-9]{4,}$/.test(savedFid)){
+    currentFamilyId = savedFid;
+  }
+} catch(e){}
+
 async function loadFromCloud(){
   setStatus("loading","Connecting to bank...");
   try{
-    const res=await fetch(API_URL+"?t="+Date.now());
+    // v37.0 — If we don't have a familyId yet (fresh install / first visit /
+    // cleared session), ask the backend which families exist. Zero → fresh
+    // install, route to default/first-run. One → auto-adopt that family.
+    // Many → surface a family picker. Code.gs v37.0 returns {familyIds:[...]}
+    // for requests without familyId.
+    if(!currentFamilyId){
+      try {
+        const discoverRes = await fetch(API_URL+"?action=listFamilies&t="+Date.now());
+        const discover = await discoverRes.json();
+        const ids = (discover && Array.isArray(discover.familyIds)) ? discover.familyIds : [];
+        if(ids.length === 1){
+          currentFamilyId = ids[0];
+          try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
+        } else if(ids.length > 1){
+          // Multi-family on this backend and no session — show picker UI.
+          // Picker markup and handler land in a later index.html/app.js edit;
+          // until then, default to the first id so the app still boots.
+          // TODO v37.0 UI: showFamilyPicker(ids)
+          currentFamilyId = ids[0];
+          try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
+        }
+        // else: zero families — fresh install path. Leave currentFamilyId null
+        // and let the server's default-family response below hydrate state.
+      } catch(e){
+        console.warn("[FamilyBank] family discovery failed:", e);
+      }
+    }
+    const url = API_URL + "?t=" + Date.now() +
+      (currentFamilyId ? "&familyId=" + encodeURIComponent(currentFamilyId) : "");
+    const res=await fetch(url);
     const data=await res.json();
     if(data && (data.children || data.balances || data.pins)){
       state={
@@ -607,6 +783,10 @@ async function _doSyncToCloud(action){
     tempTransactions:pendingTransactions,
     lastAction:action,
     activeChild:activeChild,
+    // v37.0 — Required by Code.gs. POSTs without familyId are rejected.
+    // Null here (pre-login / discovery failed) is itself a signal the server
+    // will reject — preferable to a silent overwrite of the wrong family.
+    familyId: currentFamilyId,
     // v34.0 — Stale-write guard stamp. Server compares this to its own _savedAt
     // and rejects the POST if ours is older. Also re-stamps state._savedAt
     // server-side before saving so the next POST has a fresh baseline.
@@ -846,6 +1026,22 @@ function attemptLogin(){
 // Shared landing logic used by both attemptLogin and auto-login restore
 function enterApp(user){
   currentUser=user;
+  // v37.0 — Pin currentFamilyId to the authoritative value from the state that
+  // was just authenticated against. By the time we get here, `state.familyId`
+  // came from the server on the most recent loadFromCloud (Code.gs stamps it
+  // on every loadFamilyState return). In practice currentFamilyId is already
+  // correct (set by discovery or sessionStorage restore). This guard catches
+  // drift in one scenario: loadFromCloud discovery auto-adopted family A, but
+  // Code.gs (for any reason — cache miss, manual sheet edit) returned state
+  // belonging to family B. Without this check we'd authenticate against B's
+  // user list while posting under A's familyId, scrambling two families.
+  try {
+    if(state && state.familyId && state.familyId !== currentFamilyId){
+      console.warn("[FamilyBank v37.0] familyId drift at login — session was "+currentFamilyId+", server state is "+state.familyId+". Pinning to server.");
+      currentFamilyId = state.familyId;
+      try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
+    }
+  } catch(e){}
   // v33.1 — If the one-parent migration ran during loadFromCloud and this login
   // is that parent, persist the seeded parentChildren list now.
   try {
@@ -886,6 +1082,10 @@ function enterApp(user){
   currentRole=state.roles[user]||"child";
   // v34.2 — persist session so page refresh doesn't log out
   try { sessionStorage.setItem("fb_session_user", user); } catch(e){}
+  // v37.0 — persist familyId so refresh skips the listFamilies round-trip
+  try {
+    if(currentFamilyId) sessionStorage.setItem("fb_session_family", currentFamilyId);
+  } catch(e){}
   // v34.2 — show share notification if another parent shared a child with this user
   try {
     const notifs = state.config.shareNotifications && state.config.shareNotifications[user];
@@ -906,6 +1106,24 @@ function enterApp(user){
     // v32: parent uses single-line top bar, not child top-bar
     document.getElementById("child-top-bar")?.classList.add("hidden");
     document.getElementById("parent-top-bar")?.classList.remove("hidden");
+
+    // v37.0 — Family Setup Wizard trigger. Must fire BEFORE any per-child
+    // wizard trigger so we don't push a partially-setup family through the
+    // child flow. Primary parent only; gated by familySetupComplete flag.
+    // Migration stamps existing families' flag to true, so this only fires
+    // on brand-new families approved post-v37.0.
+    try {
+      if(isPrimaryParent(currentUser)
+         && state.config && state.config.familySetupComplete !== true){
+        // Defer to next tick so the parent top bar paints first.
+        setTimeout(openFamilyWizard, 40);
+        return;  // Skip the rest of enterApp's parent-branch routing. The
+                 // wizard's fwCommit() handles re-rendering after finish.
+      }
+    } catch(e){
+      console.warn("[FamilyBank v37.0] Family wizard trigger check failed:", e);
+    }
+
     const children=getAssignedChildren();
     updateChildSwitcherVisibility();  // v34.0 — hide Switch button if ≤1 child
     if(children.length===1){
@@ -946,6 +1164,9 @@ function enterApp(user){
 
 function logout(){
   try { sessionStorage.removeItem("fb_session_user"); sessionStorage.removeItem("fb_session_child"); } catch(e){}
+  // v37.0 — clear familyId so the next login re-discovers (handles family switching)
+  try { sessionStorage.removeItem("fb_session_family"); } catch(e){}
+  currentFamilyId = null;
   currentUser=null; currentRole=null; activeChild=null;
   pendingTransactions=[];
   document.getElementById("main-screen").classList.add("hidden");
@@ -1089,23 +1310,61 @@ function showChildPicker(){
   document.getElementById("main-screen").classList.add("hidden");
   document.getElementById("child-picker-screen").classList.remove("hidden");
   const list=document.getElementById("child-picker-list");
+
+  // v37.0 — Compute deactivated children this parent would otherwise see
+  // (assigned to them, currently in deactivatedChildren). Picker is the
+  // only surface that can reveal them.
+  const assigned = (state.config.parentChildren && state.config.parentChildren[currentUser]) || [];
+  const deactivatedAll = (state.config.deactivatedChildren || []);
+  const myDeactivated = getChildNames().filter(c =>
+    assigned.indexOf(c) !== -1 && deactivatedAll.indexOf(c) !== -1
+  );
+
+  // Active children (unchanged shape)
+  let html = "";
   if(!children.length){
-    list.innerHTML=emptyState("children","No children assigned. Add one in Admin.");
-    return;
+    html += emptyState("children","No children assigned. Add one in Admin.");
+  } else {
+    html += children.map(name=>{
+      const d=getChildData(name);
+      const total=(d.balances?.checking||0)+(d.balances?.savings||0);
+      return `<div class="child-btn-wrap">
+        <button class="child-btn with-avatar" onclick="selectChild('${name}')">
+          ${renderAvatar(name,"md")}
+          ${name}
+          <div class="child-btn-balance">Total: ${fmt(total)}</div>
+          <span class="child-btn-arrow">›</span>
+        </button>
+        <button class="btn btn-sm btn-outline child-btn-wizard" onclick="startWizardForExistingChild('${name}')" title="Edit ${name} with Setup Wizard">🪄 Setup</button>
+      </div>`;
+    }).join("");
   }
-  list.innerHTML=children.map(name=>{
-    const d=getChildData(name);
-    const total=(d.balances?.checking||0)+(d.balances?.savings||0);
-    return `<div class="child-btn-wrap">
-      <button class="child-btn with-avatar" onclick="selectChild('${name}')">
-        ${renderAvatar(name,"md")}
-        ${name}
-        <div class="child-btn-balance">Total: ${fmt(total)}</div>
-        <span class="child-btn-arrow">›</span>
-      </button>
-      <button class="btn btn-sm btn-outline child-btn-wizard" onclick="startWizardForExistingChild('${name}')" title="Edit ${name} with Setup Wizard">🪄 Setup</button>
+
+  // v37.0 — Deactivated toggle + conditional section
+  if(myDeactivated.length){
+    const toggleLabel = showDeactivatedInPicker
+      ? "Hide deactivated (" + myDeactivated.length + ")"
+      : "Show deactivated (" + myDeactivated.length + ")";
+    html += `<div class="picker-deactivated-toggle-wrap">
+      <button class="btn btn-sm btn-ghost" onclick="toggleShowDeactivatedInPicker()">${toggleLabel}</button>
     </div>`;
-  }).join("");
+    if(showDeactivatedInPicker){
+      html += `<div class="picker-deactivated-section">
+        <div class="picker-deactivated-label">Deactivated</div>`;
+      html += myDeactivated.map(name => {
+        return `<div class="child-btn-wrap deactivated">
+          <div class="child-btn with-avatar deactivated-row">
+            ${renderAvatar(name,"md")}
+            <span class="deactivated-name">${name}</span>
+          </div>
+          <button class="btn btn-sm btn-secondary" onclick="restoreChild('${name}')" title="Restore ${name}">↩ Restore</button>
+        </div>`;
+      }).join("");
+      html += `</div>`;
+    }
+  }
+
+  list.innerHTML = html;
 }
 
 function selectChild(childName){
@@ -1140,7 +1399,11 @@ function getAssignedChildren(){
   // v33.1 — empty assigned list = sees NO children (was: sees all).
   // Admin can hand-assign via User Edit → Assigned Children. The one-parent
   // migration in loadFromCloud seeds Dad's list so existing setups don't break.
-  return all.filter(c=>assigned.indexOf(c)!==-1);
+  // v37.0 — Deactivated children are hidden globally (picker, switcher,
+  // balances, week-at-a-glance, etc.). The child picker exposes a local
+  // "Show deactivated" toggle that bypasses this filter for its own render.
+  const deactivated = (state.config.deactivatedChildren || []);
+  return all.filter(c => assigned.indexOf(c) !== -1 && deactivated.indexOf(c) === -1);
 }
 
 // v34.0 — Hide the "Switch ▼" button when this parent has 0 or 1 assigned
@@ -3271,9 +3534,16 @@ function renderAdminUsers(){
   el.innerHTML=state.users.map(u=>{
     const role=state.roles[u]||"child";
     const stats=(state.config.loginStats && state.config.loginStats[u]) || null;
-    const lastSeen = stats && stats.lastAt
-      ? new Date(stats.lastAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) + " " + new Date(stats.lastAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
+    // v37.0 — Split single-line meta ("Last seen: {datetime} · {n} logins")
+    // into 3 labeled lines: Last seen (date) / Time / Logins. Matches
+    // locked scope decision on admin card layout.
+    const hasStats = !!(stats && stats.lastAt);
+    const lastDate = hasStats
+      ? new Date(stats.lastAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})
       : "never";
+    const lastTime = hasStats
+      ? new Date(stats.lastAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
+      : "—";
     const count = stats ? (parseInt(stats.count)||0) : 0;
     return `<div class="user-row">
       <div style="flex:1;display:flex;align-items:center;gap:8px;">
@@ -3283,7 +3553,9 @@ function renderAdminUsers(){
             <strong>${u}</strong>
             <span class="user-role-badge ${role==="parent"?"role-parent":"role-child"}" style="margin-left:4px;">${role.charAt(0).toUpperCase()+role.slice(1)}</span>
           </div>
-          <div class="user-row-substats">Last seen: ${lastSeen} · ${count} login${count===1?"":"s"}</div>
+          <div class="user-row-substats user-row-meta"><span class="meta-label">Last seen</span> <span class="meta-val">${lastDate}</span></div>
+          <div class="user-row-substats user-row-meta"><span class="meta-label">Time</span> <span class="meta-val">${lastTime}</span></div>
+          <div class="user-row-substats user-row-meta"><span class="meta-label">Logins</span> <span class="meta-val">${count}</span></div>
         </div>
       </div>
       <button class="btn btn-primary btn-sm" onclick="openUserEdit('${u}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
@@ -4279,12 +4551,29 @@ function quickDenyOne(choreId){
 
 
 // v31.3: stamp version on splash + login (runs before loadFromCloud)
+// v37.0 — Fetch version from version.json so splash/login never drift.
 (function stampVersion(){
-  const tag = "v" + APP_VERSION;
-  const sv = document.getElementById("splash-version");
-  const lv = document.getElementById("login-version");
-  if(sv) sv.textContent = tag;
-  if(lv) lv.textContent = tag;
+  const paint = (v) => {
+    const tag = "v" + v;
+    const sv = document.getElementById("splash-version");
+    const lv = document.getElementById("login-version");
+    if(sv) sv.textContent = tag;
+    if(lv) lv.textContent = tag;
+  };
+  // Paint fallback immediately so we never show blank
+  paint(APP_VERSION);
+  // Async fetch — authoritative source
+  try {
+    fetch("version.json?t=" + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (j && j.version) {
+          APP_VERSION = String(j.version);
+          paint(APP_VERSION);
+        }
+      })
+      .catch(()=>{});
+  } catch(e) {}
 })();
 
 populateMonthlyDays();
@@ -4962,6 +5251,15 @@ function renderPendingRequests(){
   badgeEl.textContent = String(n);
   badgeEl.classList.toggle("hidden", n===0);
 
+  // v37.0 — Auto-expand the Pending Requests card when there's something to
+  // review. Does NOT auto-collapse when it goes to zero — respects the admin's
+  // current expand state for other cards. toggleCollapsible enforces the
+  // "only one expanded sibling" rule, but direct class toggles bypass it.
+  if(n > 0){
+    const card = document.getElementById("cc-pending-requests");
+    if(card) card.classList.add("expanded");
+  }
+
   if(!n){
     listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:.85rem;text-align:center;">No pending requests.</div>';
     return;
@@ -4984,41 +5282,129 @@ function renderPendingRequests(){
   }).join("");
 }
 
-function approvePendingRequest(id){
+// v37.0 — MULTI-FAMILY APPROVE
+// Row-per-family: approved signups become their OWN family, not rows inside
+// the admin's. Ordering below is deliberate for partial-failure recovery:
+//
+//   1. POST new-family row FIRST, under a freshly generated familyId.
+//   2. If that succeeds, mutate admin state (remove from pendingUsers) and
+//      POST admin state SECOND.
+//   3. If step 2 fails: new family exists in the Sheet, but pendingUsers
+//      still lists the signup. The admin sees the request as un-approved and
+//      can retry. Retry will generate a NEW familyId and create a DUPLICATE
+//      family row — undesirable but recoverable (admin can delete the
+//      orphaned row via Sheet or the audit-log-driven delete family tool).
+//
+// The inverse ordering (admin cleanup first, then new family) has a worse
+// failure mode: if new-family POST fails after admin cleanup succeeds, the
+// signup is silently lost with no record.
+//
+// Welcome email: Code.gs fires it on wizard completion in v37.0, NOT on
+// approval. The approved parent gets {familySetupComplete: false} and hits
+// the wizard on first login.
+async function approvePendingRequest(id){
   const arr = (state.config && state.config.pendingUsers) || [];
   const idx = arr.findIndex(p => p.id === id);
   if(idx === -1) return;
   const req = arr[idx];
 
-  // Create parent user
-  state.users = state.users || [];
-  if(state.users.indexOf(req.name) !== -1){
-    showToast('Cannot approve — "'+req.name+'" name is already in use.',"error",4500);
+  // Pre-flight: name uniqueness is scoped per-family in v37.0 (each family
+  // has its own users[] list), but a name collision inside that family's
+  // fresh state is impossible — a brand-new family has zero existing users.
+  // We still defensively check req.name isn't empty.
+  if(!req.name || typeof req.name !== "string"){
+    showToast("Cannot approve — malformed request.", "error", 4500);
     return;
   }
-  state.users.push(req.name);
-  state.pins  = state.pins  || {};
-  state.roles = state.roles || {};
-  state.pins[req.name]  = req.pin;
-  state.roles[req.name] = "parent";
 
-  state.config.emails = state.config.emails || {};
-  state.config.emails[req.name] = req.email;
+  // STEP 1 — Build the new family's initial state and POST under a NEW familyId.
+  const newFamilyId = generateFamilyId();
+  const newFamilyState = {
+    config: {
+      ...DEFAULT_CONFIG,
+      // Admin email of the NEW family = the approved parent's email (they
+      // are primary and solo — matches locked decision: solo parents are
+      // primary of their own family).
+      adminEmail: req.email || "",
+      emails: { [req.name]: req.email || "" },
+      // Notify defaults lifted from v36's approve flow.
+      notify: { [req.name]: { email: true, calendar: false, choreRewards: true } },
+      loginStats: {},
+      pendingUsers: [],
+      avatars: {},
+      parentChildren: { [req.name]: [] },
+      // v37.0 locked: primary = creator. Wizard stores primaryParent in config
+      // but we set it now so Transfer Primary UI finds a value before the
+      // wizard runs.
+      primaryParent: req.name,
+      // v37.0 locked: wizard fires on primary's first login when this is false.
+      familySetupComplete: false,
+      // v37.0 locked: per-child email digest prefs + child-email gates live in
+      // config, but they're seeded lazily by the wizard. Leave them off here.
+      deactivatedChildren: []
+    },
+    users: [req.name],
+    pins:  { [req.name]: req.pin },
+    roles: { [req.name]: "parent" },
+    children: {},
+    history:  {},
+    usersData: { [req.name]: { createdAt: new Date().toISOString() } },
+    _savedAt: new Date().toISOString(),
+    // Signal to Code.gs that this POST is creating a brand-new family row, not
+    // overwriting an existing one. Code.gs v37.0 tolerates a POST with a
+    // familyId that doesn't yet exist — it creates the row — so this flag is
+    // informational for the server-side audit log. Stripped before save.
+    _newFamilyCreate: true,
+    // v37.0 — last action tag so the server logs this as a provisioning event,
+    // not a generic save.
+    lastAction: "Family Provisioned (Signup Approved)",
+    familyId: newFamilyId
+  };
 
-  state.config.notify = state.config.notify || {};
-  state.config.notify[req.name] = {email:true, calendar:false, choreRewards:true};
+  let step1Ok = false;
+  try {
+    await fetch(API_URL, {
+      method: "POST",
+      mode:   "no-cors",
+      body:   JSON.stringify(newFamilyState)
+    });
+    // no-cors gives no response visibility; assume success absent a thrown error.
+    step1Ok = true;
+  } catch(err){
+    console.error("[FamilyBank] approve step 1 (new family POST) failed:", err);
+    showToast("Could not create family — please retry.", "error", 5000);
+    return;
+  }
 
-  state.config.parentChildren = state.config.parentChildren || {};
-  if(!state.config.parentChildren[req.name]) state.config.parentChildren[req.name] = [];
+  if(!step1Ok) return;  // belt-and-suspenders; unreachable
 
-  // Remove from pending
+  // STEP 2 — Clean up admin's pendingUsers and sync admin state.
+  // If this throws/fails, the pending request stays visible to admin and can
+  // be retried. Retry will create a duplicate family row (known limitation,
+  // logged above).
   arr.splice(idx, 1);
   state.config.pendingUsers = arr;
 
-  syncToCloud("Signup Approved");
+  try {
+    // syncToCloud chains behind any in-flight syncs and attaches the admin's
+    // currentFamilyId automatically.
+    await syncToCloud("Signup Approved — Admin Cleanup");
+  } catch(err){
+    console.error("[FamilyBank] approve step 2 (admin cleanup sync) failed:", err);
+    // Restore pendingUsers locally so admin UI reflects the still-pending state.
+    // The authoritative truth on next loadFromCloud will match whichever of
+    // local vs. server won — if the admin-side POST silently failed in no-cors
+    // land (no throw), the next load will re-hydrate pendingUsers from server.
+    arr.splice(idx, 0, req);
+    state.config.pendingUsers = arr;
+    showToast("Family created, but admin cleanup failed. Please retry to clear the request.", "error", 6000);
+    renderPendingRequests();
+    return;
+  }
+
   renderPendingRequests();
   try { renderAdminUsers(); } catch(e){}
-  showToast('"'+req.name+'" approved. Welcome email sent.',"success",4000);
+  showToast('"'+req.name+'" approved as primary of a new family. They\'ll complete setup on first login.',"success",4500);
 }
 
 function denyPendingRequest(id){
@@ -5034,7 +5420,9 @@ function denyPendingRequest(id){
     inputAttrs:'placeholder="e.g. Please confirm your identity first" maxlength="200"',
     confirmText:"Deny", confirmClass:"btn-danger",
     onConfirm:(reason)=>{
-      // Attach reason via the transient key that Code.gs consumes & strips
+      // v37.0 — Deny is SINGLE-POST: no new family is created. Just remove
+      // from admin's pendingUsers and sync admin state under admin's familyId.
+      // Attach reason via the transient key that Code.gs consumes & strips.
       const cleaned = (reason||"").toString().trim().slice(0,200);
       state._denialReasons = state._denialReasons || {};
       if(cleaned) state._denialReasons[req.id] = cleaned;
@@ -5049,6 +5437,189 @@ function denyPendingRequest(id){
     }
   });
 }
+
+// ────────────────────────────────────────────────────────────────────
+// v37.0 — DELETE FAMILY (primary parent only, irreversible)
+// ────────────────────────────────────────────────────────────────────
+// Scrubs the current family's row, ledger rows, audit log rows, and
+// calendar events via Code.gs deleteFamilyFull(). Primary-only; UI
+// visibility is gated on state.config.primaryParent === currentUser.
+//
+// Not routed through _doSyncToCloud — that ships the full state and
+// strips _* keys. This is a minimal one-shot POST with only the two
+// required fields. Backend validates equality as a safety interlock:
+// body._deleteFamilyFullRequest must === body.familyId.
+//
+// No audit log write — the family row is about to be deleted; writing
+// to a sheet that's being scrubbed is wasted work and the write itself
+// could race with the scrub.
+//
+// Reauth is the sole confirmation. No stacked "are you sure?" prompt.
+async function deleteFamily(){
+  // Defense-in-depth: re-check primary gate at action time in case the UI
+  // was manipulated or stale. The render-side visibility gate is the
+  // first line; this is the second.
+  if(!state.config || state.config.primaryParent !== currentUser){
+    showToast("Only the primary parent can delete the family.", "error", 4500);
+    return;
+  }
+  if(!currentFamilyId){
+    showToast("No family loaded — nothing to delete.", "error", 4000);
+    return;
+  }
+
+  confirmReauth("Delete Family", async () => {
+    const fid = currentFamilyId;  // capture before we null it below
+    try {
+      await fetch(API_URL, {
+        method: "POST",
+        mode:   "no-cors",
+        body:   JSON.stringify({
+          _deleteFamilyFullRequest: fid,
+          familyId: fid
+        })
+      });
+    } catch(err){
+      console.error("[FamilyBank v37.0] deleteFamily POST failed:", err);
+      showToast("Could not reach the bank — please try again.", "error", 5000);
+      return;
+    }
+
+    // Scrub client-side: sessionStorage, globals, in-memory state. After
+    // the POST the family row is gone; continuing with the old familyId
+    // would surface "familyId required" errors on every subsequent read.
+    try {
+      sessionStorage.removeItem("fb_session_user");
+      sessionStorage.removeItem("fb_session_child");
+      sessionStorage.removeItem("fb_session_family");
+    } catch(e){}
+    currentFamilyId = null;
+    currentUser = null;
+    currentRole = null;
+    activeChild = null;
+    state = {
+      config:   {...DEFAULT_CONFIG},
+      pins: {}, roles: {}, users: [],
+      children: {},
+      history:  {}
+    };
+
+    showToast("Family deleted. Reloading…", "info", 2500);
+    // Hard reload to re-run the discovery flow cleanly. Short delay so
+    // the toast is visible and the server has a moment to finalize the
+    // scrub before the next listFamilies call.
+    setTimeout(() => { location.reload(); }, 1500);
+  });
+}
+window.deleteFamily = deleteFamily;
+
+// ────────────────────────────────────────────────────────────────────
+// v37.0 — PRIMARY PARENT ROLE
+// ────────────────────────────────────────────────────────────────────
+// Exactly one parent per family holds the "primary" role, tracked at
+// state.config.primaryParent. The wizard seeds this as the parent who
+// completes setup; the approve-pending flow seeds it as the approved
+// signup. Role powers:
+//   - Can Transfer Primary to another parent in the family
+//   - Can Delete Family (render-gated + action-gated)
+//   - Cannot delete their own parent account without transferring first
+//
+// These are all soft UX rails — the authoritative source is config.
+// No server-side enforcement in v37.0; trust is per-device.
+
+function isPrimaryParent(name){
+  if(!name || !state || !state.config) return false;
+  return state.config.primaryParent === name;
+}
+window.isPrimaryParent = isPrimaryParent;
+
+// Returns the list of OTHER parents (not currentUser) eligible to
+// receive the primary role. A single-parent family has none.
+function getTransferablePrimaryCandidates(){
+  const parents = (state.users || []).filter(u =>
+    (state.roles || {})[u] === "parent" && u !== currentUser
+  );
+  return parents;
+}
+
+function openTransferPrimary(){
+  if(!isPrimaryParent(currentUser)){
+    showToast("Only the primary parent can transfer the role.", "error", 4000);
+    return;
+  }
+  const candidates = getTransferablePrimaryCandidates();
+  if(!candidates.length){
+    openModal({
+      icon: "ℹ️",
+      title: "No one to transfer to",
+      body: "You're the only parent in this family. Add another parent first, then come back to transfer the primary role.",
+      confirmText: "OK",
+      hideCancel: true
+    });
+    return;
+  }
+  // Simple picker: if one candidate, use the modal confirm path. If
+  // multiple, render a sheet with buttons. Wizard patterns (sheets)
+  // require index.html markup — for now, fall back to a chained prompt
+  // flow that works with only the core modal surface.
+  if(candidates.length === 1){
+    _transferPrimaryTo(candidates[0]);
+    return;
+  }
+  // Multi-candidate: sheet-based picker. Markup for #transfer-primary-sheet
+  // lands in the index.html pass. Graceful-degrade to modal with numbered
+  // list so the action is still reachable.
+  const sheet = document.getElementById("transfer-primary-sheet");
+  if(sheet){
+    const list = document.getElementById("transfer-primary-list");
+    if(list){
+      list.innerHTML = candidates.map(name => `
+        <button class="btn btn-outline" style="width:100%;margin:6px 0;text-align:left;"
+                onclick="_transferPrimaryTo('${name.replace(/'/g, "\\'")}')">
+          ${renderAvatar(name,"sm")} ${name}
+        </button>
+      `).join("");
+    }
+    openSheet("transfer-primary-sheet");
+    return;
+  }
+  // Markup missing — fall back to a plain prompt so the flow is still usable.
+  const labeled = candidates.map((n, i) => (i+1) + ". " + n).join("\n");
+  const choice = prompt("Transfer primary role to which parent?\n\n" + labeled + "\n\nEnter the number:");
+  const idx = parseInt(choice, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= candidates.length){
+    showToast("Transfer cancelled.", "info", 2500);
+    return;
+  }
+  _transferPrimaryTo(candidates[idx]);
+}
+window.openTransferPrimary = openTransferPrimary;
+
+function _transferPrimaryTo(newPrimary){
+  if(!newPrimary) return;
+  if(!isPrimaryParent(currentUser)){
+    showToast("Only the primary parent can transfer the role.", "error", 4000);
+    return;
+  }
+  const candidates = getTransferablePrimaryCandidates();
+  if(candidates.indexOf(newPrimary) === -1){
+    showToast('"' + newPrimary + '" is not eligible.', "error", 4000);
+    return;
+  }
+  // Close the transfer picker sheet if it was open
+  try { closeSheet("transfer-primary-sheet"); } catch(e){}
+
+  confirmReauth("Transfer Primary to " + newPrimary, () => {
+    state.config.primaryParent = newPrimary;
+    appendAuditLog("Transfer Primary", currentUser + " → " + newPrimary);
+    syncToCloud("Primary Transferred");
+    showToast('"' + newPrimary + '" is now the primary parent.', "success", 4500);
+    // Re-render settings so the Transfer/Delete Family buttons update their
+    // visibility based on the new primaryParent.
+    try { renderParentSettings(); } catch(e){}
+  });
+}
+window._transferPrimaryTo = _transferPrimaryTo;
 
 // ────────────────────────────────────────────────────────────────────
 // 22.2 — PROOF PHOTO CAPTURE
@@ -5276,6 +5847,552 @@ function renderEarningsCard(childName){
       Compounded monthly using each account's APR. "Games it" assumes every dollar routes to the higher-yield account.
     </div>`;
 }
+
+// ────────────────────────────────────────────────────────────────────
+// 22.3 — v37.0 FAMILY SETUP WIZARD (new-family first-login flow)
+// ────────────────────────────────────────────────────────────────────
+// Trigger: primary parent's first login when familySetupComplete !== true.
+// Fired from enterApp() BEFORE the per-child wizard trigger.
+//
+// Design notes:
+//   • Holds all edits client-side across Steps 1-3. ONE syncToCloud on
+//     Step 4 Finish — Code.gs sees one transition (skeleton → full family),
+//     so welcome emails fire predictably (see Step 4 commit below).
+//   • Welcome emails go out via the v37.0.1 _sendWelcomeEmail intercept
+//     (added to Code.gs this session). One fire-and-forget POST per new
+//     co-parent and child. Primary already got their welcome at signup
+//     approval — wizard does NOT re-email them.
+//   • Step 3 captures the MINIMUM viable child record (name, PIN, avatar,
+//     assigned-parents). Does NOT set childSetupComplete[name]=true, so
+//     the full 9-step per-child wizard still fires on first open of each
+//     child. That's locked scope.
+//   • Graceful-degrade: if the wizard markup isn't present in index.html
+//     yet, opener logs a warning and flips familySetupComplete to true
+//     with a minimal commit (so a beta without the HTML doesn't
+//     infinite-loop the trigger). Real users won't hit this once the
+//     markup ships in the same release.
+
+// In-memory wizard buffer. Lives only while wizard is open.
+let familyWizardState = null;
+
+const FW_MAX_PARENTS = 6;   // primary + 5 co-parents (arbitrary sane cap)
+const FW_MAX_CHILDREN = 6;  // matches MAX_CHILDREN_PER_PARENT
+
+// Local HTML escape — used for safe rendering of user-entered names/emails
+// in the wizard's list and review DOM. No global `escapeHtml` in this file,
+// and we don't want to introduce one this session without wider audit.
+function fwEscapeHtml(s){
+  if(s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Fire-and-forget welcome email POST. Mirrors appendAuditLog shape.
+// Code.gs v37.0.1 intercept handler: sendWelcomeEmail_().
+function sendWelcomeEmail(recipient, name, role, defaultPin){
+  if(!currentFamilyId) return;
+  if(!recipient || !name || !role) return;
+  const body = {
+    _sendWelcomeEmail: {
+      recipient: String(recipient),
+      name:      String(name),
+      role:      String(role),       // "parent" | "child"
+      defaultPin: String(defaultPin || "0000")
+    },
+    familyId: currentFamilyId
+  };
+  try {
+    fetch(API_URL, {
+      method: "POST",
+      mode:   "no-cors",
+      body:   JSON.stringify(body)
+    }).catch(err => {
+      console.warn("[FamilyBank v37.0] sendWelcomeEmail failed:", recipient, err);
+    });
+  } catch(err){
+    console.warn("[FamilyBank v37.0] sendWelcomeEmail threw:", recipient, err);
+  }
+}
+window.sendWelcomeEmail = sendWelcomeEmail;
+
+// Entry — called from enterApp when trigger conditions met.
+function openFamilyWizard(){
+  // Idempotency: if wizard is already open or already completed, bail.
+  if(familyWizardState && familyWizardState.open) return;
+  if(state && state.config && state.config.familySetupComplete === true) return;
+  if(!isPrimaryParent(currentUser)){
+    console.warn("[FamilyBank v37.0] openFamilyWizard called for non-primary; skipping.");
+    return;
+  }
+
+  // Graceful-degrade: check markup exists. If not, flip the flag and sync
+  // so the trigger doesn't fire on every subsequent login. This is a beta
+  // safety net; production ship has the markup.
+  const sheet = document.getElementById("family-wizard-sheet");
+  if(!sheet){
+    console.warn("[FamilyBank v37.0] Family wizard markup missing — auto-completing.");
+    if(!state.config) state.config = {};
+    state.config.familySetupComplete = true;
+    try { syncToCloud("Family Setup Auto-Complete (no markup)"); } catch(e){}
+    return;
+  }
+
+  // Seed buffer from current state (primary already exists; we let the
+  // user edit identity fields but keep the primary's own entry fixed).
+  const cfg = state.config || {};
+  familyWizardState = {
+    open: true,
+    step: 1,
+    // Step 1 — identity (pre-fill from current config; user edits)
+    identity: {
+      bankName:       cfg.bankName       || CFG_BANK_NAME,
+      tagline:        cfg.tagline        || CFG_BANK_TAGLINE,
+      colorPrimary:   cfg.colorPrimary   || CFG_COLOR_PRIMARY,
+      colorSecondary: cfg.colorSecondary || CFG_COLOR_SECONDARY,
+      imgLogo:        cfg.imgLogo        || "",
+      imgBanner:      cfg.imgBanner      || ""
+    },
+    // Step 2 — parents (primary is fixed; coParents are wizard-added)
+    primaryName: currentUser,
+    primaryEmail: (cfg.emails && cfg.emails[currentUser]) || "",
+    coParents: [],   // [{name, email}]
+    // Step 3 — children
+    children: []     // [{name, pin, avatar, assignedParents:[names]}]
+  };
+
+  // Show the sheet, render Step 1.
+  try { closeAllSheets(); } catch(e){}
+  openSheet("family-wizard-sheet");
+  fwRenderStep(1);
+}
+window.openFamilyWizard = openFamilyWizard;
+
+function fwCloseSheet(){
+  try { closeSheet("family-wizard-sheet", true); } catch(e){}
+  if(familyWizardState) familyWizardState.open = false;
+}
+
+// Navigation
+function fwStepNext(){
+  if(!familyWizardState) return;
+  // Validate current step before advancing
+  if(!fwValidateStep(familyWizardState.step)) return;
+  if(familyWizardState.step < 4){
+    familyWizardState.step += 1;
+    fwRenderStep(familyWizardState.step);
+  }
+}
+window.fwStepNext = fwStepNext;
+
+function fwStepBack(){
+  if(!familyWizardState) return;
+  if(familyWizardState.step > 1){
+    familyWizardState.step -= 1;
+    fwRenderStep(familyWizardState.step);
+  }
+}
+window.fwStepBack = fwStepBack;
+
+// Dispatcher — reads current step, writes fields back into buffer before
+// render (so "Back" preserves user input), paints the target step content.
+function fwRenderStep(n){
+  if(!familyWizardState) return;
+  // Persist any edits from the step we're leaving (in case caller skipped
+  // fwValidateStep — defensive).
+  fwCaptureStepInputs(familyWizardState.step);
+
+  // Flip step dots / step number display if present
+  const indicator = document.getElementById("fw-step-indicator");
+  if(indicator) indicator.textContent = "Step " + n + " of 4";
+
+  // Hide all step bodies, show the target
+  for(let i = 1; i <= 4; i++){
+    const el = document.getElementById("fw-step-" + i);
+    if(el) el.classList.toggle("hidden", i !== n);
+  }
+
+  // Toggle nav buttons: no Back on Step 1, no Next on Step 4, Finish only on Step 4
+  const backBtn   = document.getElementById("fw-back-btn");
+  const nextBtn   = document.getElementById("fw-next-btn");
+  const finishBtn = document.getElementById("fw-finish-btn");
+  if(backBtn)   backBtn.classList.toggle("hidden",   n === 1);
+  if(nextBtn)   nextBtn.classList.toggle("hidden",   n === 4);
+  if(finishBtn) finishBtn.classList.toggle("hidden", n !== 4);
+
+  if(n === 1) fwRenderStep1();
+  else if(n === 2) fwRenderStep2();
+  else if(n === 3) fwRenderStep3();
+  else if(n === 4) fwRenderStep4();
+}
+
+// Capture inputs from current DOM step into the buffer. Called before any
+// step transition. Silent on missing fields (they just keep their previous
+// buffer value).
+function fwCaptureStepInputs(step){
+  if(!familyWizardState) return;
+  const id = familyWizardState.identity;
+  if(step === 1){
+    const v = k => { const el = document.getElementById(k); return el ? el.value.trim() : ""; };
+    if(document.getElementById("fw-bank-name"))       id.bankName       = v("fw-bank-name")       || id.bankName;
+    if(document.getElementById("fw-tagline"))         id.tagline        = v("fw-tagline")         || id.tagline;
+    if(document.getElementById("fw-color-primary"))   id.colorPrimary   = v("fw-color-primary")   || id.colorPrimary;
+    if(document.getElementById("fw-color-secondary")) id.colorSecondary = v("fw-color-secondary") || id.colorSecondary;
+    if(document.getElementById("fw-img-logo"))        id.imgLogo        = v("fw-img-logo");
+    if(document.getElementById("fw-img-banner"))      id.imgBanner      = v("fw-img-banner");
+  }
+  // Step 2/3 edits are captured by add/remove actions in real time; no
+  // bulk read needed here. Primary's own email IS editable on Step 2:
+  if(step === 2){
+    const primEmailEl = document.getElementById("fw-primary-email");
+    if(primEmailEl) familyWizardState.primaryEmail = primEmailEl.value.trim();
+  }
+}
+
+// STEP 1 — Family Identity
+function fwRenderStep1(){
+  const id = familyWizardState.identity;
+  const set = (k, v) => { const el = document.getElementById(k); if(el) el.value = v || ""; };
+  set("fw-bank-name",       id.bankName);
+  set("fw-tagline",          id.tagline);
+  set("fw-color-primary",   id.colorPrimary);
+  set("fw-color-secondary", id.colorSecondary);
+  set("fw-img-logo",         id.imgLogo);
+  set("fw-img-banner",       id.imgBanner);
+}
+
+// STEP 2 — Parents
+function fwRenderStep2(){
+  // Primary (fixed name, editable email)
+  const primNameEl = document.getElementById("fw-primary-name");
+  if(primNameEl) primNameEl.textContent = familyWizardState.primaryName;
+  const primEmailEl = document.getElementById("fw-primary-email");
+  if(primEmailEl) primEmailEl.value = familyWizardState.primaryEmail || "";
+
+  // Co-parent list
+  const list = document.getElementById("fw-coparent-list");
+  if(list){
+    if(!familyWizardState.coParents.length){
+      list.innerHTML = '<p class="fw-empty-hint">No co-parents yet. You can add them now or later in Settings.</p>';
+    } else {
+      list.innerHTML = familyWizardState.coParents.map((p, i) =>
+        '<div class="fw-row">'
+        + '<div class="fw-row-main"><strong>'+fwEscapeHtml(p.name)+'</strong>'
+        + '<div class="fw-row-sub">'+fwEscapeHtml(p.email || "(no email)")+'</div></div>'
+        + '<button type="button" class="fw-row-remove" onclick="fwRemoveCoParent('+i+')">Remove</button>'
+        + '</div>'
+      ).join("");
+    }
+  }
+
+  // Hide add form if at cap
+  const addBtn = document.getElementById("fw-add-coparent-btn");
+  if(addBtn){
+    const atCap = familyWizardState.coParents.length >= (FW_MAX_PARENTS - 1);
+    addBtn.disabled = atCap;
+    addBtn.textContent = atCap ? "Max co-parents reached" : "+ Add co-parent";
+  }
+}
+
+function fwAddCoParent(){
+  if(!familyWizardState) return;
+  const nameEl  = document.getElementById("fw-new-coparent-name");
+  const emailEl = document.getElementById("fw-new-coparent-email");
+  const name  = nameEl  ? nameEl.value.trim()  : "";
+  const email = emailEl ? emailEl.value.trim() : "";
+  if(!name){ showToast("Enter a name.", "error"); return; }
+  if(familyWizardState.coParents.length >= (FW_MAX_PARENTS - 1)){
+    showToast("Max co-parents reached.", "error"); return;
+  }
+  // Name collision (against primary + existing co-parents)
+  const taken = new Set([familyWizardState.primaryName.toLowerCase()]);
+  familyWizardState.coParents.forEach(p => taken.add(p.name.toLowerCase()));
+  if(taken.has(name.toLowerCase())){
+    showToast("That name is already used.", "error"); return;
+  }
+  familyWizardState.coParents.push({ name, email });
+  if(nameEl)  nameEl.value  = "";
+  if(emailEl) emailEl.value = "";
+  fwRenderStep2();
+}
+window.fwAddCoParent = fwAddCoParent;
+
+function fwRemoveCoParent(i){
+  if(!familyWizardState) return;
+  familyWizardState.coParents.splice(i, 1);
+  fwRenderStep2();
+}
+window.fwRemoveCoParent = fwRemoveCoParent;
+
+// STEP 3 — Children (minimal inline add; per-child wizard runs later)
+function fwRenderStep3(){
+  const list = document.getElementById("fw-child-list");
+  if(list){
+    if(!familyWizardState.children.length){
+      list.innerHTML = '<p class="fw-empty-hint">No children yet. You can add them now or later from the main screen.</p>';
+    } else {
+      list.innerHTML = familyWizardState.children.map((c, i) =>
+        '<div class="fw-row">'
+        + '<div class="fw-row-main"><strong>'+fwEscapeHtml(c.name)+'</strong>'
+        + '<div class="fw-row-sub">PIN: '+fwEscapeHtml(c.pin)+' · Assigned to: '+fwEscapeHtml(c.assignedParents.join(", "))+'</div></div>'
+        + '<button type="button" class="fw-row-remove" onclick="fwRemoveChild('+i+')">Remove</button>'
+        + '</div>'
+      ).join("");
+    }
+  }
+  const addBtn = document.getElementById("fw-add-child-btn");
+  if(addBtn){
+    const atCap = familyWizardState.children.length >= FW_MAX_CHILDREN;
+    addBtn.disabled = atCap;
+    addBtn.textContent = atCap ? "Max children reached" : "+ Add child";
+  }
+}
+
+function fwAddChild(){
+  if(!familyWizardState) return;
+  const nameEl = document.getElementById("fw-new-child-name");
+  const pinEl  = document.getElementById("fw-new-child-pin");
+  const avEl   = document.getElementById("fw-new-child-avatar");
+  const name = nameEl ? nameEl.value.trim() : "";
+  const pin  = pinEl  ? (pinEl.value.trim() || "0000") : "0000";
+  const av   = avEl   ? avEl.value.trim() : "";
+  if(!name){ showToast("Enter a name.", "error"); return; }
+  if(familyWizardState.children.length >= FW_MAX_CHILDREN){
+    showToast("Max children reached.", "error"); return;
+  }
+  // Collision check across the whole family (parents + existing children)
+  const taken = new Set([familyWizardState.primaryName.toLowerCase()]);
+  familyWizardState.coParents.forEach(p => taken.add(p.name.toLowerCase()));
+  familyWizardState.children.forEach(c => taken.add(c.name.toLowerCase()));
+  if(taken.has(name.toLowerCase())){
+    showToast("That name is already used.", "error"); return;
+  }
+  // Default: all parents assigned to this child
+  const allParents = [familyWizardState.primaryName].concat(
+    familyWizardState.coParents.map(p => p.name)
+  );
+  familyWizardState.children.push({
+    name,
+    pin,
+    avatar: av,
+    assignedParents: allParents.slice()
+  });
+  if(nameEl) nameEl.value = "";
+  if(pinEl)  pinEl.value  = "";
+  if(avEl)   avEl.value   = "";
+  fwRenderStep3();
+}
+window.fwAddChild = fwAddChild;
+
+function fwRemoveChild(i){
+  if(!familyWizardState) return;
+  familyWizardState.children.splice(i, 1);
+  fwRenderStep3();
+}
+window.fwRemoveChild = fwRemoveChild;
+
+// STEP 4 — Review
+function fwRenderStep4(){
+  const id = familyWizardState.identity;
+  const esc = s => fwEscapeHtml(s || "");
+
+  // Identity summary
+  const idSummary = document.getElementById("fw-review-identity");
+  if(idSummary){
+    idSummary.innerHTML =
+      '<div class="fw-review-row"><span class="fw-review-label">Bank name</span><span class="fw-review-val">'+esc(id.bankName)+'</span></div>'
+      + '<div class="fw-review-row"><span class="fw-review-label">Tagline</span><span class="fw-review-val">'+esc(id.tagline)+'</span></div>'
+      + '<div class="fw-review-row"><span class="fw-review-label">Primary color</span><span class="fw-review-val">'+esc(id.colorPrimary)+'</span></div>'
+      + '<div class="fw-review-row"><span class="fw-review-label">Secondary color</span><span class="fw-review-val">'+esc(id.colorSecondary)+'</span></div>'
+      + (id.imgLogo   ? '<div class="fw-review-row"><span class="fw-review-label">Logo URL</span><span class="fw-review-val">'+esc(id.imgLogo)+'</span></div>'   : "")
+      + (id.imgBanner ? '<div class="fw-review-row"><span class="fw-review-label">Banner URL</span><span class="fw-review-val">'+esc(id.imgBanner)+'</span></div>' : "");
+  }
+
+  // Parents summary
+  const parSummary = document.getElementById("fw-review-parents");
+  if(parSummary){
+    const lines = [
+      '<div class="fw-review-row"><span class="fw-review-label">'+esc(familyWizardState.primaryName)+' (primary)</span><span class="fw-review-val">'+esc(familyWizardState.primaryEmail || "no email")+'</span></div>'
+    ].concat(
+      familyWizardState.coParents.map(p =>
+        '<div class="fw-review-row"><span class="fw-review-label">'+esc(p.name)+'</span><span class="fw-review-val">'+esc(p.email || "no email")+'</span></div>'
+      )
+    );
+    parSummary.innerHTML = lines.join("");
+  }
+
+  // Children summary
+  const chSummary = document.getElementById("fw-review-children");
+  if(chSummary){
+    if(!familyWizardState.children.length){
+      chSummary.innerHTML = '<p class="fw-empty-hint">No children added. You can add them anytime from the main screen.</p>';
+    } else {
+      chSummary.innerHTML = familyWizardState.children.map(c =>
+        '<div class="fw-review-row"><span class="fw-review-label">'+esc(c.name)+'</span><span class="fw-review-val">PIN '+esc(c.pin)+'</span></div>'
+      ).join("");
+    }
+  }
+}
+
+function fwValidateStep(n){
+  if(!familyWizardState) return false;
+  fwCaptureStepInputs(n);
+  if(n === 1){
+    const id = familyWizardState.identity;
+    if(!id.bankName){ showToast("Bank name is required.", "error"); return false; }
+    return true;
+  }
+  // Steps 2 and 3 accept zero additions (co-parents and children both optional).
+  // Step 4 is terminal — fwCommit handles finish.
+  return true;
+}
+
+// STEP 4 — Finish: commit everything in one syncToCloud, then fire
+// welcome emails to co-parents and children (primary already received
+// their welcome at signup approval).
+async function fwCommit(){
+  if(!familyWizardState) return;
+  // Final capture in case user clicks Finish without tabbing out of a field.
+  fwCaptureStepInputs(familyWizardState.step);
+
+  const id = familyWizardState.identity;
+  const cfg = state.config || (state.config = {});
+
+  // --- Apply Step 1: identity ---
+  cfg.bankName       = id.bankName;
+  cfg.tagline        = id.tagline;
+  cfg.colorPrimary   = id.colorPrimary;
+  cfg.colorSecondary = id.colorSecondary;
+  cfg.imgLogo        = id.imgLogo;
+  cfg.imgBanner      = id.imgBanner;
+
+  // --- Apply Step 2: primary email edits + co-parents ---
+  if(!cfg.emails) cfg.emails = {};
+  if(!cfg.notify) cfg.notify = {};
+  if(!cfg.parentChildren) cfg.parentChildren = {};
+  if(!state.users) state.users = [];
+  if(!state.pins)  state.pins  = {};
+  if(!state.roles) state.roles = {};
+  if(!state.usersData) state.usersData = {};
+
+  // Primary email update (keep existing notify settings; default Instant
+  // for primary per locked scope — if already set, leave alone)
+  cfg.emails[familyWizardState.primaryName] = familyWizardState.primaryEmail || "";
+  if(!cfg.notify[familyWizardState.primaryName]){
+    cfg.notify[familyWizardState.primaryName] = {
+      email: true, calendar: false, choreRewards: true,
+      digestFrequency: "instant"
+    };
+  } else if(cfg.notify[familyWizardState.primaryName].digestFrequency == null){
+    cfg.notify[familyWizardState.primaryName].digestFrequency = "instant";
+  }
+
+  // Collect new parents for post-sync welcome emails
+  const newParentEmails = [];
+  familyWizardState.coParents.forEach(p => {
+    if(state.users.indexOf(p.name) === -1) state.users.push(p.name);
+    state.pins[p.name]  = "0000";
+    state.roles[p.name] = "parent";
+    state.usersData[p.name] = { createdAt: new Date().toISOString() };
+    cfg.emails[p.name] = p.email || "";
+    cfg.notify[p.name] = {
+      email: true, calendar: false, choreRewards: true,
+      digestFrequency: "daily",
+      digestTimeOfDay: "08:00"
+    };
+    if(!cfg.parentChildren[p.name]) cfg.parentChildren[p.name] = [];
+    if(p.email) newParentEmails.push({ recipient: p.email, name: p.name });
+  });
+
+  // --- Apply Step 3: children ---
+  if(!state.children) state.children = {};
+  if(!cfg.avatars) cfg.avatars = {};
+  if(!cfg.childSetupComplete) cfg.childSetupComplete = {};
+  if(!cfg.childEmails){
+    // v37.0 locked defaults — see scope doc "Child email gating"
+    cfg.childEmails = {
+      choreCreated: true, choreApproved: false, choreDenied: true,
+      depositApproved: false, depositDenied: false,
+      withdrawalApproved: true, withdrawalDenied: true
+    };
+  }
+
+  const newChildEmails = [];  // children don't have emails in v37 typical flow;
+                              // wizard doesn't collect child emails, so this
+                              // list stays empty. Kept for future use.
+
+  familyWizardState.children.forEach(c => {
+    if(state.users.indexOf(c.name) === -1) state.users.push(c.name);
+    state.pins[c.name]  = c.pin || "0000";
+    state.roles[c.name] = "child";
+    state.usersData[c.name] = { createdAt: new Date().toISOString() };
+    if(!state.children[c.name]){
+      state.children[c.name] = { balance: 0, balanceSav: 0, chores: [], goals: [] };
+    }
+    if(c.avatar) cfg.avatars[c.name] = c.avatar;
+    // Wire to parentChildren — all selected parents get this child in their list
+    (c.assignedParents || []).forEach(pn => {
+      if(!cfg.parentChildren[pn]) cfg.parentChildren[pn] = [];
+      if(cfg.parentChildren[pn].indexOf(c.name) === -1){
+        cfg.parentChildren[pn].push(c.name);
+      }
+    });
+    // DELIBERATE: do NOT set cfg.childSetupComplete[c.name] = true.
+    // Locked scope: per-child 9-step wizard must still fire on first open.
+  });
+
+  // --- Flip the completion flag ---
+  cfg.familySetupComplete = true;
+  if(!cfg.primaryParent) cfg.primaryParent = familyWizardState.primaryName;
+
+  // --- Commit: ONE sync. ---
+  try {
+    await syncToCloud("Family Provisioned");
+  } catch(err){
+    console.error("[FamilyBank v37.0] Family wizard sync failed:", err);
+    showToast("Couldn't save family — please retry.", "error", 5000);
+    return;
+  }
+
+  // --- Post-commit side effects ---
+  // Audit log (fire-and-forget)
+  try { appendAuditLog("Family Setup Complete", currentFamilyId || ""); } catch(e){}
+
+  // Welcome emails (fire-and-forget). One POST per recipient.
+  newParentEmails.forEach(p => {
+    sendWelcomeEmail(p.recipient, p.name, "parent", "0000");
+  });
+  newChildEmails.forEach(c => {
+    sendWelcomeEmail(c.recipient, c.name, "child", c.pin || "0000");
+  });
+
+  // --- UI close + land user somewhere sensible ---
+  fwCloseSheet();
+  familyWizardState = null;
+
+  showToast("Family setup complete! 🎉", "success", 4000);
+
+  // Re-render the parent view. If children were added, this will show
+  // the picker; if not, main screen with the empty-children prompt
+  // (which will trigger the per-child wizard path for future adds).
+  try { applyBranding(); } catch(e){}
+  try { renderAll && renderAll(); } catch(e){}
+  try {
+    const kids = getAssignedChildren();
+    if(kids.length === 1){
+      selectChild(kids[0]);
+    } else if(kids.length > 1){
+      document.getElementById("main-screen").classList.add("hidden");
+      document.getElementById("child-picker-screen").classList.remove("hidden");
+      showChildPicker();
+    }
+    // kids.length === 0 → user stays on main/parent-panel view
+  } catch(e){}
+}
+window.fwCommit = fwCommit;
 
 // ────────────────────────────────────────────────────────────────────
 // 22.4 — GUIDED CHILD SETUP WIZARD
@@ -5738,7 +6855,7 @@ function wizardRenderStep1(){
     </div>
     <div class="wizard-helper">Your child can change their PIN from their own settings. If they forget it, you can reset it from Settings → My Children.</div>
     <label class="field-label" style="margin-top:14px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user"/></svg> Avatar</label>
-    <div class="avatar-picker-current" id="wiz-avatar-current">${curEmoji} <span style="font-size:.78rem;color:var(--muted);margin-left:8px;">Emoji or photo — choose below</span></div>
+    <div class="avatar-picker-current" id="wiz-avatar-current">${curEmoji}</div>
     <div class="avatar-picker-grid" id="wiz-avatar-grid">${emojiGrid}</div>
     <div style="margin-top:8px;">${photoBtn}</div>
     <input type="file" id="wiz-avatar-file" accept="image/*" style="display:none;" onchange="wizardStep1UploadPhoto(event)">`;
@@ -6676,6 +7793,251 @@ function _purgeUserFromState(name){
 }
 window._purgeUserFromState = _purgeUserFromState;
 
+// ════════════════════════════════════════════════════════════════════
+// v37.0 — AUDIT LOG + CHILD LIFECYCLE
+// ════════════════════════════════════════════════════════════════════
+
+// ──────────────────────────────────────────────────────────────────
+// appendAuditLog(action, target)
+// ──────────────────────────────────────────────────────────────────
+// Fire-and-forget POST to the _auditLogAppend interceptor in Code.gs.
+// Called from the client for structural changes that MODIFY a family
+// which continues to exist (child deactivate/delete/restore, parent
+// add/remove, PIN reset, config changes, etc.). NOT called from Delete
+// Family — that scrubs the log alongside the family.
+//
+// Shape server expects:
+//   body._auditLogAppend = {parent, action, target}
+//   body.familyId        = currentFamilyId   // required by doPost gate
+//
+// Dedicated fetch path (same pattern as deleteFamily). Does not go
+// through _doSyncToCloud — the log write is a side-event, not a state
+// sync, and coupling the two would mean every audit write also pushes
+// the entire family state to the server.
+//
+// No await at call sites — the log write should never block UI. If
+// the fetch fails, we log to console and move on. Audit completeness
+// is best-effort; the user's action still happened.
+function appendAuditLog(action, target){
+  if(!currentFamilyId || !currentUser) return;
+  const body = {
+    _auditLogAppend: {
+      parent: currentUser,
+      action: String(action || ""),
+      target: String(target || "")
+    },
+    familyId: currentFamilyId
+  };
+  try {
+    fetch(API_URL, {
+      method: "POST",
+      mode:   "no-cors",
+      body:   JSON.stringify(body)
+    }).catch(err => {
+      console.warn("[FamilyBank v37.0] appendAuditLog failed:", action, target, err);
+    });
+  } catch(err){
+    console.warn("[FamilyBank v37.0] appendAuditLog threw:", action, target, err);
+  }
+}
+window.appendAuditLog = appendAuditLog;
+
+// ──────────────────────────────────────────────────────────────────
+// _purgeChildFromState(name)
+// ──────────────────────────────────────────────────────────────────
+// v37.0 — Purges in-memory state only. Ledger rows tagged with this
+// child's name remain in the sheet (visible to the Sheet owner, invisible
+// to the app since the child is no longer in state.users). Server-side
+// orphan row cleanup deferred to v37.1+ to avoid a Code.gs touch this
+// session. Harmless: reports scan via getChildNames() which no longer
+// includes the deleted child.
+//
+// KNOWN EDGE CASE (v37.1+ backlog): name collision. Deleting "Linnea"
+// then creating a new child also named "Linnea" means the new child
+// inherits the old child's ledger history. PDF export, YTD interest,
+// and net worth history all roll up by child name. Rare in practice
+// (same family, same name reuse) but worth a guard in a future pass.
+//
+// Child-specific scrub. Mirrors _purgeUserFromState but hits the
+// child-only config slots (avatarPhotos, childSetupComplete,
+// deactivatedChildren) too. Children ARE shared across parents via
+// parentChildren, so the remove-from-every-parent's-list loop stays.
+function _purgeChildFromState(name){
+  if(!name || !state) return;
+  if(state.users){
+    const i = state.users.indexOf(name);
+    if(i !== -1) state.users.splice(i, 1);
+  }
+  ["pins","roles","children","usersData","history"].forEach(k => {
+    if(state[k] && state[k][name] !== undefined) delete state[k][name];
+  });
+  if(state.config){
+    ["emails","avatars","avatarPhotos","calendars","tabs","notify"].forEach(k => {
+      if(state.config[k] && state.config[k][name] !== undefined) delete state.config[k][name];
+    });
+    // v37.0 — new per-child config slot for wizard completion tracking
+    if(state.config.childSetupComplete && state.config.childSetupComplete[name] !== undefined){
+      delete state.config.childSetupComplete[name];
+    }
+    // Remove from every parent's assigned-children list
+    if(state.config.parentChildren){
+      Object.keys(state.config.parentChildren).forEach(p => {
+        const list = state.config.parentChildren[p] || [];
+        const idx = list.indexOf(name);
+        if(idx !== -1) list.splice(idx, 1);
+      });
+    }
+    // Clear from deactivated list in case we're hard-deleting a deactivated child
+    if(Array.isArray(state.config.deactivatedChildren)){
+      state.config.deactivatedChildren = state.config.deactivatedChildren.filter(x => x !== name);
+    }
+  }
+  if(state.config && state.config.loginStats && state.config.loginStats[name]){
+    delete state.config.loginStats[name];
+  }
+  // Remove local-only avatar photo
+  try { localStorage.removeItem("fb_avatar_" + name); } catch(e){}
+}
+window._purgeChildFromState = _purgeChildFromState;
+
+// ──────────────────────────────────────────────────────────────────
+// deactivateChild(name)
+// ──────────────────────────────────────────────────────────────────
+// Soft-hide a child. Data preserved. Re-entry via restoreChild.
+function deactivateChild(name){
+  if(!name) return;
+  if(!state.config.deactivatedChildren) state.config.deactivatedChildren = [];
+  if(state.config.deactivatedChildren.indexOf(name) === -1){
+    state.config.deactivatedChildren.push(name);
+  }
+  // If this was the active child, clear it so the next render doesn't try
+  // to load a child that's now hidden from getAssignedChildren().
+  if(activeChild === name){
+    activeChild = null;
+    try { sessionStorage.removeItem("fb_session_child"); } catch(e){}
+  }
+  appendAuditLog("Deactivate Child", name);
+  syncToCloud("Child Deactivated");
+  showToast('"' + name + '" deactivated. Restore anytime from the child picker.', "info", 4000);
+  // Re-render surfaces that show child lists
+  try { renderAdminUsers(); } catch(e){}
+  try { showChildPicker(); } catch(e){}
+}
+window.deactivateChild = deactivateChild;
+
+// ──────────────────────────────────────────────────────────────────
+// restoreChild(name)
+// ──────────────────────────────────────────────────────────────────
+function restoreChild(name){
+  if(!name) return;
+  if(Array.isArray(state.config.deactivatedChildren)){
+    state.config.deactivatedChildren = state.config.deactivatedChildren.filter(x => x !== name);
+  }
+  appendAuditLog("Restore Child", name);
+  syncToCloud("Child Restored");
+  showToast('"' + name + '" restored.', "success", 3500);
+  try { showChildPicker(); } catch(e){}
+  try { renderAdminUsers(); } catch(e){}
+}
+window.restoreChild = restoreChild;
+
+// ──────────────────────────────────────────────────────────────────
+// deleteChild(name) — hard delete, irreversible. Reauth-gated.
+// ──────────────────────────────────────────────────────────────────
+// Per v37.0 locked scope: invoked from the child profile page, not
+// the Admin Panel. NOT available from the deactivated view — users
+// must restore first, then delete from the profile. Two-step path
+// is deliberate friction.
+function deleteChild(name){
+  if(!name) return;
+  if(currentRole !== "parent"){
+    showToast("Only a parent can delete a child.", "error", 4000);
+    return;
+  }
+  const names = getChildNames();
+  if(names.indexOf(name) === -1){
+    showToast('"' + name + '" not found.', "error", 3500);
+    return;
+  }
+
+  confirmReauth("Delete " + name + " permanently", () => {
+    _purgeChildFromState(name);
+    if(activeChild === name){
+      activeChild = null;
+      try { sessionStorage.removeItem("fb_session_child"); } catch(e){}
+    }
+    appendAuditLog("Delete Child", name);
+    syncToCloud("Child Deleted");
+    showToast('"' + name + '" permanently deleted.', "info", 4000);
+    // Return to picker (or main if there's still one child left)
+    try {
+      document.getElementById("parent-panel")?.classList.add("hidden");
+      document.getElementById("child-panel")?.classList.add("hidden");
+      const remaining = getAssignedChildren();
+      if(remaining.length === 1){
+        selectChild(remaining[0]);
+      } else if(remaining.length > 1){
+        document.getElementById("main-screen")?.classList.add("hidden");
+        showChildPicker();
+      } else {
+        // No children left — stay on main-screen with the parent panel,
+        // label will show "—" via existing empty-assigned path on re-render.
+        document.getElementById("main-screen")?.classList.remove("hidden");
+        const ptb = document.getElementById("ptb-child-name");
+        if(ptb) ptb.textContent = "—";
+      }
+    } catch(e){
+      console.warn("[FamilyBank v37.0] deleteChild post-delete render failed:", e);
+    }
+  });
+}
+window.deleteChild = deleteChild;
+
+// ──────────────────────────────────────────────────────────────────
+// Child picker "Show deactivated" toggle — session-local UI state
+// ──────────────────────────────────────────────────────────────────
+// Intentionally NOT persisted (sessionStorage or state). Resets per
+// session so deactivated kids don't keep leaking into view across
+// reloads. The picker's re-render reads this flag and appends a
+// deactivated section below the active list when true.
+let showDeactivatedInPicker = false;
+function toggleShowDeactivatedInPicker(){
+  showDeactivatedInPicker = !showDeactivatedInPicker;
+  try { showChildPicker(); } catch(e){}
+}
+window.toggleShowDeactivatedInPicker = toggleShowDeactivatedInPicker;
+
+// ──────────────────────────────────────────────────────────────────
+// v37.0 — AUDIT LOG VIEWER (STUB)
+// ──────────────────────────────────────────────────────────────────
+// Deferred to v37.1. appendAuditLog() above is fully wired and
+// accumulates entries in the server-side AuditLog sheet. This viewer
+// just reads them for display — low operational value, and requires
+// either a Code.gs doGet handler (touches the sealed v37.0 Code.gs)
+// or cross-origin POST-response reading (untested in this deployment).
+//
+// v37.1 decision: add a GET-based doGet handler path like
+// ?action=auditLog&familyId=X&limit=50. Simpler than fighting CORS
+// on POST and matches the existing checkCalendar GET pattern.
+//
+// Today: button in Parent Settings opens a sheet with an explainer.
+function openAuditLogViewer(){
+  const sheet = document.getElementById("audit-log-sheet");
+  if(!sheet){
+    // Markup not yet in place — fall back to modal so the button still works.
+    openModal({
+      icon: "📜",
+      title: "Activity Log",
+      body: "Activity log viewer is coming in v37.1. Audit events are being recorded correctly — you can view them directly in the AuditLog tab of the Google Sheet in the meantime.",
+      confirmText: "OK",
+      hideCancel: true
+    });
+    return;
+  }
+  openSheet("audit-log-sheet");
+}
+window.openAuditLogViewer = openAuditLogViewer;
+
 
 // v34.2 — Parent Settings sheet
 function openParentSettingsSheet(){
@@ -6686,6 +8048,18 @@ function openParentSettingsSheet(){
   if(msgEl) { msgEl.className="field-msg"; msgEl.textContent=""; }
   // Render children list (mirrors renderMyChildren but targets ps-specific container)
   renderMyChildrenInSheet("my-children-list-ps");
+  // v37.0 — Hide primary-only buttons (Transfer Primary, Delete Family)
+  // from non-primary parents. Scoped to this sheet so it doesn't affect
+  // other surfaces that reuse the same JS hooks.
+  try {
+    const sheet = document.getElementById("sheet-parent-settings");
+    const isPrim = isPrimaryParent(currentUser);
+    if(sheet){
+      sheet.querySelectorAll("[data-primary-only]").forEach(btn => {
+        btn.classList.toggle("hidden", !isPrim);
+      });
+    }
+  } catch(e){}
   openSheet("sheet-parent-settings");
 }
 
@@ -6727,6 +8101,21 @@ function saveParentEmailFromSheet(){
 }
 function openDeleteMyAccount(){
   if(!currentUser){ return; }
+  // v37.0 — Block primary-parent self-delete. Primary must transfer the
+  // role to another parent before deleting their own account. Without
+  // this, a primary's self-delete would leave the family with no primary,
+  // breaking Delete Family visibility (render-gated on primaryParent)
+  // and the wizard's primary-completion invariant.
+  if(isPrimaryParent(currentUser)){
+    openModal({
+      icon: "⚠️",
+      title: "Transfer primary first",
+      body: "You're the primary parent of this family. Transfer the primary role to another parent before deleting your own account. (Parent Settings → Transfer Primary.)",
+      confirmText: "OK",
+      hideCancel: true
+    });
+    return;
+  }
   // Guard: cannot delete the last parent
   const parentCount = (state.users||[]).filter(u => state.roles && state.roles[u] === "parent").length;
   if(parentCount <= 1){
@@ -6775,6 +8164,10 @@ function openDeleteMyAccount(){
       soloKids.forEach(k => _purgeUserFromState(k));
       // Remove self
       _purgeUserFromState(currentUser);
+      // v37.0 — audit trail before the sync. Note the log row lands in
+      // AuditLog keyed to this familyId; the self-delete doesn't remove
+      // the family row so the log entry persists.
+      appendAuditLog("Delete Own Account", currentUser);
       syncToCloud("Parent Self-Delete");
       showToast("Account deleted.", "success");
       setTimeout(()=>{ try { logout(); } catch(e){ location.reload(); } }, 600);
@@ -6804,6 +8197,8 @@ async function checkChoreCalendar(chore){
       "&child="     + encodeURIComponent(activeChild) +
       "&choreId="   + encodeURIComponent(chore.id || "") +
       "&choreName=" + encodeURIComponent(chore.name || "") +
+      // v37.0 — familyId required for all backend reads
+      "&familyId="  + encodeURIComponent(currentFamilyId || "") +
       "&t="         + Date.now();
     const res = await fetch(url);
     const data = await res.json();
@@ -6854,6 +8249,8 @@ async function reAddChoreToCalendar(choreId){
     const url = API_URL + "?action=checkCalendar&child=" + encodeURIComponent(activeChild) +
       "&choreId=" + encodeURIComponent(chore.id || "") +
       "&choreName=" + encodeURIComponent(chore.name || "") +
+      // v37.0 — familyId required for all backend reads
+      "&familyId=" + encodeURIComponent(currentFamilyId || "") +
       "&t=" + Date.now();
     const res = await fetch(url);
     const d = await res.json();

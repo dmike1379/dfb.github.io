@@ -1336,36 +1336,7 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
 }
 
 /* Item 10 — Chore-split clickable preset labels */
-.split-presets {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-  margin-top: 2px;
-  margin-bottom: 8px;
-}
-.split-preset-btn {
-  flex: 1;
-  background: transparent;
-  border: none;
-  padding: 4px 6px;
-  font-family: var(--font);
-  font-size: 0.65rem;
-  color: var(--primary);
-  text-decoration: underline;
-  cursor: pointer;
-  width: auto;
-  margin: 0;
-  border-radius: 4px;
-  transition: background 0.12s;
-  white-space: nowrap;
-}
-.split-preset-btn:first-child  { text-align: left; }
-.split-preset-btn:nth-child(2) { text-align: center; }
-.split-preset-btn:last-child   { text-align: right; }
-.split-preset-btn:active {
-  background: rgba(37,99,235,0.08);
-  transform: scale(0.97);
-}
+/* v37.0 — .split-presets / .split-preset-btn styles moved to v37.0 block at end of file */
 
 /* v34.2 — Root cause of bottom shadow was bottom-sheet box-shadow bleeding
    through viewport when off-screen. Fixed at source (shadow moved to .open only).
@@ -1467,37 +1438,252 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
 .wizard-pill-btn:active{transform:scale(.97)}
 
 /* Item 15 — Parent top bar: two rows (Managing row above, controls row below) */
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — PARENT TOP BAR (single-row consolidation)
+   ══════════════════════════════════════════════════════════════════ */
 .parent-top-bar{
-  display:flex;flex-direction:column;gap:8px;
-  padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;
+  padding:8px 14px;background:var(--card);border-bottom:1px solid var(--border);
 }
-.parent-top-bar .ptb-managing-row{
-  display:flex;align-items:center;gap:10px;
-  font-size:.85rem;color:var(--muted);
+.parent-top-bar .ptb-row{
+  display:flex;align-items:center;gap:8px;width:100%;flex-wrap:nowrap;
 }
 .parent-top-bar .ptb-avatar{
-  width:36px;height:36px;border-radius:50%;overflow:hidden;flex-shrink:0;
+  width:32px;height:32px;border-radius:50%;overflow:hidden;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;
-  background:var(--bg);border:1px solid var(--border);font-size:20px;
+  background:var(--bg);border:1px solid var(--border);font-size:18px;
 }
 .parent-top-bar .ptb-avatar .avatar{width:100%;height:100%;border-radius:50%}
 .parent-top-bar .ptb-avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.parent-top-bar .ptb-label{font-weight:600;color:var(--text)}
-.parent-top-bar .ptb-child-name{color:var(--primary);font-weight:700}
-.parent-top-bar .ptb-controls-row{
-  display:flex;align-items:center;gap:8px;
+.parent-top-bar .ptb-label{
+  font-weight:600;color:var(--text);font-size:.82rem;
+  flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+.parent-top-bar .ptb-child-name{color:var(--primary);font-weight:700}
 .parent-top-bar .ptb-switch{
-  flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--primary);
-  background:#fff;color:var(--primary);font-weight:600;font-size:.85rem;cursor:pointer;
+  flex:0 0 auto;padding:6px 10px;border-radius:7px;border:1px solid var(--primary);
+  background:#fff;color:var(--primary);font-weight:600;font-size:.78rem;cursor:pointer;
+  white-space:nowrap;
 }
 .parent-top-bar .ptb-help,
 .parent-top-bar .ptb-logout{
-  padding:8px 10px;border-radius:8px;border:1px solid var(--border);
-  background:#fff;color:var(--text);font-size:.8rem;cursor:pointer;
+  flex:0 0 auto;padding:6px 9px;border-radius:7px;border:1px solid var(--border);
+  background:#fff;color:var(--text);font-size:.75rem;cursor:pointer;
 }
 .parent-top-bar .ptb-logout{color:var(--warning);border-color:var(--warning)}
 .parent-top-bar.hidden{display:none !important}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — SPLIT PRESETS (blue underlined text links, ~1.2× v34.2)
+   Applies to both .split-presets and .split-presets-lg wrappers.
+   ══════════════════════════════════════════════════════════════════ */
+.split-presets,
+.split-presets-lg{
+  display:flex;flex-wrap:nowrap;align-items:center;justify-content:space-between;
+  gap:10px;margin:4px 0 8px;
+  overflow-x:auto;
+}
+.split-presets .split-preset-btn,
+.split-presets-lg .split-preset-btn{
+  flex:0 0 auto;
+  background:transparent;border:none;padding:4px 2px;margin:0;
+  font-family:var(--font);font-size:.78rem;font-weight:600;
+  color:var(--primary);text-decoration:underline;
+  cursor:pointer;white-space:nowrap;border-radius:0;
+  width:auto;transition:opacity .12s;
+}
+.split-presets .split-preset-btn:hover,
+.split-presets-lg .split-preset-btn:hover{background:transparent;opacity:.75}
+.split-presets .split-preset-btn:active,
+.split-presets-lg .split-preset-btn:active{
+  background:transparent;transform:scale(.97);
+}
+.split-presets .split-preset-btn:first-child,
+.split-presets-lg .split-preset-btn:first-child{text-align:left}
+.split-presets .split-preset-btn:last-child,
+.split-presets-lg .split-preset-btn:last-child{text-align:right}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — ADMIN IMAGE FIELD HELPERS
+   Bold size guidance line above the input, inline default note after.
+   ══════════════════════════════════════════════════════════════════ */
+.img-size-guide{
+  font-size:.78rem;color:var(--text);
+  margin:0 0 6px;line-height:1.45;
+}
+.img-default-note{
+  font-size:.72rem;color:var(--muted);font-style:italic;
+  margin:4px 0 12px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — REAUTH OVERLAY (mirrors .modal-overlay contract)
+   ══════════════════════════════════════════════════════════════════ */
+#reauth-overlay .modal-box{max-width:380px}
+#reauth-overlay input[type="text"],
+#reauth-overlay input[type="tel"]{
+  width:100%;padding:10px 12px;font-size:.95rem;
+  border:1px solid var(--border);border-radius:8px;margin-top:4px;
+  font-family:var(--font);
+}
+#reauth-overlay input[readonly]{background:var(--bg);color:var(--muted)}
+#reauth-overlay .error-msg{
+  color:var(--warning);font-size:.8rem;margin-top:8px;font-weight:600;
+}
+#reauth-overlay .error-msg.hidden{display:none}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — ADMIN CARD 3-LINE META (renderAdminUsers)
+   Replaces single-line "Last seen / Time / Logins" string.
+   ══════════════════════════════════════════════════════════════════ */
+.user-row-meta{
+  display:flex;flex-direction:column;gap:2px;
+  margin-top:4px;
+}
+.user-row-meta .meta-label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.3px;
+  color:var(--muted);font-weight:700;
+}
+.user-row-meta .meta-val{
+  font-size:.82rem;color:var(--text);font-weight:500;
+}
+.user-row-meta .meta-line{
+  display:flex;align-items:baseline;gap:6px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — DEACTIVATED CHILD STYLING (picker drawer)
+   ══════════════════════════════════════════════════════════════════ */
+.picker-deactivated-toggle-wrap{
+  margin-top:14px;text-align:center;
+}
+.picker-deactivated-toggle-wrap button{
+  background:transparent;border:none;padding:6px 10px;
+  color:var(--muted);font-size:.82rem;font-weight:600;
+  cursor:pointer;text-decoration:underline;
+}
+.picker-deactivated-section{
+  margin-top:10px;padding-top:12px;
+  border-top:1px dashed var(--border);
+}
+.picker-deactivated-label{
+  font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--muted);margin-bottom:8px;font-weight:700;text-align:center;
+}
+.child-btn-wrap.deactivated{opacity:.55}
+.deactivated-row{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 10px;border-radius:8px;
+  background:var(--bg);margin-bottom:6px;
+}
+.deactivated-name{flex:1;color:var(--muted);font-weight:600}
+.deactivated-row button{
+  flex:0 0 auto;padding:6px 10px;font-size:.78rem;
+  border:1px solid var(--primary);background:#fff;color:var(--primary);
+  border-radius:6px;cursor:pointer;font-weight:600;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   v37.0 — FAMILY SETUP WIZARD
+   ══════════════════════════════════════════════════════════════════ */
+#family-wizard-sheet .sheet-header{
+  justify-content:space-between;align-items:center;
+}
+.fw-step-indicator{
+  font-size:.75rem;color:var(--muted);font-weight:600;
+  padding:4px 10px;background:var(--bg);border-radius:12px;
+}
+.fw-step-title{
+  margin:4px 0 4px;font-size:1.05rem;font-weight:700;color:var(--text);
+}
+.fw-step-intro{
+  margin:0 0 14px;font-size:.85rem;color:var(--muted);line-height:1.5;
+}
+.fw-step.hidden{display:none}
+.fw-color{
+  width:60px;height:36px;padding:2px;border:1px solid var(--border);
+  border-radius:6px;cursor:pointer;background:#fff;
+}
+
+/* Step 2 — primary card */
+.fw-primary-card{
+  background:var(--bg);border:1px solid var(--border);border-radius:10px;
+  padding:12px 14px;margin-bottom:10px;
+}
+.fw-primary-label{
+  font-size:.68rem;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--primary);font-weight:800;
+}
+.fw-primary-name{
+  font-size:1.05rem;font-weight:700;color:var(--text);margin-top:2px;
+}
+
+/* Step 2/3 — row list (co-parents, children) */
+#fw-coparent-list,
+#fw-child-list{margin-bottom:6px}
+.fw-row{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 12px;border:1px solid var(--border);border-radius:8px;
+  background:#fff;margin-bottom:6px;
+}
+.fw-row-main{flex:1;min-width:0}
+.fw-row-main strong{font-size:.92rem;color:var(--text)}
+.fw-row-sub{font-size:.76rem;color:var(--muted);margin-top:2px;line-height:1.35}
+.fw-row-remove{
+  flex:0 0 auto;padding:5px 10px;font-size:.75rem;
+  background:transparent;border:1px solid var(--warning);color:var(--warning);
+  border-radius:6px;cursor:pointer;font-weight:600;
+}
+
+.fw-empty-hint{
+  font-size:.82rem;color:var(--muted);font-style:italic;
+  padding:10px 12px;background:var(--bg);border-radius:8px;margin:0 0 8px;
+}
+
+/* Step 2/3 — add form */
+.fw-add-form{
+  margin-top:12px;padding:12px;
+  background:var(--bg);border:1px dashed var(--border);border-radius:10px;
+}
+.fw-add-form input{
+  width:100%;padding:8px 10px;font-size:.88rem;
+  border:1px solid var(--border);border-radius:6px;
+  font-family:var(--font);
+}
+.fw-hint{
+  font-size:.72rem;color:var(--muted);margin-top:8px;line-height:1.4;
+}
+.fw-hint code{
+  background:#fff;padding:1px 5px;border-radius:3px;
+  font-size:.7rem;border:1px solid var(--border);
+}
+
+/* Step 4 — review block */
+.fw-review-block{
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  padding:8px 12px;
+}
+.fw-review-row{
+  display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  padding:6px 0;border-bottom:1px solid var(--border);
+}
+.fw-review-row:last-child{border-bottom:none}
+.fw-review-label{
+  font-size:.78rem;color:var(--muted);font-weight:600;
+  flex:0 0 auto;
+}
+.fw-review-val{
+  font-size:.82rem;color:var(--text);font-weight:500;
+  text-align:right;word-break:break-word;min-width:0;
+}
+
+/* Wizard nav */
+.fw-nav{
+  display:flex;justify-content:space-between;gap:10px;
+  margin-top:18px;padding-top:14px;border-top:1px solid var(--border);
+}
+.fw-nav .btn{flex:1}
+.fw-nav .btn.hidden{display:none !important}
 
 /* Item 20 — Compact signup link (replaces v34.2 bordered card) */
 .signup-link{
@@ -1505,19 +1691,5 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
   font-size:.82rem;font-weight:600;text-decoration:underline;cursor:pointer;
 }
 .signup-link:hover{opacity:.8}
-
-/* Item 16 — Split presets 1.5× larger, 5-button layout */
-.split-presets-lg{
-  display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;
-}
-.split-presets-lg .split-preset-btn{
-  flex:1 1 auto;min-width:60px;
-  padding:14px 10px;font-size:.88rem;font-weight:600;
-  border-radius:10px;border:1px solid var(--primary);
-  background:#fff;color:var(--primary);cursor:pointer;
-  transition:background .12s ease;
-}
-.split-presets-lg .split-preset-btn:hover{background:var(--bg)}
-.split-presets-lg .split-preset-btn:active{transform:scale(.97)}
 
 /* v35.0 chained crossfade removed in v36.0 — caused wizard sheet-over-sheet crashes */
