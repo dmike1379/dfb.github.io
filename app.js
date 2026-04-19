@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbwTGZPU_7ZiMUMjbr4og2cFPMOGBdXXjcmY3GWNjFoOP3SnWYPDKnSOCGgO-CjTPNTQRw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxzaghKdOwC2liRFZVDLXL15H4Dh_sOZr8zsNZZxjlDwekH1ylc2PsGpfQluaN6LSsIsg/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -1027,6 +1027,11 @@ function clearRememberedUser(){
   if(aw) aw.style.display="none";
 }
 function restoreRememberedUser(){
+  // v36.1 — Guard: if a user is already logged in (currentUser set), skip the
+  // entire enter flow. Without this, periodic loadFromCloud polls re-run
+  // restore -> enterApp -> selectChild -> closeAllSheets, nuking any open
+  // sheet (notably the wizard). This was the wizard "random crash" cause.
+  if(currentUser) return;
   // v34.2 — Restore active session on page refresh (sessionStorage survives refresh, not tab close)
   try{
     const sessUser = sessionStorage.getItem("fb_session_user");

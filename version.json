@@ -1,5 +1,5 @@
 {
-  "version": "36.0",
-  "released": "2026-04-18",
-  "notes": "v36.0 MAJOR • Code.gs redeploy required. Revert v35.0 chained sheet crossfade (suspected contributor to wizard crashes when sub-sheets opened from within wizard) — back to original slide transitions. Revert v35.0 processShareChildDiff — it fired incorrect 'you were added as a co-parent' emails when a child was deleted (stale priorState comparison). Feature removed pending a proper explicit-marker rewrite. All v35.0 fixes retained: working API_URL, pending-approval withdrawal flow, wizard pill restructure, tab restructure, compact signup link, split presets, Android back stack, parent top bar, combined Allowance & Interest sheet."
+  "version": "36.1",
+  "released": "2026-04-19",
+  "notes": "v36.1 MINOR • Frontend only, no Code.gs change. Fixes wizard random crash: restoreRememberedUser() now guards against re-running the enter flow when a user is already logged in. Previously, every syncToCloud (which fires on wizard save, chore add, pill toggle, etc.) scheduled loadFromCloud 1.8s later, which re-ran restoreRememberedUser -> enterApp -> selectChild -> closeAllSheets, removing the .open class from the wizard sheet with no error log."
 }
