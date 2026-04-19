@@ -136,6 +136,11 @@ function doGet(e) {
       return handleDepositEmailAction(params);
     }
 
+    // ── Email approve/deny action handler (withdrawals) — v35.0 Item 2 ──
+    if (params.action === "withdrawApprove" || params.action === "withdrawDeny") {
+      return handleWithdrawalEmailAction(params);
+    }
+
     // ── Normal state fetch ──
     var state = loadState();
     state.history = loadHistory();
@@ -442,6 +447,9 @@ function doPost(e) {
 
     // v33.0 — Process signup request diffs (new request → admin email; approval/denial → requester email)
     try { processSignupDiff(priorState, body); } catch(se) { Logger.log("processSignupDiff ERROR: " + se); }
+
+    // v35.0 Item 3 — Process share-child diffs (new child assignment → welcome email to receiving parent)
+    try { processShareChildDiff(priorState, body); } catch(ce) { Logger.log("processShareChildDiff ERROR: " + ce); }
 
     // Sync Google Calendar events based on the action
     syncCalendarEvent(body, lastAction, activeChild);
@@ -844,7 +852,73 @@ function sendEventEmail(state, lastAction, activeChild, proofPhoto) {
       parentEmails.forEach(function(email) {
         sendSimpleEmail(email, bankName + " — " + childName + " wants to make a deposit! 💰", html);
       });
-      Logger.log("Deposit Submitted email → " + parentEmails.join(", "));
+    } else if (lastAction === "Withdrawal Submitted") {
+      // v35.0 Item 2 — pending-approval flow (mirrors Deposit Submitted).
+      // All assigned parents get an email with Approve/Deny buttons.
+      var pendingW = data ? (data.pendingWithdrawals || []) : [];
+      if (!pendingW.length || !parentEmails.length) return;
+      var wd        = pendingW[pendingW.length - 1];
+      var scriptUrl    = ScriptApp.getService().getUrl();
+      var approveToken = generateToken(wd.id, "withdrawApprove");
+      var denyToken    = generateToken(wd.id, "withdrawDeny");
+      var approveUrl   = scriptUrl + "?action=withdrawApprove&withdrawalId=" + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + approveToken;
+      var denyUrl      = scriptUrl + "?action=withdrawDeny&withdrawalId="    + wd.id + "&child=" + encodeURIComponent(childName) + "&token=" + denyToken;
+      var secondary    = getSecondary(state);
+      var html = buildSimpleEmailHtml(state,
+        "💸 " + childName + " wants to make a withdrawal",
+        childName + " is requesting to withdraw <strong>$" + wd.amount.toFixed(2) + "</strong> from their checking account.",
+        [
+          {label: "Amount", val: "$" + wd.amount.toFixed(2)},
+          {label: "Note",   val: wd.note || "—"},
+          {label: "From",   val: "Checking"},
+          {label: "Time",   val: wd.submittedAt || "just now"}
+        ],
+        ""
+      );
+      var btnHtml = "<div style='display:flex;gap:12px;justify-content:center;margin:0 0 16px;'>"
+        + "<a href='" + approveUrl + "' style='flex:1;display:block;background:" + secondary + ";color:white;"
+        + "text-decoration:none;padding:14px;border-radius:10px;font-weight:800;font-size:1rem;"
+        + "text-align:center;'>✅ Approve</a>"
+        + "<a href='" + denyUrl + "' style='flex:1;display:block;background:#ef4444;color:white;"
+        + "text-decoration:none;padding:14px;border-radius:10px;font-weight:800;font-size:1rem;"
+        + "text-align:center;'>❌ Deny</a>"
+        + "</div>";
+      html = html.replace("<!-- ACTION_BUTTONS -->", btnHtml);
+      parentEmails.forEach(function(email) {
+        sendSimpleEmail(email, bankName + " — " + childName + " wants to withdraw $" + wd.amount.toFixed(2), html);
+      });
+      Logger.log("Withdrawal Submitted email → " + parentEmails.join(", "));
+
+    } else if (lastAction === "Withdrawal Approved" && childEmail && notifyEmail(state, childName)) {
+      // v35.0 Item 2 — child gets confirmation
+      var rowW = getLastWithdrawEntry(childName);
+      var wAmt = rowW ? Math.abs(parseFloat(rowW[4]) || 0) : 0;
+      var wNote = rowW ? String(rowW[2]).replace(/^Withdraw:\s*/, "") : "your withdrawal";
+      var html = buildSimpleEmailHtml(state,
+        "✅ Withdrawal approved, " + childName + "!",
+        "Your withdrawal request was approved.",
+        [
+          {label: "Amount",          val: "$" + wAmt.toFixed(2)},
+          {label: "Note",            val: wNote},
+          {label: "Checking Balance",val: "$" + ((data.balances && data.balances.checking) || 0).toFixed(2)}
+        ],
+        ""
+      );
+      sendSimpleEmail(childEmail, bankName + " — Your withdrawal was approved 💸", html);
+      Logger.log("Withdrawal Approved email → " + childEmail);
+
+    } else if (lastAction === "Withdrawal Denied" && childEmail && notifyEmail(state, childName)) {
+      // v35.0 Item 2 — child gets denial notice
+      var parentName = getParentName(state);
+      var html = buildSimpleEmailHtml(state,
+        "Withdrawal update for " + childName,
+        "Your withdrawal request wasn't approved this time. Talk to " + parentName + " if you have questions.",
+        [],
+        ""
+      );
+      sendSimpleEmail(childEmail, bankName + " — Withdrawal update", html);
+      Logger.log("Withdrawal Denied email → " + childEmail);
+
     }
   } catch(err) { Logger.log("sendEventEmail ERROR: " + err); }
 }
@@ -2219,4 +2293,156 @@ function DANGER_resetEverything() {
   if (l) { l.clearContents(); l.appendRow(["Date","User","Child","Note","Amount"]); }
   saveState(buildDefaultState());
   Logger.log("DANGER_resetEverything: complete. All data wiped and reset to defaults.");
+}
+
+// ================================================================
+// [SHARE CHILD] v35.0 Item 3 — Welcome email to the receiving parent
+// when another parent grants them access to a child via Share Child.
+// Diffs state.config.parentChildren[receiver] between prior and new.
+// Sends one email per child newly added to the receiver's list.
+// ================================================================
+function processShareChildDiff(priorState, newState) {
+  try {
+    if (!newState || !newState.config) return;
+    var priorPC = (priorState && priorState.config && priorState.config.parentChildren) || {};
+    var newPC   = newState.config.parentChildren || {};
+    var bankName = getBankName(newState);
+
+    Object.keys(newPC).forEach(function(parentName){
+      var was = priorPC[parentName] || [];
+      var now = newPC[parentName]   || [];
+      var added = now.filter(function(c){ return was.indexOf(c) === -1; });
+      if (!added.length) return;
+
+      var parentEmail = getEmailFor(newState, parentName);
+      if (!parentEmail) {
+        Logger.log("processShareChildDiff: " + parentName + " has no email on file — skipping");
+        return;
+      }
+
+      added.forEach(function(childName){
+        try {
+          var html = buildSimpleEmailHtml(newState,
+            "👋 You've been added as a co-parent",
+            "You've been granted access to manage <strong>" + childName + "</strong> in " + bankName + ".",
+            [
+              {label: "Child",  val: childName},
+              {label: "Access", val: "Full co-parent (approve chores, deposits, adjust balances)"}
+            ],
+            "Log in to " + bankName + " to start managing this child."
+          );
+          sendSimpleEmail(parentEmail, bankName + " — " + childName + " was shared with you", html);
+          Logger.log("Share Child email → " + parentEmail + " for " + childName);
+        } catch(se){ Logger.log("Share Child inner ERROR: " + se); }
+      });
+    });
+  } catch(err) {
+    Logger.log("processShareChildDiff ERROR: " + err);
+  }
+}
+
+// ================================================================
+// v35.0 Item 2 — handleWithdrawalEmailAction
+// Processes approve/deny links for child withdrawal requests.
+// URL format: ?action=withdrawApprove&withdrawalId=wd_123&child=Linnea&token=ABC
+// ================================================================
+function handleWithdrawalEmailAction(params) {
+  var action       = params.action;
+  var withdrawalId = params.withdrawalId;
+  var child        = params.child;
+  var token        = params.token;
+
+  var expectedToken = generateToken(withdrawalId, action);
+  if (token !== expectedToken) {
+    return buildActionPage("❌ Invalid or Expired Link",
+      "This link is no longer valid. Please open the app to manage withdrawals.",
+      "#ef4444");
+  }
+
+  try {
+    var state = loadState();
+    var data  = state.children && state.children[child];
+    if (!data) return buildActionPage("❌ Error", "Child account not found.", "#ef4444");
+
+    var pending = data.pendingWithdrawals || [];
+    var wd = null;
+    for (var i = 0; i < pending.length; i++) {
+      if (pending[i].id === withdrawalId) { wd = pending[i]; break; }
+    }
+    if (!wd) return buildActionPage("✅ Already Processed",
+      "This withdrawal has already been handled.", "#10b981");
+
+    var ledger = getLedgerSheet();
+    var tz     = getTimezone(state);
+    var now    = Utilities.formatDate(new Date(), tz, "MMM d, yyyy h:mm a");
+
+    if (action === "withdrawApprove") {
+      if (wd.amount > (data.balances.checking || 0)) {
+        return buildActionPage("❌ Insufficient Funds",
+          child + " only has $" + (data.balances.checking || 0).toFixed(2) + " in checking — can't approve a $" +
+          wd.amount.toFixed(2) + " withdrawal. Ask them to reduce the amount.",
+          "#ef4444");
+      }
+      data.balances.checking -= wd.amount;
+      ledger.appendRow([now, child, child, "Withdraw: " + (wd.note || ""), -wd.amount]);
+      data.pendingWithdrawals = pending.filter(function(p){ return p.id !== withdrawalId; });
+      state.children[child] = data;
+      saveState(state);
+
+      // Notify child
+      var childEmail = getEmailFor(state, child);
+      if (childEmail && notifyEmail(state, child)) {
+        var html = buildSimpleEmailHtml(state,
+          "✅ Withdrawal approved, " + child + "!",
+          "Your withdrawal request was approved.",
+          [
+            {label: "Amount",           val: "$" + wd.amount.toFixed(2)},
+            {label: "Note",             val: wd.note || "—"},
+            {label: "Checking Balance", val: "$" + data.balances.checking.toFixed(2)}
+          ],
+          ""
+        );
+        sendSimpleEmail(childEmail, getBankName(state) + " — Your withdrawal was approved 💸", html);
+      }
+      return buildActionPage("✅ Withdrawal Approved!",
+        "<strong>$" + wd.amount.toFixed(2) + "</strong> withdrawn for " + child + ".<br><br>" +
+        "Checking balance: $" + data.balances.checking.toFixed(2),
+        "#10b981");
+
+    } else { // withdrawDeny
+      data.pendingWithdrawals = pending.filter(function(p){ return p.id !== withdrawalId; });
+      state.children[child] = data;
+      saveState(state);
+
+      var childEmail = getEmailFor(state, child);
+      if (childEmail && notifyEmail(state, child)) {
+        var html = buildSimpleEmailHtml(state,
+          "Withdrawal update for " + child,
+          "Your withdrawal request of $" + wd.amount.toFixed(2) + " was not approved this time. Talk to " + getParentName(state) + " if you have questions.",
+          [], ""
+        );
+        sendSimpleEmail(childEmail, getBankName(state) + " — Withdrawal update", html);
+      }
+      return buildActionPage("❌ Withdrawal Denied",
+        "The withdrawal request of <strong>$" + wd.amount.toFixed(2) + "</strong> for " + child + " has been denied. No money was deducted.",
+        "#f59e0b");
+    }
+  } catch(err) {
+    Logger.log("handleWithdrawalEmailAction ERROR: " + err);
+    return buildActionPage("❌ Error", "Something went wrong: " + err.toString(), "#ef4444");
+  }
+}
+
+// v35.0 Item 2 — lookup last "Withdraw:" ledger row for a child (used by approval email)
+function getLastWithdrawEntry(childName) {
+  try {
+    var ledger = getLedgerSheet();
+    var rows = ledger.getDataRange().getValues();
+    for (var i = rows.length - 1; i >= 1; i--) {
+      if (rows[i][2] === childName && String(rows[i][3] || "").indexOf("Withdraw:") === 0) {
+        return rows[i];
+      }
+    }
+  } catch(e) { Logger.log("getLastWithdrawEntry ERROR: " + e); }
+  return null;
 }

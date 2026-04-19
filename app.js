@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbwk8cM1mmmHMz2F8Ss5nBBkLt4KKTL2m7_PVRSV4X0kHn-B0mpJCc93DaW8j6TMnZa3jw/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxzaghKdOwC2liRFZVDLXL15H4Dh_sOZr8zsNZZxjlDwekH1ylc2PsGpfQluaN6LSsIsg/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -714,16 +714,11 @@ function renderBalances(){
   document.getElementById("savings-val").textContent      = fmt(data.balances.savings);
   document.getElementById("rate-chk-display").textContent = data.rates.checking || 0;
   document.getElementById("rate-sav-display").textContent = data.rates.savings  || 0;
-  // v31: owner chip on checking card
+  // v35.0 — Account owner chip removed from Checking card (now lives in parent top bar)
   const chkCard = document.querySelector(".balance-card.checking");
-  if(chkCard && child){
-    let owner = chkCard.querySelector(".account-owner");
-    if(!owner){
-      owner = document.createElement("div");
-      owner.className = "account-owner";
-      chkCard.appendChild(owner);
-    }
-    owner.innerHTML = renderAvatar(child,"xs") + "<span>" + child + "</span>";
+  if(chkCard){
+    const owner = chkCard.querySelector(".account-owner");
+    if(owner) owner.remove();
   }
   // Interest earned this month estimate
   const ec=(data.balances.checking*(data.rates.checking/100/12));
@@ -788,7 +783,7 @@ function renderParentTabBar(){
   const btns=[];
   // v34.1 Item 15 — Chores is now the default-active first parent tab.
   btns.push(`<button class="tab-btn active" onclick="switchTab('parent','chores')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Chores <span class="notif-badge hidden" id="parent-chore-badge">0</span></button>`);
-  btns.push(`<button class="tab-btn" onclick="switchTab('parent','adjust')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> Adjust</button>`);
+  btns.push(`<button class="tab-btn" onclick="switchTab('parent','money')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> Money</button>`);
   if(tabs.loans) btns.push(`<button class="tab-btn" onclick="switchTab('parent','loans')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-bank'/></svg> Loans</button>`);
   btns.push(`<button class="tab-btn" onclick="switchTab('parent','settings')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-gear'/></svg> Settings</button>`);
   bar.className="tab-bar tabs-"+btns.length;
@@ -1118,11 +1113,15 @@ function selectChild(childName){
   document.getElementById("parent-top-bar")?.classList.remove("hidden");
   const ptb=document.getElementById("ptb-child-name");
   if(ptb) ptb.textContent=childName;
+  // v35.0 — render child avatar in parent top bar Managing row
+  const ptbAvatar=document.getElementById("ptb-child-avatar");
+  if(ptbAvatar) ptbAvatar.innerHTML = renderAvatar(childName,"sm");
   document.getElementById("parent-panel").classList.remove("hidden");
   document.getElementById("child-panel").classList.add("hidden");
   renderParentTabBar();
-  renderBalances(); renderParentChores(); renderParentLoans(); renderParentGoals(); renderPendingDeposits(); renderParentDepositApprovals(); renderParentSettings(); renderWeekAtGlance();
-  document.getElementById("goals-child-name").textContent=childName;
+  renderBalances(); renderParentChores(); renderParentLoans(); renderParentGoals(); renderPendingDeposits(); renderParentDepositApprovals(); renderParentWithdrawalApprovals(); renderPendingWithdrawals(); renderParentSettings(); renderWeekAtGlance();
+  const gcn = document.getElementById("goals-child-name-money");
+  if(gcn) gcn.textContent=childName;
   document.getElementById("loans-child-name").textContent=childName;
   updateChoreBadges();
   updateChildSwitcherVisibility();  // v34.0 — hide Switch button if ≤1 child
@@ -1249,19 +1248,102 @@ function confirmWithdraw(){
   const data=getChildData(currentUser);
   if(v.amt>data.balances.checking){ showToast("Not enough in checking.","error"); return; }
   openModal({
-    icon:"💸", title:"Withdraw "+fmt(v.amt)+"?",
-    body:"This will take "+fmt(v.amt)+" from your checking account.",
+    icon:"💸", title:"Request withdrawal of "+fmt(v.amt)+"?",
+    body:"This request will be sent to your parent for approval. The money stays in checking until they approve.",
     detail:{Note:v.note,From:"Checking",Amount:fmt(v.amt)},
-    confirmText:"Withdraw", confirmClass:"btn-primary",
+    confirmText:"Submit Request", confirmClass:"btn-primary",
     onConfirm:()=>{
-      data.balances.checking-=v.amt;
-      recordTransaction(currentUser,"Withdraw: "+v.note,-v.amt);
-      syncToCloud("Withdraw");
-      showToast("Withdrew "+fmt(v.amt)+".","success");
+      // v35.0 Item 2 — pending-approval flow (mirrors deposit pattern). No immediate deduction.
+      if(!data.pendingWithdrawals) data.pendingWithdrawals=[];
+      data.pendingWithdrawals.push({
+        id:"wd_"+Date.now(),
+        amount:v.amt, note:v.note,
+        submittedBy:currentUser, submittedAt:fmtDate(new Date())
+      });
+      syncToCloud("Withdrawal Submitted");
+      showToast("Withdrawal submitted for approval. 💸","success");
       document.getElementById("child-amt").value=""; document.getElementById("child-note").value="";
+      try { closeSheet("sheet-manage-money", true); } catch(e){} // Item 18 — auto-close
+      try { renderPendingWithdrawals(); } catch(e){}
     }
   });
 }
+
+// v35.0 Item 2 — child-side banner showing their pending withdrawals
+function renderPendingWithdrawals(){
+  const child=activeChild||currentUser;
+  const data=getChildData(child);
+  const el=document.getElementById("withdrawal-pending-list");
+  if(!el) return;
+  const pending=(data.pendingWithdrawals||[]).filter(d=>d.submittedBy===currentUser);
+  if(!pending.length){ el.innerHTML=""; return; }
+  el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:.78rem;color:#92400e;">
+    <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> ${pending.length} withdrawal${pending.length===1?"":"s"} awaiting approval — total ${fmt(pending.reduce((s,d)=>s+d.amount,0))}
+  </div>`;
+}
+
+// v35.0 Item 2 — parent-side withdrawal approval cards
+function renderParentWithdrawalApprovals(){
+  const data=getChildData(activeChild);
+  const pending=data.pendingWithdrawals||[];
+  const el=document.getElementById("parent-withdrawal-approvals");
+  if(!el) return;
+  if(!pending.length){ el.innerHTML=""; return; }
+  el.innerHTML=`<div class="approval-banner">
+    <h3><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> Withdrawals Awaiting Approval (${pending.length})</h3>
+    ${pending.map(d=>`
+      <div class="chore-card state-pending">
+        <div class="chore-card-header">
+          <span class="chore-card-name">${d.note}</span>
+          <span class="chore-card-amount">${fmt(d.amount)}</span>
+        </div>
+        <div class="chore-card-meta">
+          By <strong>${d.submittedBy}</strong> at ${d.submittedAt}<br>
+          From: Checking
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="btn btn-secondary btn-sm col" onclick="approveWithdrawal('${d.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Approve</button>
+          <button class="btn btn-danger    btn-sm col" onclick="denyWithdrawal('${d.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg> Deny</button>
+        </div>
+      </div>`).join("")}
+  </div>`;
+}
+
+function approveWithdrawal(wdId){
+  const data=getChildData(activeChild);
+  const wd=(data.pendingWithdrawals||[]).find(d=>d.id===wdId);
+  if(!wd) return;
+  if(wd.amount > data.balances.checking){
+    showToast("Not enough in checking to approve this withdrawal.","error");
+    return;
+  }
+  data.balances.checking -= wd.amount;
+  recordTransaction(wd.submittedBy, "Withdraw: "+wd.note, -wd.amount);
+  data.pendingWithdrawals = data.pendingWithdrawals.filter(d=>d.id!==wdId);
+  syncToCloud("Withdrawal Approved");
+  showToast("Withdrawal approved. "+fmt(wd.amount)+" deducted.","success");
+  renderParentWithdrawalApprovals();
+  renderBalances();
+}
+
+function denyWithdrawal(wdId){
+  const data=getChildData(activeChild);
+  const wd=(data.pendingWithdrawals||[]).find(d=>d.id===wdId);
+  if(!wd) return;
+  openModal({
+    icon:"❌", title:"Deny withdrawal?",
+    body:"Reject this "+fmt(wd.amount)+" withdrawal from "+wd.submittedBy+"? No money has been deducted.",
+    confirmText:"Deny", confirmClass:"btn-danger",
+    onConfirm:()=>{
+      data.pendingWithdrawals=data.pendingWithdrawals.filter(d=>d.id!==wdId);
+      syncToCloud("Withdrawal Denied");
+      showToast("Withdrawal denied.","info");
+      renderParentWithdrawalApprovals();
+    }
+  });
+}
+window.approveWithdrawal = approveWithdrawal;
+window.denyWithdrawal    = denyWithdrawal;
 
 function confirmTransfer(){
   const v=validateChildForm(); if(!v) return;
@@ -1402,7 +1484,7 @@ function saveAllowance(){
   }
   syncToCloud("Allowance Update");
   showToast("Allowance saved.","success");
-  closeSheet("sheet-allowance", true);
+  closeSheet("sheet-allowance-interest", true);
 }
 
 function saveRates(){
@@ -1412,7 +1494,73 @@ function saveRates(){
   renderBalances();
   syncToCloud("Rates Update");
   showToast("Interest rates saved.","success");
-  closeSheet("sheet-rates", true);
+  closeSheet("sheet-allowance-interest", true);
+}
+
+// v35.0 — combined Allowance &amp; Interest save (one-tap Save All on merged sheet)
+function saveAllowanceAndInterest(){
+  const data=getChildData(activeChild);
+  // Allowance
+  const sched=document.getElementById("allow-schedule").value;
+  data.autoDeposit=data.autoDeposit||{};
+  data.autoDeposit.checking=readMoney("allow-chk")||0;
+  data.autoDeposit.savings =readMoney("allow-sav")||0;
+  data.autoDeposit.schedule=sched;
+  if(sched==="weekly"||sched==="biweekly"){
+    data.autoDeposit.weekday=getAllowanceSelectedDay();
+  } else if(sched==="monthly"){
+    data.autoDeposit.monthlyDay=document.getElementById("allow-monthly-day").value;
+  }
+  // Interest rates
+  data.rates=data.rates||{};
+  data.rates.checking=readPercent("rate-chk")||0;
+  data.rates.savings =readPercent("rate-sav")||0;
+  renderBalances();
+  syncToCloud("Allowance &amp; Interest Update");
+  showToast("Allowance &amp; interest saved.","success");
+  closeSheet("sheet-allowance-interest", true);
+}
+
+// v35.0 — open combined sheet (prefills fields &amp; renders projection)
+function openAllowanceInterestSheet(){
+  renderParentSettings();                  // reuses existing prefill for allowance + rates inputs
+  renderAllowanceInterestProjection();
+  // Live-update projection as values change
+  ["allow-chk","allow-sav","allow-schedule","rate-chk","rate-sav"].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el && !el._aiProjWired){
+      el.addEventListener("input", renderAllowanceInterestProjection);
+      el.addEventListener("change", renderAllowanceInterestProjection);
+      el._aiProjWired = true;
+    }
+  });
+  openSheet("sheet-allowance-interest");
+}
+
+// v35.0 — Annual earnings projection (mirrors wizard step 4 calc)
+function renderAllowanceInterestProjection(){
+  const body=document.getElementById("allow-interest-projection-body");
+  if(!body) return;
+  const sched=(document.getElementById("allow-schedule")||{}).value || "weekly";
+  const aChk=readMoney("allow-chk")||0;
+  const aSav=readMoney("allow-sav")||0;
+  const rChk=(readPercent("rate-chk")||0)/100;
+  const rSav=(readPercent("rate-sav")||0)/100;
+  const perYear = sched==="weekly" ? 52 : sched==="biweekly" ? 26 : 12;
+  const annualAllowance = (aChk+aSav)*perYear;
+  // Simple APY on the year's allowance contributions (approx) — matches wizard live calc.
+  const data=getChildData(activeChild)||{};
+  const balChk=(data.balances && data.balances.checking) || 0;
+  const balSav=(data.balances && data.balances.savings)  || 0;
+  const annualInterest = balChk*rChk + balSav*rSav + (aChk*perYear*rChk*0.5) + (aSav*perYear*rSav*0.5);
+  const total = annualAllowance + annualInterest;
+  body.innerHTML =
+    `<div style="font-size:.75rem;color:var(--muted);margin-bottom:4px;">Projected in next 12 months</div>`+
+    `<div style="display:flex;justify-content:space-around;flex-wrap:wrap;gap:8px;">`+
+      `<div><div style="font-size:.7rem;color:var(--muted);">Allowance</div><div style="font-weight:700;">${fmt(annualAllowance)}</div></div>`+
+      `<div><div style="font-size:.7rem;color:var(--muted);">Interest</div><div style="font-weight:700;">${fmt(annualInterest)}</div></div>`+
+      `<div><div style="font-size:.7rem;color:var(--muted);">Total</div><div style="font-weight:800;color:var(--primary);">${fmt(total)}</div></div>`+
+    `</div>`;
 }
 
 function renderParentSettings(){
@@ -3993,7 +4141,7 @@ const HELP_CONTENT = {
       <p><strong>Net Worth Chart</strong> plots your total balance over time with a 3-month projection.</p>
       <hr>
       <p><strong>For kids:</strong> the Money tab is where you withdraw, transfer between accounts, or deposit cash. The Chores tab shows what's due and lets you mark completed chores.</p>
-      <p><strong>For parents:</strong> Adjust lets you add or remove money directly. Chores is where you approve submissions. Settings handles allowance, rates, and PDF statements.</p>
+      <p><strong>For parents:</strong> Money lets you add or remove money directly, see reports, and configure allowance, interest, and savings goals. Chores is where you approve submissions. Settings handles profile, parent email, and PDF statements.</p>
       <hr>
       <p><strong>Tip:</strong> long-press the red badge on the Chores tab to quick-approve without navigating.</p>`
   },
@@ -4166,8 +4314,7 @@ const EXIT_WARN_SHEETS = new Set([
   "sheet-loan-creator",
   "sheet-adjust",
   "sheet-user-edit",
-  "sheet-allowance",
-  "sheet-rates",
+  "sheet-allowance-interest",
   "sheet-manage-money",
   "sheet-child-profile",
   "sheet-add-child",
@@ -4208,9 +4355,34 @@ function openSheet(id){
   const sheet = document.getElementById(id);
   if(!sheet) return;
   clearSheetDirty(id);
-  // v33.2 — If another sheet is already open, promote this one above it so
-  // sheet-over-sheet (e.g. chore creator launched from inside the wizard)
-  // doesn't pop behind. Base z-index is 500 in styles.css.
+
+  // v35.0 — Detect chained open (another sheet already open). If so, run a
+  // quick crossfade instead of the default slide-down + slide-up double-hop.
+  // Dirty-check sequencing: (1) check sibling dirty FIRST, (2) if user cancels
+  // we bail and stay on the old sheet, (3) only on confirm-discard do we swap.
+  const siblings = Array.from(document.querySelectorAll(".bottom-sheet.open"))
+    .filter(s => s.id !== id);
+  if(siblings.length){
+    const dirtySibs = siblings.filter(s => EXIT_WARN_SHEETS.has(s.id) && isSheetDirty(s.id));
+    if(dirtySibs.length){
+      openModal({
+        icon:"⚠️", title:"Discard changes?",
+        body:"You have unsaved changes. Close without saving?",
+        confirmText:"Discard", confirmClass:"btn-warning",
+        onConfirm:()=>{ closeModal(); _fbChainedOpen(sheet, id, siblings); }
+      });
+      return;
+    }
+    _fbChainedOpen(sheet, id, siblings);
+    return;
+  }
+
+  // Cold open — default slide-up
+  _fbOpenSheetBare(sheet);
+}
+
+// v35.0 — bare open (no sibling handling, just z-index + class toggle)
+function _fbOpenSheetBare(sheet){
   const openSiblings = document.querySelectorAll(".bottom-sheet.open");
   if(openSiblings.length){
     let maxZ = 500;
@@ -4220,10 +4392,27 @@ function openSheet(id){
     });
     sheet.style.zIndex = String(maxZ + 10);
   } else {
-    sheet.style.zIndex = ""; // reset to stylesheet default
+    sheet.style.zIndex = "";
   }
   sheet.classList.add("open");
   document.getElementById("sheet-backdrop")?.classList.add("open");
+}
+
+// v35.0 — chained swap: fade old siblings out while fading new sheet in.
+// No slide-down, no slide-up — both happen in place via opacity only.
+function _fbChainedOpen(newSheet, newId, oldSheets){
+  oldSheets.forEach(s => s.classList.add("sheet-swap-exit"));
+  newSheet.classList.add("sheet-swap-enter");
+  _fbOpenSheetBare(newSheet);
+  setTimeout(() => {
+    oldSheets.forEach(s => {
+      clearSheetDirty(s.id);
+      s.classList.remove("open");
+      s.classList.remove("sheet-swap-exit");
+      s.style.zIndex = "";
+    });
+    newSheet.classList.remove("sheet-swap-enter");
+  }, 150);
 }
 
 /**
@@ -4350,7 +4539,7 @@ function openChildProfileSheet(){
 (function installSwipeNavigation(){
   const TAB_ORDER = {
     child:  ["money","chores","loans"],
-    parent: ["adjust","chores","settings"]
+    parent: ["money","chores","settings"]
   };
   const THRESHOLD = 60;      // px
   const DOMINANCE = 1.5;     // dx/|dy| ratio minimum
@@ -5144,23 +5333,23 @@ function startWizardForNewChild(){
     data: {
       name: "",
       pin:  "",
-      tabs: {money:true, chores:true, loans:false},
-      useAllowance: true,
-      structure: "both",        // "checking" | "savings" | "both"
+      tabs: {money:false, chores:false, loans:false}, // v35.0 — no default selection
+      useAllowance: undefined,                        // v35.0 — no default
+      structure: "both",
       schedule: "weekly",
       allowWeekday: 1,  // Monday default
       allowMonthlyDay: "1",
-      choreRewards: true,  // v34.2
+      choreRewards: undefined,                        // v35.0 — no default
       allowChk: 0,
       allowSav: 0,
       rateChk: "",
       rateSav: "",
       email: "",
-      notifyEmail: true,
-      notifyChoreRewards: true,
-      useCalendar: false,
+      notifyEmail: undefined,                         // v35.0 — no default
+      notifyChoreRewards: undefined,                  // v35.0 — no default
+      useCalendar: undefined,                         // v35.0 — no default
       calendarId: "",
-      celebrationSound: true,
+      celebrationSound: undefined,                    // v35.0 — no default
       avatar: ""
     },
     chores: [],                 // wizard-only scratchpad; once child is created,
@@ -5303,6 +5492,9 @@ function wizardValidateCurrentStep(){
     const pin  = (pinEl.value||"").trim();
     if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Display name is required."; return false; }
     if(!pin || pin.length!==4 || !/^\d{4}$/.test(pin)){ msgEl.className="field-msg error"; msgEl.textContent="PIN must be 4 digits."; return false; }
+    // v35.0 — chore rewards pill required (no default)
+    const cr = document.querySelector('input[name="wiz-chore-rewards"]:checked');
+    if(!cr){ msgEl.className="field-msg error"; msgEl.textContent='Pick Yes or No for chore rewards.'; return false; }
     // Only validate uniqueness on the FIRST time we create the child
     if(st.mode === "new" && !st.childName){
       if((state.users||[]).indexOf(name) !== -1){
@@ -5311,6 +5503,33 @@ function wizardValidateCurrentStep(){
       // pin+name collision guard
       const col = (typeof checkNamePinCollision === "function") ? checkNamePinCollision(name, pin) : {collision:false};
       if(col.collision){ msgEl.className="field-msg error"; msgEl.textContent=col.reason||"Name/PIN conflict."; return false; }
+    }
+  }
+  // v35.0 — pill requirement validations (no default means user must pick)
+  if(st.step === 2){
+    const d = st.data;
+    if(!d.tabs || (!d.tabs.money && !d.tabs.chores && !d.tabs.loans)){
+      showToast("Pick at least one tab.","error"); return false;
+    }
+  }
+  if(st.step === 3){
+    if(!document.querySelector('input[name="wiz-allow"]:checked')){
+      showToast("Pick Yes or No for allowance.","error"); return false;
+    }
+  }
+  if(st.step === 5){
+    const ne = document.querySelector('input[name="wiz-notify-email-r"]:checked');
+    const nr = document.querySelector('input[name="wiz-notify-rewards-r"]:checked');
+    if(!ne || !nr){ showToast("Pick Yes or No for both email options.","error"); return false; }
+  }
+  if(st.step === 6){
+    if(!document.querySelector('input[name="wiz-cal"]:checked')){
+      showToast("Pick Yes or No for calendar.","error"); return false;
+    }
+  }
+  if(st.step === 8){
+    if(!document.querySelector('input[name="wiz-cele"]:checked')){
+      showToast("Pick Yes or No for celebration sound.","error"); return false;
     }
   }
   return true;
@@ -5324,7 +5543,7 @@ function wizardSaveCurrentStep(){
       d.name = (document.getElementById("wiz-name").value||"").trim();
       d.pin  = (document.getElementById("wiz-pin").value||"").trim();
       const crEl = document.querySelector('input[name="wiz-chore-rewards"]:checked');
-      d.choreRewards = !crEl || crEl.value !== "no"; // v34.2 — default true
+      d.choreRewards = crEl ? (crEl.value !== "no") : undefined; // v35.0 — undefined when no pick
       // Progressive save: create child on first time through Step 1
       if(st.mode === "new" && !st.childName){
         state.users = state.users || [];
@@ -5365,9 +5584,7 @@ function wizardSaveCurrentStep(){
       break;
     }
     case 2: {
-      d.tabs.money  = !!document.getElementById("wiz-tab-money").checked;
-      d.tabs.chores = !!document.getElementById("wiz-tab-chores").checked;
-      d.tabs.loans  = !!document.getElementById("wiz-tab-loans").checked;
+      // v35.0 — tabs already tracked in wizardState.data.tabs via wizardToggleTab; just persist
       if(st.childName){
         state.config.tabs[st.childName] = {...d.tabs};
         syncToCloud("Child Tabs (Wizard)");
@@ -5425,8 +5642,11 @@ function wizardSaveCurrentStep(){
     case 5: {
       // Email (v34.1 — was step 6)
       d.email = (document.getElementById("wiz-email").value||"").trim();
-      d.notifyEmail = !!document.getElementById("wiz-notify-email").checked;
-      d.notifyChoreRewards = !!document.getElementById("wiz-notify-rewards").checked;
+      d.email                 = (document.getElementById("wiz-email") && document.getElementById("wiz-email").value.trim()) || "";
+      const ne = document.querySelector('input[name="wiz-notify-email-r"]:checked');
+      const nr = document.querySelector('input[name="wiz-notify-rewards-r"]:checked');
+      d.notifyEmail           = ne ? (ne.value === "yes") : undefined;
+      d.notifyChoreRewards    = nr ? (nr.value === "yes") : undefined;
       if(st.childName){
         state.config.emails = state.config.emails || {};
         state.config.emails[st.childName] = d.email;
@@ -5439,9 +5659,9 @@ function wizardSaveCurrentStep(){
       break;
     }
     case 6: {
-      // Calendar (v34.1 — was step 7)
+      // Calendar (v34.1 — was step 7); v35.0 — undefined when no pill selected
       const yes = document.querySelector('input[name="wiz-cal"]:checked');
-      d.useCalendar = yes && yes.value === "yes";
+      d.useCalendar = yes ? (yes.value === "yes") : undefined;
       d.calendarId  = (document.getElementById("wiz-cal-id") && document.getElementById("wiz-cal-id").value.trim()) || "";
       if(st.childName){
         state.config.calendars = state.config.calendars || {};
@@ -5468,7 +5688,8 @@ function wizardSaveCurrentStep(){
     }
     case 8: {
       // Celebration sound (v34.2 — was step 9)
-      d.celebrationSound = !!document.getElementById("wiz-celebration").checked;
+      const ce = document.querySelector('input[name="wiz-cele"]:checked');
+      d.celebrationSound = ce ? (ce.value === "yes") : undefined;
       if(st.childName){
         state.usersData = state.usersData || {};
         state.usersData[st.childName] = state.usersData[st.childName] || {};
@@ -5538,7 +5759,7 @@ function wizardRenderStep1(){
     ? (hasPhoto
         ? `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="wizardStep1RemovePhoto()">Remove Photo</button>`
         : `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="document.getElementById('wiz-avatar-file').click()">Upload Photo</button>`)
-    : `<div class="wizard-helper" style="margin:0;">Photo upload available after Next.</div>`;
+    : `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="wizardStep1StartPhotoFlow()">Add Photo</button>`;
   return `
     <h3 class="wizard-step-title">${wizardState.mode==="edit" ? "Edit " + (wizardState.childName||"Child") + "'s Account" : "Set Up Your Child's Account"}</h3>
     <div class="wizard-helper" style="margin-bottom:14px;">${wizardState.mode==="edit" ? "Update the settings below. Changes save as you go." : "Let's get started! We'll walk through your child's profile, allowance, chores, and more."}</div>
@@ -5549,7 +5770,7 @@ function wizardRenderStep1(){
     <div class="field-msg" id="wiz-msg"></div>
     <label class="field-label" style="margin-top:14px;">Do you want your child to earn rewards for chores?</label>
     <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-chore-rewards" value="yes" ${d.choreRewards!==false?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-chore-rewards" value="yes" ${d.choreRewards===true?"checked":""}> Yes</label>
       <label class="wizard-pill"><input type="radio" name="wiz-chore-rewards" value="no"  ${d.choreRewards===false?"checked":""}> No</label>
     </div>
     <div class="wizard-helper">Your child can change their PIN from their own settings. If they forget it, you can reset it from Settings → My Children.</div>
@@ -5561,6 +5782,27 @@ function wizardRenderStep1(){
 }
 
 function wizardStep1WireAvatar(){ /* no-op — rendering does the work */ }
+
+// v35.0 — Item 7: Allow adding photo from Step 1 BEFORE advancing.
+// If the child hasn't been created yet, validate + save Step 1 first
+// (which creates the child without advancing), then open the file picker.
+function wizardStep1StartPhotoFlow(){
+  const st = wizardState; if(!st) return;
+  if(!wizardValidateCurrentStep()) return;
+  if(!st.childName){
+    wizardSaveCurrentStep();  // persists child creation; does NOT advance step
+    wizardRender();           // re-render so photo button reflects new childName
+    // Defer file picker click to next tick so DOM is fresh
+    setTimeout(()=>{
+      const el = document.getElementById("wiz-avatar-file");
+      if(el) el.click();
+    }, 30);
+  } else {
+    const el = document.getElementById("wiz-avatar-file");
+    if(el) el.click();
+  }
+}
+window.wizardStep1StartPhotoFlow = wizardStep1StartPhotoFlow;
 
 function wizardStep1PickEmoji(emoji){
   if(!wizardState) return;
@@ -5608,12 +5850,24 @@ window.wizardStep1RemovePhoto = wizardStep1RemovePhoto;
 
 function wizardRenderStep2(){
   const d = wizardState.data;
+  // v35.0 — multi-select button pills (was checkboxes). No default selection.
+  // This also eliminates the v34.3 "Loans checkbox crashes wizard" regression.
   return `
     <h3 class="wizard-step-title">Tabs</h3>
-    <div class="wizard-helper">Decide which features ${d.name||"this child"} will see. You can change this anytime.</div>
-    <div class="cb-row"><input type="checkbox" id="wiz-tab-money" ${d.tabs.money?"checked":""}><label for="wiz-tab-money">Money</label></div>
-    <div class="cb-row"><input type="checkbox" id="wiz-tab-chores" ${d.tabs.chores?"checked":""}><label for="wiz-tab-chores">Chores</label></div>
-    <div class="cb-row"><input type="checkbox" id="wiz-tab-loans" ${d.tabs.loans?"checked":""}><label for="wiz-tab-loans">Loans</label></div>`;
+    <div class="wizard-helper">Decide which features ${d.name||"this child"} will see. Tap to toggle. Pick at least one.</div>
+    <div class="wizard-pill-group wizard-pill-multi">
+      <button type="button" class="wizard-pill-btn ${d.tabs.money?"selected":""}"  onclick="wizardToggleTab('money',this)">Money</button>
+      <button type="button" class="wizard-pill-btn ${d.tabs.chores?"selected":""}" onclick="wizardToggleTab('chores',this)">Chores</button>
+      <button type="button" class="wizard-pill-btn ${d.tabs.loans?"selected":""}"  onclick="wizardToggleTab('loans',this)">Loans</button>
+    </div>`;
+}
+
+// v35.0 — toggle a tab pill; updates wizardState.data.tabs without re-rendering
+function wizardToggleTab(tab, btn){
+  const d = wizardState.data;
+  d.tabs = d.tabs || {};
+  d.tabs[tab] = !d.tabs[tab];
+  btn.classList.toggle("selected", !!d.tabs[tab]);
 }
 
 function wizardRenderStep3(){
@@ -5622,8 +5876,8 @@ function wizardRenderStep3(){
     <h3 class="wizard-step-title">Allowance</h3>
     <div class="wizard-helper">Do you want to use this app to manage ${d.name||"this child"}'s allowance?</div>
     <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="yes" ${d.useAllowance?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="no"  ${!d.useAllowance?"checked":""}> No</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="yes" ${d.useAllowance===true?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="no"  ${d.useAllowance===false?"checked":""}> No</label>
     </div>`;
 }
 
@@ -5760,8 +6014,16 @@ function wizardRenderStep5(){
     <h3 class="wizard-step-title">Email Notifications</h3>
     <label class="field-label">Child email address</label>
     <input type="email" id="wiz-email" value="${(d.email||"").replace(/"/g,"&quot;")}" placeholder="optional">
-    <div class="cb-row"><input type="checkbox" id="wiz-notify-email" ${d.notifyEmail?"checked":""}><label for="wiz-notify-email">Email on events</label></div>
-    <div class="cb-row"><input type="checkbox" id="wiz-notify-rewards" ${d.notifyChoreRewards?"checked":""}><label for="wiz-notify-rewards">Chore reward emails</label></div>
+    <label class="field-label" style="margin-top:12px;">Email on events?</label>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-notify-email-r" value="yes" ${d.notifyEmail===true?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-notify-email-r" value="no"  ${d.notifyEmail===false?"checked":""}> No</label>
+    </div>
+    <label class="field-label" style="margin-top:12px;">Chore reward emails?</label>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-notify-rewards-r" value="yes" ${d.notifyChoreRewards===true?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-notify-rewards-r" value="no"  ${d.notifyChoreRewards===false?"checked":""}> No</label>
+    </div>
     <div class="wizard-helper">Monthly statements and event alerts go to this address.</div>`;
 }
 
@@ -5771,10 +6033,10 @@ function wizardRenderStep6(){
     <h3 class="wizard-step-title">Google Calendar</h3>
     <div class="wizard-helper">Would you like to integrate chores into Google Calendar? Chores can sync as events with reminders; recurring schedules show up automatically.</div>
     <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="yes" ${d.useCalendar?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display=''"> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="no"  ${!d.useCalendar?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display='none'"> No</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="yes" ${d.useCalendar===true?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display=''"> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="no"  ${d.useCalendar===false?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display='none'"> No</label>
     </div>
-    <div id="wiz-cal-row" style="display:${d.useCalendar?"":"none"}">
+    <div id="wiz-cal-row" style="display:${d.useCalendar===true?"":"none"}">
       <label class="field-label">Calendar ID</label>
       <input type="text" id="wiz-cal-id" value="${(d.calendarId||"").replace(/"/g,"&quot;")}" placeholder="childname@group.calendar.google.com">
       <a class="btn btn-outline" href="docs/calendar-setup-guide.pdf" target="_blank" rel="noopener"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-download-simple"/></svg> Download Setup Guide</a>
@@ -5800,9 +6062,13 @@ function wizardRenderStep8(){
   const d = wizardState.data;
   const childName = wizardState.childName || "";
   return `
-    <h3 class="wizard-step-title">Celebration & Sharing 🎉</h3>
+    <h3 class="wizard-step-title">Celebration &amp; Sharing 🎉</h3>
     <div class="wizard-helper">When ${d.name||"your child"} completes a chore, a celebration plays. Milestones like savings goals and streak rewards also celebrate.</div>
-    <div class="cb-row"><input type="checkbox" id="wiz-celebration" ${d.celebrationSound?"checked":""}><label for="wiz-celebration">Celebration sound</label></div>
+    <label class="field-label">Celebration sound?</label>
+    <div class="wizard-pill-group">
+      <label class="wizard-pill"><input type="radio" name="wiz-cele" value="yes" ${d.celebrationSound===true?"checked":""}> Yes</label>
+      <label class="wizard-pill"><input type="radio" name="wiz-cele" value="no"  ${d.celebrationSound===false?"checked":""}> No</label>
+    </div>
     ${childName ? `
     <div class="reports-divider" style="margin-top:20px;">Share Child</div>
     <div class="wizard-helper">Share ${childName} with another parent account so they can also manage this child.</div>
@@ -6644,3 +6910,86 @@ async function reAddChoreToCalendar(choreId){
 }
 window.reAddChoreToCalendar = reAddChoreToCalendar;
 
+
+// ════════════════════════════════════════════════════════════════════
+// v35.0 — Android back button: app-internal navigation stack.
+// Uses history.pushState to intercept the Android system back gesture
+// on mobile browsers/PWAs. Each significant view change pushes a state;
+// popstate pops that view rather than exiting the app. When the stack
+// is empty, a confirm() is shown before allowing the default exit.
+// ════════════════════════════════════════════════════════════════════
+(function(){
+  const KEY = "fb_nav";
+  const stack = [];  // array of handlers: fn called on back
+  let poppingInternal = false;
+
+  function seed(){
+    // Baseline history entry so the first back press is captured
+    try { history.replaceState({fb:KEY, base:true}, "", location.href); } catch(e){}
+  }
+
+  // Push a handler onto the back stack. Called when a view opens.
+  window.fbNavPush = function(handler){
+    if(typeof handler !== "function") return;
+    stack.push(handler);
+    try { history.pushState({fb:KEY, depth:stack.length}, "", location.href); } catch(e){}
+  };
+
+  // Pop without triggering (e.g., when the user closes a sheet via the × button).
+  window.fbNavPop = function(){
+    if(!stack.length) return;
+    stack.pop();
+    poppingInternal = true;
+    try { history.back(); } catch(e){}
+  };
+
+  window.addEventListener("popstate", function(){
+    if(poppingInternal){ poppingInternal = false; return; }
+    if(stack.length){
+      const fn = stack.pop();
+      try { fn(); } catch(e){ console.error("[fbNav] handler failed:", e); }
+      // Re-seed a forward entry so subsequent backs still get captured
+      try { history.pushState({fb:KEY, base:true}, "", location.href); } catch(e){}
+    } else {
+      // Empty stack: ask before exit
+      const ok = confirm("Exit FamilyBank?");
+      if(!ok){
+        try { history.pushState({fb:KEY, base:true}, "", location.href); } catch(e){}
+      }
+      // If ok, let the default behavior happen (history is already popped)
+    }
+  });
+
+  // Seed on first load
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", seed);
+  } else { seed(); }
+
+  // Wrap openSheet/closeSheet/showChildPicker to auto-maintain the stack.
+  // v35.0 — EXCEPTION: sheet-wizard uses its own in-wizard Back button
+  // (user requested system back NOT interfere with wizard navigation).
+  const NO_STACK = {"sheet-wizard": true};
+  const _open  = window.openSheet;
+  const _close = window.closeSheet;
+  if(typeof _open === "function"){
+    window.openSheet = function(id){
+      const r = _open.apply(this, arguments);
+      if(NO_STACK[id]) return r; // skip stack for excluded sheets
+      try {
+        fbNavPush(()=>{
+          try { _close && _close(id, true); } catch(e){}
+        });
+      } catch(e){}
+      return r;
+    };
+  }
+  // When a sheet closes programmatically, pop one from stack to stay in sync
+  if(typeof _close === "function"){
+    window.closeSheet = function(id, force){
+      const r = _close.apply(this, arguments);
+      if(NO_STACK[id]) return r; // wizard never pushed, so don't pop
+      if(stack.length) { stack.pop(); poppingInternal = true; try{ history.back(); }catch(e){} }
+      return r;
+    };
+  }
+})();

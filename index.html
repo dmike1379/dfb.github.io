@@ -91,17 +91,12 @@
         </div>
       </div>
 
-      <!-- v34.2 — Request account prominent, parent-only, above Log In -->
-      <div style="margin-bottom:14px;padding:12px 14px;background:var(--bg);border-radius:var(--radius);border:1.5px solid var(--primary);text-align:center;">
-        <div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--primary);margin-bottom:4px;">New Parent Account</div>
-        <button class="btn btn-outline" onclick="openSignupRequest()" type="button" style="font-weight:800;font-size:.95rem;width:100%;margin:0;">
-          <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user-plus"/></svg>
-          Request a Parent Account
-        </button>
-        <div style="font-size:.68rem;color:var(--muted);margin-top:5px;">Parents only · Requires admin approval</div>
-      </div>
-
       <button class="btn btn-primary" onclick="attemptLogin()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-sign-in"/></svg> Log In</button>
+
+      <!-- v35.0 — Compact Request Account link below Log In (was bordered card above in v34.2) -->
+      <div class="text-center" style="margin-top:10px;">
+        <a href="#" class="signup-link" onclick="event.preventDefault();openSignupRequest();">Request a parent account</a>
+      </div>
 
       <div class="text-center" style="margin-top:14px;">
         <span class="status-pill" id="status-pill">
@@ -136,12 +131,17 @@
 
   <!-- ═══════════════════════ MAIN SCREEN ═══════════════════════ -->
   <div class="screen hidden" id="main-screen">
-    <!-- v32: Single-line parent top bar (hidden for child, shown for parent) -->
+    <!-- v35.0: Two-row parent top bar — Managing label+avatar above control row -->
     <div class="parent-top-bar hidden" id="parent-top-bar">
-      <button class="ptb-switch" id="ptb-switch-btn" onclick="showChildPicker()">Switch ▼</button>
-      <div class="ptb-label">Managing <span class="ptb-child-name" id="ptb-child-name">—</span></div>
-      <button class="ptb-help" title="Help" onclick="openHelp('main')" aria-label="Help"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-info"/></svg></button>
-      <button class="ptb-logout" onclick="logout()">Log Out</button>
+      <div class="ptb-managing-row">
+        <div class="ptb-avatar" id="ptb-child-avatar"></div>
+        <div class="ptb-label">Managing <span class="ptb-child-name" id="ptb-child-name">—</span></div>
+      </div>
+      <div class="ptb-controls-row">
+        <button class="ptb-switch" id="ptb-switch-btn" onclick="showChildPicker()">Switch Child ▼</button>
+        <button class="ptb-help" title="Help" onclick="openHelp('main')" aria-label="Help"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-info"/></svg></button>
+        <button class="ptb-logout" onclick="logout()">Log Out</button>
+      </div>
     </div>
 
     <!-- Child (non-parent) top bar — keeps original layout -->
@@ -252,17 +252,29 @@
 
       <div class="tab-bar tabs-3" id="parent-tab-bar">
         <button class="tab-btn active" onclick="switchTab('parent','chores')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-check-circle"/></svg> Chores <span class="notif-badge hidden" id="parent-chore-badge">0</span></button>
-        <button class="tab-btn" onclick="switchTab('parent','adjust')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-currency-dollar"/></svg> Money</button>
+        <button class="tab-btn" onclick="switchTab('parent','money')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-currency-dollar"/></svg> Money</button>
         <button class="tab-btn" onclick="switchTab('parent','settings')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-gear"/></svg>️ Settings</button>
       </div>
 
-      <!-- Money tab (v34.2 — was Adjust) -->
-      <div class="tab-panel" id="parent-tab-adjust">
+      <!-- Money tab (v35.0 — was Adjust) -->
+      <div class="tab-panel" id="parent-tab-money">
+        <div id="parent-withdrawal-approvals"></div>
         <div id="parent-deposit-approvals"></div>
 
         <button class="sheet-trigger" onclick="openSheet('sheet-adjust')">
           <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-lightning"/></svg></span>
           <span class="st-label">Instant Adjustment</span>
+          <span class="st-chevron">›</span>
+        </button>
+
+        <button class="sheet-trigger" onclick="openAllowanceInterestSheet()">
+          <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-calendar"/></svg></span>
+          <span class="st-label">Allowance &amp; Interest</span>
+          <span class="st-chevron">›</span>
+        </button>
+        <button class="sheet-trigger" onclick="openSheet('sheet-parent-goals')">
+          <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-target"/></svg></span>
+          <span class="st-label">Savings Goals for <span id="goals-child-name-money">Child</span></span>
           <span class="st-chevron">›</span>
         </button>
 
@@ -313,21 +325,6 @@
 
       <!-- Settings tab (v34.2 — child-only settings) -->
       <div class="tab-panel" id="parent-tab-settings">
-        <button class="sheet-trigger" onclick="openSheet('sheet-allowance')">
-          <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-calendar"/></svg></span>
-          <span class="st-label">Allowance</span>
-          <span class="st-chevron">›</span>
-        </button>
-        <button class="sheet-trigger" onclick="openSheet('sheet-rates')">
-          <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-percent"/></svg></span>
-          <span class="st-label">Interest Rates</span>
-          <span class="st-chevron">›</span>
-        </button>
-        <button class="sheet-trigger" onclick="openSheet('sheet-parent-goals')">
-          <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-target"/></svg></span>
-          <span class="st-label">Savings Goals for <span id="goals-child-name">Child</span></span>
-          <span class="st-chevron">›</span>
-        </button>
         <button class="sheet-trigger" onclick="openChildProfileSheet()">
           <span class="icon"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user-circle-gear"/></svg></span>
           <span class="st-label">Child Profile</span>
@@ -647,14 +644,17 @@
         <span class="sav-pct"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-bank"/></svg> Savings: <strong><span id="dep-split-sav-label">50</span>%</strong></span>
       </div>
       <input type="range" id="deposit-split" min="0" max="100" value="50" oninput="updateDepositSplitLabel()">
-      <div class="split-presets">
-        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 0, 'updateDepositSplitLabel')">← All Savings</button>
-        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 50, 'updateDepositSplitLabel')">50/50</button>
-        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 100, 'updateDepositSplitLabel')">All Checking →</button>
+      <div class="split-presets split-presets-lg">
+        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 0,   'updateDepositSplitLabel')">100% Sav</button>
+        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 25,  'updateDepositSplitLabel')">75% Sav</button>
+        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 50,  'updateDepositSplitLabel')">50/50</button>
+        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 75,  'updateDepositSplitLabel')">75% Chk</button>
+        <button type="button" class="split-preset-btn" onclick="animateSplitTo('deposit-split', 100, 'updateDepositSplitLabel')">100% Chk</button>
       </div>
     </div>
 
     <div id="deposit-pending-list"></div>
+    <div id="withdrawal-pending-list"></div>
     <button class="btn btn-primary" id="child-action-btn" onclick="doChildAction()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-arrow-circle-up"/></svg> Withdraw Cash</button>
   </div>
 </div>
@@ -741,12 +741,6 @@
   <div class="sheet-body">
     <div class="info-box">Update contact info, notifications, and visible tabs for this child. Admin PIN not required for these fields.</div>
 
-    <!-- v33.0 — Persistent Annual Earnings Calculator -->
-    <div class="earnings-card">
-      <div class="earnings-head"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-chart-line-up"/></svg> Annual Earnings (max)</div>
-      <div id="earnings-card-body"></div>
-    </div>
-
     <!-- v33.0 — Re-run wizard for this child -->
     <button class="btn btn-outline" style="margin-bottom:14px;" onclick="startWizardForExistingChild(activeChild)"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-magic-wand"/></svg> Run Setup Wizard</button>
 
@@ -830,14 +824,18 @@
   </div>
 </div>
 
-<!-- ── Sheet: Allowance (parent Settings) ───────────────────────── -->
-<div class="bottom-sheet" id="sheet-allowance">
+<!-- ── Sheet: Allowance &amp; Interest (parent Money — v35.0 combined) ── -->
+<div class="bottom-sheet" id="sheet-allowance-interest">
   <span class="sheet-grab"></span>
   <div class="sheet-header">
-    <h3><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-calendar"/></svg> Allowance</h3>
-    <button class="btn btn-sm btn-ghost" onclick="closeSheet('sheet-allowance')">✕ Close</button>
+    <h3><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-calendar"/></svg> Allowance &amp; Interest</h3>
+    <button class="btn btn-sm btn-ghost" onclick="closeSheet('sheet-allowance-interest')">✕ Close</button>
   </div>
   <div class="sheet-body">
+
+    <h4 style="margin:0 0 8px 0;font-size:.95rem;color:var(--primary);">
+      <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-calendar"/></svg> Allowance
+    </h4>
     <div class="info-box">Set the schedule and amount deposited automatically.</div>
     <label class="field-label">Schedule</label>
     <select id="allow-schedule" onchange="onAllowanceScheduleChange()">
@@ -868,24 +866,30 @@
       <div class="col"><label class="field-label">Checking $</label><input type="number" class="money-input" id="allow-chk" step="0.01"></div>
       <div class="col"><label class="field-label">Savings $</label> <input type="number" class="money-input" id="allow-sav" step="0.01"></div>
     </div>
-    <button class="btn btn-secondary" onclick="saveAllowance()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save Allowance</button>
-  </div>
-</div>
 
-<!-- ── Sheet: Interest Rates (parent Settings) ──────────────────── -->
-<div class="bottom-sheet" id="sheet-rates">
-  <span class="sheet-grab"></span>
-  <div class="sheet-header">
-    <h3><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-percent"/></svg> Annual Interest Rates (APY)</h3>
-    <button class="btn btn-sm btn-ghost" onclick="closeSheet('sheet-rates')">✕ Close</button>
-  </div>
-  <div class="sheet-body">
+    <div class="reports-divider" style="margin:20px 0 12px 0;"></div>
+
+    <h4 style="margin:0 0 8px 0;font-size:.95rem;color:var(--primary);">
+      <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-percent"/></svg> Interest Rates (APY)
+    </h4>
     <div class="info-box">Applied on the 1st of each month automatically.</div>
     <div class="row">
       <div class="col"><label class="field-label">Checking %</label><input type="number" class="percent-input" id="rate-chk" step="0.01"></div>
       <div class="col"><label class="field-label">Savings %</label> <input type="number" class="percent-input" id="rate-sav" step="0.01"></div>
     </div>
-    <button class="btn btn-primary" onclick="saveRates()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save Rates</button>
+
+    <div class="reports-divider" style="margin:20px 0 12px 0;"></div>
+
+    <h4 style="margin:0 0 8px 0;font-size:.95rem;color:var(--primary);">
+      <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-chart-line-up"/></svg> Annual Earnings Projection
+    </h4>
+    <div id="allow-interest-projection" class="info-box" style="text-align:center;">
+      <div id="allow-interest-projection-body">—</div>
+    </div>
+
+    <button class="btn btn-primary" onclick="saveAllowanceAndInterest()" style="width:100%;margin-top:8px;">
+      <svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-floppy-disk"/></svg> Save All
+    </button>
   </div>
 </div>
 
@@ -1207,10 +1211,12 @@
       <span class="sav-pct"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-bank"/></svg> Savings: <strong><span id="split-sav-label">50</span>%</strong></span>
     </div>
     <input type="range" id="chore-split" min="0" max="100" value="50" oninput="updateSplitLabel()">
-    <div class="split-presets">
-      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 0, 'updateSplitLabel')">← All Savings</button>
-      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 50, 'updateSplitLabel')">50/50</button>
-      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 100, 'updateSplitLabel')">All Checking →</button>
+    <div class="split-presets split-presets-lg">
+      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 0,   'updateSplitLabel')">100% Sav</button>
+      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 25,  'updateSplitLabel')">75% Sav</button>
+      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 50,  'updateSplitLabel')">50/50</button>
+      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 75,  'updateSplitLabel')">75% Chk</button>
+      <button type="button" class="split-preset-btn" onclick="animateSplitTo('chore-split', 100, 'updateSplitLabel')">100% Chk</button>
     </div>
 
     <div class="cb-row">
