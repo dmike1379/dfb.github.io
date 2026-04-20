@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbwTsyS08c8w0-iRK1rpMhm6DRGW2JuFfsU5m5uNk8Uu67ku1gbAs4RdYPtohGwboSMR8w/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxvevlcClHWzRJeO4djJwlFOAfrp7AZGUN17uSBmbgjeAfcmSgg07yfV0WCfh-lirQP3Q/exec";
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -5385,6 +5385,16 @@ async function approvePendingRequest(id){
   arr.splice(idx, 1);
   state.config.pendingUsers = arr;
 
+  // v37.0.2 — Suppress server-side processSignupDiff on this cleanup POST.
+  // The diff engine (Code.gs processSignupDiff) looks at the request leaving
+  // pendingUsers and checks whether the approved name is in newState.users.
+  // In multi-family world it won't be — approved user lives in a separate
+  // family row — so the diff falls through to the denial branch and emails
+  // the user "request denied." The sentinel flag skips the diff entirely
+  // for this specific POST. Code.gs v37.0.2+ strips the flag before saving,
+  // so it never persists in state.
+  state._suppressSignupDiff = true;
+
   try {
     // syncToCloud chains behind any in-flight syncs and attaches the admin's
     // currentFamilyId automatically.
@@ -5399,8 +5409,14 @@ async function approvePendingRequest(id){
     state.config.pendingUsers = arr;
     showToast("Family created, but admin cleanup failed. Please retry to clear the request.", "error", 6000);
     renderPendingRequests();
+    // v37.0.2 — Strip the flag so a retry doesn't ship a stale sentinel.
+    delete state._suppressSignupDiff;
     return;
   }
+
+  // v37.0.2 — Flag already shipped in the sync above. Strip locally so a
+  // subsequent unrelated sync doesn't carry it.
+  delete state._suppressSignupDiff;
 
   renderPendingRequests();
   try { renderAdminUsers(); } catch(e){}
