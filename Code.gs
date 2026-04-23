@@ -1,30 +1,30 @@
 /**
  * ╔═══════════════════════════════════════════════════════════════════╗
- * ║              FAMILY BANK — Code.gs (Google Apps Script)          ║
- * ║                     Backend & Email Engine                        ║
- * ║                     v37.0.1 — Row-per-family + welcome-email intercept ║
+ * ║              FAMILY BANK — Code.gs (Google Apps Script)      ║
+ * ║                     Backend & Email Engine                   ║
+ * ║                     v37.0.2 — Signup-diff suppression hotfiX ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
  * HOW TO DEPLOY (do this in order, every time you update this file):
  *
- *   STEP 1 — Edit the CONFIG block below to match your family
+ *   STEP 1 — Edit the CONFIG block below to match your family (if first-time)
  *   STEP 2 — Paste this entire file into the Apps Script editor
  *   STEP 3 — Click Save (floppy disk icon or Ctrl+S)
- *   STEP 4 — Select "grantEmailPermission" in the dropdown → click Run
+ *   STEP 4 — (First-time only) Select "grantEmailPermission" → click Run
  *             (approve any permissions it asks for)
- *   STEP 5 — Select "setupBank" in the dropdown → click Run
+ *   STEP 5 — (First-time only) Select "setupBank" → click Run
  *             Check the Execution Log — it should say "setupBank: done."
- *   STEP 6 — v37.0 ONLY — Select "migrateToRowPerFamily" → click Run
+ *   STEP 6 — (v37.0 migration only, one-time) Select "migrateToRowPerFamily" → Run
  *             Reads existing A1 blob, splits into per-family rows.
- *             Check Execution Log for "migrateToRowPerFamily: done."
- *             (Safe to re-run — detects if migration already complete.)
+ *             (Skip this on v37.0.2 redeploy — already migrated.)
  *   STEP 7 — Click Deploy → Manage Deployments
  *             Click the pencil/edit icon on your deployment
  *             Change Version to "New version" → click Deploy
- *   STEP 8 — Copy the Web App URL → paste into index.html at API_URL
+ *   STEP 8 — Copy the new Web App URL → paste into app.js at API_URL (line ~39)
  *
- * NOTE: If this is your very first deployment, use "New Deployment"
- *       instead of editing an existing one in Step 7.
+ * NOTE: v37.0.2 is a hotfix over a live v37.0.1 deployment. You do NOT need
+ *       to re-run setupBank or migrateToRowPerFamily. Paste, Save, Deploy,
+ *       copy new URL, update app.js.
  *
  * v37.0 ARCHITECTURE NOTES:
  *   - Row-per-family: col A = familyId, col B = state JSON
@@ -34,13 +34,17 @@
  *
  * v37.0.1 CHANGE (additive, no migration impact):
  *   - New doPost intercept: body._sendWelcomeEmail = {recipient, name, role, defaultPin}
- *     Fires a single welcome email server-side. Client sends one POST per recipient
- *     at wizard completion (Family Setup Wizard, v37.0 frontend). Fire-and-forget
- *     pattern — mirrors _auditLogAppend. No state write, no ledger row.
- *   - If you are redeploying from the v37.0-alpha Code.gs, you MUST replace with
- *     this version before the v37.0 frontend ships. Otherwise welcome emails are
- *     silently dropped (client sees status:ok because Apps Script still returns 200
- *     from the normal flow, but the intercept never fires).
+ *     Fires a single welcome email server-side. Fire-and-forget pattern.
+ *
+ * v37.0.2 CHANGE (additive hotfix — Bug #2 from v37.0.1 audit):
+ *   - doPost honors body._suppressSignupDiff === true to skip processSignupDiff().
+ *     Client sets this on the admin's Step-2 cleanup POST in approvePendingRequest,
+ *     so the diff engine doesn't mis-identify a multi-family approval as a denial
+ *     and send a denial email to the approved user.
+ *   - Flag is stripped from the saved state (never persisted to the sheet).
+ *   - All other signup flows (new request added, deny) are unaffected — they
+ *     still run processSignupDiff normally.
+ *   - NO schema change. Safe to deploy on top of a v37.0.1 sheet.
  */
 
 // ╔═══════════════════════════════════════════════════════════════════╗
@@ -121,7 +125,7 @@ var APP_URL = "https://dmike1379.github.io/dfb.github.io/"; // ← Your app URL
 // ------------------------------------------------------------------
 // VERSION — update when deploying
 // ------------------------------------------------------------------
-var CODE_VERSION = "v37.0.1"; // ← increment on each Code.gs redeploy
+var CODE_VERSION = "v37.0.2"; // ← increment on each Code.gs redeploy
 
 // ------------------------------------------------------------------
 // EMAIL APPROVAL SECRET KEY
@@ -498,6 +502,12 @@ function doPost(e) {
     var priorState = null;
     try { priorState = loadFamilyState(familyId); } catch(le) { priorState = null; }
 
+    // v37.0.2 — Capture signup-diff suppression flag before stripping it.
+    // Set by client approvePendingRequest on the admin's Step-2 cleanup POST,
+    // so the diff engine doesn't mis-identify a multi-family approval as a
+    // denial (approved user is in a new family row, not in admin's users[]).
+    var suppressSignupDiff = (body._suppressSignupDiff === true);
+
     // Strip frontend-only keys before saving
     delete body.tempTransactions;
     delete body.lastAction;
@@ -508,6 +518,8 @@ function doPost(e) {
     delete body._auditLogAppend;
     delete body._auditLogFetch;
     delete body._sendWelcomeEmail;
+    // v37.0.2 — strip suppression flag so it never persists in saved state
+    delete body._suppressSignupDiff;
     // Strip any orphaned calendar helper keys — these must never persist in state
     delete body._deletedChoreName;
     delete body._deletedChoreTitle;
@@ -544,7 +556,15 @@ function doPost(e) {
     sendEventEmail(body, lastAction, activeChild, proofPhoto);
 
     // v33.0 — Process signup request diffs
-    try { processSignupDiff(priorState, body); } catch(se) { Logger.log("processSignupDiff ERROR: " + se); }
+    // v37.0.2 — Skip diff when admin's cleanup POST explicitly suppressed it
+    //          (approvePendingRequest Step 2 — approved user is in a new
+    //           family row, not admin's users[], so the diff would otherwise
+    //           fall through to the denial branch and email the wrong person).
+    if (suppressSignupDiff) {
+      if (DEBUG_LOGGING) Logger.log("doPost: signup diff suppressed by client flag");
+    } else {
+      try { processSignupDiff(priorState, body); } catch(se) { Logger.log("processSignupDiff ERROR: " + se); }
+    }
 
     // Sync Google Calendar events based on the action
     syncCalendarEvent(body, lastAction, activeChild);
