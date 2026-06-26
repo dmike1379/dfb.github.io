@@ -1692,6 +1692,5 @@ h3 .icon,label .icon,.field-label .icon{margin-right:4px;opacity:.85}
 }
 .signup-link:hover{opacity:.8}
 
-#update-banner { display: none !important; }
 
 /* v35.0 chained crossfade removed in v36.0 — caused wizard sheet-over-sheet crashes */
