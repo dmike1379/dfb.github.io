@@ -36,7 +36,7 @@
 // ╚═══════════════════════════════════════════════════════════════════╝
 
 // ── API URL — paste this from Apps Script Deploy → Manage Deployments ──
-const API_URL = "https://script.google.com/macros/s/AKfycbzwlsdTLLH3c5Zntwlk1yxBYinrxsrzVz19x0Oy0f-Y2FnbMA1wp_CkqQgquC1j1XSCZg/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzwlsdTLLH3c5Zntwlk1yxBYinrxsrzVz19x0Oy0f-Y2FnbMA1wp_CkqQgquC1j1XSCZg/exec"; // ← v38 DEV URL (Strake Step 3 deployment). DEV ONLY — do not push to dfb.github.io (Linnea PROD).
 
 // ── Bank identity ──
 const CFG_BANK_NAME    = "Family Bank";
@@ -58,10 +58,7 @@ const CFG_IMG_LOGO   = "images/logo.png";
 const CFG_IMG_ICON   = "images/icon.png";
 
 // ── Version ──
-// v37.0 — No longer a hardcoded constant. Read from version.json at runtime
-//         and stamped onto splash/login in stampVersion() below. Kept as a
-//         non-authoritative fallback in case the fetch fails.
-let APP_VERSION = "37.0";
+const APP_VERSION = "38.1";   // v38.1 final — fallback stamp only (version.json is authoritative)
 
 // ╔═══════════════════════════════════════════════════════════════════╗
 // ║         END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE       ║
@@ -270,23 +267,7 @@ let state = {
 let currentUser         = null;   // logged-in username
 let currentRole         = null;   // "child" | "parent"
 let activeChild         = null;   // child being managed (parent view)
-// v37.0 — row-per-family routing. Every network call to the backend must carry
-// this id. Persisted in sessionStorage ("fb_session_family") so a refresh
-// re-enters the same family without re-hitting the listFamilies discovery flow.
-let currentFamilyId     = null;
-// v37.0 — Mirror Code.gs generateFamilyId(): "fam_" + 8 base36 chars.
-// Client and server must format ids identically so handoff between the two
-// (approve-pending flow posts a new family under a client-generated id) stays
-// consistent.
-function generateFamilyId(){
-  let suffix = "";
-  for(let i=0; i<8; i++){
-    suffix += Math.floor(Math.random()*36).toString(36);
-  }
-  return "fam_" + suffix;
-}
 let pendingTransactions = [];
-let editingChoreId      = null;
 let editingLoanId       = null;  // v30.1
 let modalCallback       = null;
 let inactivityTimer     = null;
@@ -300,8 +281,6 @@ let pickerMode          = null;
 let pickerSelected      = [];
 
 // v33.0 — Wizard runtime state
-let wizardState         = null;   // {childName, step, mode:"new"|"edit", data:{...}, chores:[...]}
-let wizardTotalSteps    = 9;  // v34.2 — streaks folded into step 7
 
 // v33.0 — Proof photo buffer for pending chore submission (base64 data URL or null)
 let pendingProofPhoto   = null;
@@ -311,6 +290,11 @@ let pendingProofChoreId = null;
 // 3. UTILITIES
 // ════════════════════════════════════════════════════════════════════
 function fmt(v){ return "$"+(parseFloat(v)||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// v38.1 final (m-5) — escape user-typed text before it lands in innerHTML.
+function escapeHtml(s){
+  return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
 function todayStr(){ return new Date().toISOString().split("T")[0]; }
 function fmtDate(d){
   return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})
@@ -438,125 +422,6 @@ function fireModalConfirm(){
 }
 function handleOverlayClick(e){ if(e.target===document.getElementById("modal-overlay")) closeModal(); }
 
-// ────────────────────────────────────────────────────────────────────
-// v37.0 — REAUTH MODAL
-// ────────────────────────────────────────────────────────────────────
-// Friction gate against accidental clicks on destructive actions (Delete
-// Own Account, Delete Child, Delete Family). Not a security boundary —
-// the user is already authenticated. Intentionally low-stakes messaging:
-// no "access denied" language, no attempt counter, no lockout.
-//
-// Usage:
-//   confirmReauth("Delete Family", () => { /* proceed */ });
-//
-// Contract:
-//   - Username is pre-filled with currentUser and read-only.
-//   - PIN is the live input; validated against state.pins[currentUser].
-//   - Wrong PIN: shows inline error, clears PIN, stays open for retry.
-//   - Correct PIN: closes modal and fires callback().
-//   - Cancel: closes modal, callback NOT fired.
-//
-// Markup lives in index.html (reauth-overlay + child elements). Until the
-// index.html pass lands, calls to confirmReauth() will silently no-op if
-// the DOM surface is missing — guarded below.
-let reauthCallback = null;
-
-function confirmReauth(actionLabel, callback){
-  const overlay = document.getElementById("reauth-overlay");
-  if(!overlay){
-    // Index.html markup not yet in place — fail safe by running callback
-    // directly so the app remains usable during frontend rollout. Once the
-    // index.html pass lands this branch is dead code. Logging so QA can
-    // catch it if markup ships broken.
-    console.warn("[FamilyBank v37.0] confirmReauth: #reauth-overlay missing; firing callback directly for action:", actionLabel);
-    if(typeof callback === "function") callback();
-    return;
-  }
-  if(!currentUser || !state.pins || state.pins[currentUser] === undefined){
-    // No logged-in user or no PIN on record — can't reauth. Shouldn't reach
-    // here in practice since destructive actions are parent-gated.
-    console.warn("[FamilyBank v37.0] confirmReauth called without valid currentUser");
-    return;
-  }
-  reauthCallback = (typeof callback === "function") ? callback : null;
-
-  const labelEl = document.getElementById("reauth-action-label");
-  if(labelEl) labelEl.textContent = actionLabel || "this action";
-
-  const userEl = document.getElementById("reauth-username");
-  if(userEl){
-    userEl.value = currentUser;
-    userEl.readOnly = true;
-  }
-
-  const pinEl = document.getElementById("reauth-pin");
-  if(pinEl){
-    pinEl.value = "";
-  }
-
-  const errEl = document.getElementById("reauth-error");
-  if(errEl){
-    errEl.textContent = "";
-    errEl.classList.add("hidden");
-  }
-
-  overlay.classList.add("open");
-  // Defer focus so the modal is painted first
-  setTimeout(()=>{ document.getElementById("reauth-pin")?.focus(); }, 150);
-}
-window.confirmReauth = confirmReauth;
-
-function closeReauth(){
-  const overlay = document.getElementById("reauth-overlay");
-  if(overlay) overlay.classList.remove("open");
-  // Clear the PIN field on close so it never lingers in the DOM
-  const pinEl = document.getElementById("reauth-pin");
-  if(pinEl) pinEl.value = "";
-  reauthCallback = null;
-}
-window.closeReauth = closeReauth;
-
-function fireReauthConfirm(){
-  const pinEl = document.getElementById("reauth-pin");
-  const errEl = document.getElementById("reauth-error");
-  const entered = pinEl ? (pinEl.value || "") : "";
-
-  if(!entered){
-    if(errEl){
-      errEl.textContent = "Enter your PIN to continue.";
-      errEl.classList.remove("hidden");
-    }
-    pinEl?.focus();
-    return;
-  }
-
-  const expected = (state.pins && state.pins[currentUser] !== undefined)
-    ? String(state.pins[currentUser]) : null;
-
-  if(expected !== null && entered === expected){
-    const cb = reauthCallback;
-    closeReauth();
-    if(typeof cb === "function") cb();
-    return;
-  }
-
-  // Wrong PIN: stay open, clear field, show inline message.
-  if(errEl){
-    errEl.textContent = "PIN doesn't match. Try again.";
-    errEl.classList.remove("hidden");
-  }
-  if(pinEl){
-    pinEl.value = "";
-    pinEl.focus();
-  }
-}
-window.fireReauthConfirm = fireReauthConfirm;
-
-function handleReauthOverlayClick(e){
-  if(e.target === document.getElementById("reauth-overlay")) closeReauth();
-}
-window.handleReauthOverlayClick = handleReauthOverlayClick;
-
 function showToast(msg,type="",dur=3200){
   const t=document.getElementById("toast");
   t.textContent=msg;
@@ -633,59 +498,25 @@ function playCelebrationSound(){
 // ════════════════════════════════════════════════════════════════════
 // 5. CLOUD LOAD & SYNC
 // ════════════════════════════════════════════════════════════════════
-// v37.0 — Restore familyId from sessionStorage synchronously before the first
-// network call, so the initial loadFromCloud fetches the right family's state
-// instead of hitting listFamilies and bouncing through a picker on every refresh.
-try {
-  const savedFid = sessionStorage.getItem("fb_session_family");
-  if(savedFid && /^fam_[a-z0-9]{4,}$/.test(savedFid)){
-    currentFamilyId = savedFid;
-  }
-} catch(e){}
-
 async function loadFromCloud(){
   setStatus("loading","Connecting to bank...");
   try{
-    // v37.0 — If we don't have a familyId yet (fresh install / first visit /
-    // cleared session), ask the backend which families exist. Zero → fresh
-    // install, route to default/first-run. One → auto-adopt that family.
-    // Many → surface a family picker. Code.gs v37.0 returns {familyIds:[...]}
-    // for requests without familyId.
-    if(!currentFamilyId){
-      try {
-        const discoverRes = await fetch(API_URL+"?action=listFamilies&t="+Date.now());
-        const discover = await discoverRes.json();
-        const ids = (discover && Array.isArray(discover.familyIds)) ? discover.familyIds : [];
-        if(ids.length === 1){
-          // Single-family backend — auto-adopt. Safe: only one possible family.
-          currentFamilyId = ids[0];
-          try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
-        } else if(ids.length > 1){
-          // v37.1 BUG #6 — Multi-family backend with no session. Do NOT auto-adopt
-          // the first family; that routes every unknown user to family A's state.
-          // Instead, leave currentFamilyId null so the login screen renders and
-          // attemptLogin's lookupFamily path resolves the correct family.
-          // (Prior behavior: currentFamilyId = ids[0] — caused wrong-family login.)
-          console.log("[FamilyBank v37.1] Multi-family backend, no session — login screen will resolve via lookupFamily.");
-          // v37.1 hotfix — bail early. If we fall through, the state GET below
-          // fires with no familyId, server returns {error:"familyId required"},
-          // and the data-shape check at line ~680 fails into the "Unexpected data
-          // — check API URL" status. That error is misleading: nothing is wrong,
-          // we just need the user to log in so attemptLogin → lookupFamily runs.
-          // attemptLogin calls loadFromCloud() again after setting currentFamilyId,
-          // so the real state fetch happens on that second pass.
-          setStatus("ready", "Select account");
-          return;
-        }
-        // else: zero families — fresh install path. Leave currentFamilyId null.
-      } catch(e){
-        console.warn("[FamilyBank] family discovery failed:", e);
-      }
-    }
-    const url = API_URL + "?t=" + Date.now() +
-      (currentFamilyId ? "&familyId=" + encodeURIComponent(currentFamilyId) : "");
-    const res=await fetch(url);
+    // v38 row-per-family — every GET must carry familyId. Read from localStorage.
+    // If empty, the user has not yet been assigned to a family (signup/adminApprove
+    // is Step 3) — server returns familyNotFound shape and the client can route
+    // the user back to a setup screen.
+    const familyId = (function(){ try { return localStorage.getItem("fb_familyId") || ""; } catch(_){ return ""; } })();
+    const res=await fetch(API_URL+"?t="+Date.now()+"&familyId="+encodeURIComponent(familyId));
     const data=await res.json();
+    // v38 Step 4 — familyNotFound = State A (no cache, first login) OR State C (stale cache).
+    // State C silent recovery: a real cached familyId came back missing -> clear it.
+    // Either way: present the non-cached (email) login. No toast, no error UX (D5 lock).
+    if(data && data.status==="error" && data.reason==="familyNotFound"){
+      if(familyId){ try{ localStorage.removeItem("fb_familyId"); }catch(_){} }
+      renderLoginMode();
+      setStatus("ready","Connected ✓");
+      return;
+    }
     if(data && (data.children || data.balances || data.pins)){
       state={
         ...state,
@@ -697,7 +528,10 @@ async function loadFromCloud(){
       if(!state.users || !state.users.length) state.users=Object.keys(state.pins||{});
       if(!state.roles || !Object.keys(state.roles).length){
         state.roles={};
-        state.users.forEach(u=>{ state.roles[u] = u==="Dad" ? "parent" : "child"; });
+        // v38.1 final (m-7) — no hardcoded name: parents are the parentChildren
+        // map's keys when present; otherwise the first user (setup always created the parent first).
+        const knownParents = Object.keys((state.config && state.config.parentChildren) || {});
+        state.users.forEach((u,i)=>{ state.roles[u] = knownParents.length ? (knownParents.indexOf(u)!==-1 ? "parent" : "child") : (i===0 ? "parent" : "child"); });
       }
       if(!state.config.emails) state.config.emails={};
       if(!state.config.avatars) state.config.avatars={};
@@ -723,30 +557,12 @@ async function loadFromCloud(){
           }
         }
       } catch(e) { /* migration best-effort */ }
-      // v32.4 item #8: seed admin email on first load if empty.
-      // TODO: STRIP THIS HARDCODED SEED BEFORE PUBLISHING TO INSTRUCTABLES.
-      // Replace with `state.config.adminEmail = state.config.adminEmail || "";`
-      if(!state.config.adminEmail) state.config.adminEmail = "michaelhdeleo@gmail.com";
-      // v34.0 — BACKFILL createdAt for any child without one. Pre-v34.0 children
-      // have no createdAt on their usersData entry, which would cause the
-      // annualProjectionCheck trigger in Code.gs to skip them forever. Stamp
-      // them with the v34.0 deploy date so their first anniversary email fires
-      // a year from now. This runs every load; it's idempotent.
-      try {
-        state.usersData = state.usersData || {};
-        const BACKFILL_DATE = "2026-04-17T00:00:00.000Z";
-        (state.users || []).forEach(u => {
-          if((state.roles||{})[u] !== "child") return;
-          if(!state.usersData[u]) state.usersData[u] = {};
-          if(!state.usersData[u].createdAt){
-            state.usersData[u].createdAt = BACKFILL_DATE;
-            state._needsCreatedAtBackfillSave = true;
-          }
-        });
-      } catch(e) { /* best-effort */ }
+      // v38 Step 4 — removed hardcoded admin-email seed. Admin notification email
+      // lives in the AdminConfig tab and is reached through admin routes (Step 5).
       migrateIfNeeded();
       pendingTransactions=[];
       applyBranding();
+      renderLoginMode();        // v38 Step 4 — cached familyId present -> State B (name+PIN)
       restoreRememberedUser();
       setStatus("ready","Connected ✓");
     } else {
@@ -759,75 +575,52 @@ async function loadFromCloud(){
 }
 
 // v34.0 — SYNC SERIALIZATION
-// Before v34.0, two syncToCloud calls could race on Apps Script because POSTs
-// don't serialize server-side. A fast cheap POST (e.g. "Login") could finish
-// AFTER a big slow one (e.g. "Chore Submitted" with a proof photo) and
-// overwrite the newer state. Fix is two-part:
-//   1. Every payload carries a _savedAt ISO timestamp; Code.gs rejects any POST
-//      whose _savedAt is older than what's already in A1 (stale-write guard).
-//   2. Client-side, every syncToCloud awaits the previous one plus a small
-//      buffer before firing, so same-client collisions never even leave.
-// The chain lives on this module-scope variable.
+// Two syncToCloud calls can race on Apps Script because POSTs don't serialize
+// server-side. A fast cheap POST (e.g. "Login") can finish AFTER a big slow one
+// (e.g. "Chore Submitted" with a proof photo) and overwrite the newer state.
+// PARTIAL mitigation only — client-side:
+//   Every syncToCloud awaits the previous one plus a small buffer before firing,
+//   so SAME-CLIENT collisions never leave. The chain lives on the module-scope
+//   variable below.
+// NOT protected: cross-client races (two devices) and trigger-vs-user races.
+// Payloads carry a _savedAt stamp, but Code.gs does NOT currently read or
+// compare it — there is no server-side stale-write guard. (Audit C-1, 2026-07-02;
+// server-side LockService + _savedAt compare scheduled for the cleanup phase.)
 let _syncChain = Promise.resolve();
 const SYNC_BUFFER_MS = 2000;
 
-async function syncToCloud(action){
+async function syncToCloud(action, opts){
   // Queue behind any in-flight sync. Each link awaits the previous one plus
   // a 2s server-processing buffer, then does its own fetch + optional reload.
-  // v37.1 BUG #9 — Capture familyId at queue time, not fire time. logout() and
-  // family-switch null currentFamilyId before the chain link fires (SYNC_BUFFER_MS
-  // delay). Capturing here ensures the POST ships with the correct familyId even
-  // if the caller logs out immediately after invoking syncToCloud.
-  //
-  // v37.1 hotfix — SPLIT-CHAIN PATTERN. There are TWO promises in play:
-  //   1. _syncChain — serialization-only, always resolves (poison-proof). A failed
-  //      sync must NOT poison the chain for subsequent callers, so the chain link
-  //      swallows its own errors via the trailing .catch(()=>{}).
-  //   2. thisCallPromise — reflects THIS specific call's outcome. Rejects on server
-  //      error or network error so destructive-action callers (openDeleteMyAccount,
-  //      _transferPrimaryTo) can branch on success/failure via try/catch around the
-  //      await. This is load-bearing — without a rejectable return, "account deleted"
-  //      and "primary transferred" toasts fire on server rejection (BUG #9 fails).
-  //
-  // Callers that need to branch on success/failure MUST await the returned promise,
-  // NOT _syncChain. Do not "simplify" this back to one promise — the whole reason it
-  // looks over-engineered is that BUG #9 happens without it. See v37.1 Patch 1 audit.
-  const capturedFamilyId = currentFamilyId;
+  // v38.1 final — opts (chore wizard fan-out): {activeChild, extra, skipReload}.
+  // Captured here so the payload built later in the chain still carries them.
   const prev = _syncChain;
-  let resolveThis, rejectThis;
-  const thisCallPromise = new Promise((res, rej) => { resolveThis = res; rejectThis = rej; });
   _syncChain = prev.then(async () => {
     await new Promise(r => setTimeout(r, SYNC_BUFFER_MS));
-    try {
-      const result = await _doSyncToCloud(action, capturedFamilyId);
-      resolveThis(result);
-    } catch(err) {
-      console.error("[FamilyBank] sync chain link failed:", err);
-      rejectThis(err);
-    }
-  }).catch(() => {}); // poison-proof: serialization chain must always resolve
-  return thisCallPromise;
+    return _doSyncToCloud(action, opts);
+  }).catch(err => {
+    // Don't let one failed sync poison the chain for subsequent calls
+    console.error("[FamilyBank] sync chain link failed:", err);
+  });
+  return _syncChain;
 }
 
-async function _doSyncToCloud(action, capturedFamilyId){
+async function _doSyncToCloud(action, opts){
+  opts = opts || {};
   renderBalances();
-  // v37.1 BUG #9 — Use capturedFamilyId (captured at queue time) so the POST
-  // always carries the correct familyId even if the caller nulled currentFamilyId
-  // (e.g. via logout) before this chain link fired. Falls back to currentFamilyId
-  // for backward compat with any direct _doSyncToCloud calls.
-  const familyIdToSend = capturedFamilyId !== undefined ? capturedFamilyId : currentFamilyId;
+  // v38 row-per-family — every POST must carry familyId. Read from localStorage.
+  // If empty, the POST is rejected server-side with familyNotFound shape.
+  const familyId = (function(){ try { return localStorage.getItem("fb_familyId") || ""; } catch(_){ return ""; } })();
   const payload={
     ...state,
+    familyId: familyId,
     tempTransactions:pendingTransactions,
     lastAction:action,
-    activeChild:activeChild,
-    // v37.0 — Required by Code.gs. POSTs without familyId are rejected.
-    // Null here (pre-login / discovery failed) is itself a signal the server
-    // will reject — preferable to a silent overwrite of the wrong family.
-    familyId: familyIdToSend,
-    // v34.0 — Stale-write guard stamp. Server compares this to its own _savedAt
-    // and rejects the POST if ours is older. Also re-stamps state._savedAt
-    // server-side before saving so the next POST has a fresh baseline.
+    activeChild: opts.activeChild || activeChild,   // v38.1 final — per-child fan-out override
+    // _savedAt stamp. NOTE: Code.gs does NOT currently read or compare this —
+    // there is no server-side stale-write guard (audit C-1, 2026-07-02). The
+    // stamp is retained for the planned cleanup-phase fix (LockService on doPost
+    // + real _savedAt compare). Until then this field is informational only.
     _savedAt: new Date().toISOString()
   };
   delete payload.history;
@@ -841,6 +634,10 @@ async function _doSyncToCloud(action, capturedFamilyId){
   // syncCalendarEvent can target a single chore's calendar rebuild (the server
   // captures it BEFORE strip, so it never lands in saved state).
   // delete payload._editedChoreId;  ← removed intentionally
+  // v38.1 final — transient keys handed in by the caller (e.g. _editedChoreId
+  // from the chore wizard's edit commit). Merged at payload-build time, so they
+  // ride the POST without ever touching state.
+  if(opts.extra) Object.assign(payload, opts.extra);
   // v33.0 — Attach pending proof photo (if any) to chore submissions only
   const hasProofPhoto = (action === "Chore Submitted" && !!pendingProofPhoto);
   if(hasProofPhoto){
@@ -848,21 +645,16 @@ async function _doSyncToCloud(action, capturedFamilyId){
   }
   pendingTransactions=[];
   try{
-    // v37.1 FEAT-9 — mode:'no-cors' removed. Apps Script Web Apps send
-    // Access-Control-Allow-Origin:* automatically, so response is now readable.
-    // Server rejections (missing familyId, stale-write guard, etc.) surface as
-    // toasts instead of being silently swallowed.
-    const res = await fetch(API_URL,{method:"POST",body:JSON.stringify(payload)});
-    let resBody = null;
-    try { resBody = await res.json(); } catch(e) {}
-    if(!res.ok || (resBody && resBody.status === "error")){
-      const reason = (resBody && resBody.reason) ? resBody.reason : "unknown error";
-      showToast("Sync error — " + reason, "error", 5000);
-      console.error("[FamilyBank] _doSyncToCloud server error:", reason, resBody);
-      // v37.1 hotfix — throw so destructive-action callers can distinguish
-      // server rejection from success. The chain link catches this and rejects
-      // thisCallPromise; _syncChain itself is poison-proof via its own .catch.
-      throw new Error("sync failed: " + reason);
+    // v38 — opaque fetch mode removed (Apps Script doGet/doPost return JSON;
+    // the client can now read response status and surface familyNotFound errors).
+    const _resp = await fetch(API_URL,{method:"POST",body:JSON.stringify(payload)});
+    // v38.1 S3 — read doPost's JSON reply so verified commits can gate on
+    // {status:"ok"} (error shape: {status:"error", reason:...} Code.gs:503).
+    let _parsed = null; try { _parsed = await _resp.json(); } catch(_){ _parsed = null; }
+    // v38.1 final (M-1) — a save the server rejected is never silent.
+    if(!(_parsed && _parsed.status==="ok")){
+      const _why = (_parsed && _parsed.reason) ? " ("+_parsed.reason+")" : (_resp && _resp.status && _resp.status!==200 ? " (HTTP "+_resp.status+")" : "");
+      showToast("Save failed"+_why+" — change may not have saved!","error",6000);
     }
     // v33.0 — Clear photo buffer after a successful POST
     pendingProofPhoto = null;
@@ -872,19 +664,12 @@ async function _doSyncToCloud(action, capturedFamilyId){
     // was reading stale state and clobbering the just-submitted chore. State
     // we just sent is authoritative for the client; the monthly/chore triggers
     // will produce the server truth on schedule.
-    if(!hasProofPhoto){
+    if(!hasProofPhoto && !opts.skipReload){   // v38.1 final — fan-out legs skip the reload until the last one
       setTimeout(loadFromCloud, 1800);
     }
+    return _parsed;   // v38.1 S3 — undefined on network error (catch below)
   } catch(err){
-    // v37.1 hotfix — if this is the re-throw from the server-error branch above,
-    // pass it through unmodified. Otherwise it's a true network error; toast and
-    // re-throw so the chain link can reject thisCallPromise.
-    if(err && String(err.message || "").indexOf("sync failed:") === 0){
-      throw err;
-    }
-    showToast("Sync error — could not reach server","error",5000);
-    console.error("[FamilyBank] _doSyncToCloud network error:", err);
-    throw err;
+    showToast("Sync error — change may not have saved!","error",5000);
   }
 }
 
@@ -1055,80 +840,121 @@ function renderChildTabBar(){
 // ════════════════════════════════════════════════════════════════════
 // 8. AUTH (login, logout, remember-me, child picker)
 // ════════════════════════════════════════════════════════════════════
-async function attemptLogin(){
+
+// v38 Step 4 — cached familyId accessor (Safari-private-mode safe).
+function _getCachedFamilyId(){
+  try { return localStorage.getItem("fb_familyId") || ""; } catch(_){ return ""; }
+}
+
+// v38 Step 4 — two-mode login renderer.
+//   State A (no cached familyId): email + PIN. Submit -> loginByEmail.
+//   State B (cached familyId):    display-name + PIN. Submit -> doGet?familyId=X.
+// Remember-me / auto-login are display-name features and are hidden in State A.
+function renderLoginMode(){
+  const cached     = _getCachedFamilyId();
+  const nameField  = document.getElementById("login-name-field");
+  const emailField = document.getElementById("login-email-field");
+  const rememberRow= document.getElementById("login-remember-row");
+  const autoWrap   = document.getElementById("auto-login-wrap");
+  const btn        = document.getElementById("login-submit-btn");
+  if(cached){
+    if(nameField)   nameField.style.display   = "";
+    if(emailField)  emailField.style.display  = "none";
+    if(rememberRow) rememberRow.style.display = "";
+    if(btn) btn.setAttribute("data-mode","name");
+  } else {
+    if(nameField)   nameField.style.display   = "none";
+    if(emailField)  emailField.style.display  = "";
+    if(rememberRow) rememberRow.style.display = "none";
+    if(autoWrap)    autoWrap.style.display    = "none";
+    if(btn) btn.setAttribute("data-mode","email");
+    const nb=document.getElementById("not-you-btn"); if(nb) nb.classList.add("hidden");
+  }
+}
+
+// v38 Step 4 — single Log In button dispatches by current mode.
+function doLoginSubmit(){
+  const btn=document.getElementById("login-submit-btn");
+  if(btn && btn.getAttribute("data-mode")==="email"){ attemptLoginByEmail(); return; }
+  // v38.1-d1-1 Fix-A (Bug-3) — name field always accepts email:
+  // an "@" in the username routes to email login, which re-resolves the
+  // family and re-caches fb_familyId. This is the family-switch path.
+  const raw=(document.getElementById("username-input").value||"").trim();
+  if(raw.indexOf("@")!==-1){ attemptLoginByEmail(raw); return; }
+  attemptLogin();
+}
+
+// v38 Step 4 — State A submit: email + PIN -> loginByEmail -> cache familyId -> load -> enter.
+// Strake returns an identical loginFailed shape for wrong-PIN and unknown-email,
+// so we surface one generic error (Open Item #3 lock).
+async function attemptLoginByEmail(emailOverride){
+  // v38.1-d1-1 Fix-A (Bug-3) — callable from name mode with the typed
+  // address. #login-email-input is hidden in name mode, so errors route
+  // to the visible pair (pin-error), matching attemptLogin's convention.
+  const fromNameMode = (typeof emailOverride==="string" && emailOverride.length>0);
+  const errIn = fromNameMode ? "pin-input" : "login-email-input";
+  const errEl = fromNameMode ? "pin-error" : "email-error";
+  clearFieldError(errIn, errEl);
+  const email = fromNameMode ? emailOverride
+              : (document.getElementById("login-email-input").value||"").trim();
+  const pin=document.getElementById("pin-input").value;
+  if(!email || !pin){
+    showFieldError(errIn, errEl, "Enter your email and PIN.");
+    return;
+  }
+  setStatus("loading","Signing in...");
+  try{
+    const url=API_URL+"?action=loginByEmail&email="+encodeURIComponent(email)+"&pin="+encodeURIComponent(pin);
+    const res=await fetch(url);
+    const data=await res.json();
+    if(data && data.status==="ok" && data.familyId){
+      // v38.1-d1-1 (Bug-3, locked rule) — remembered identity never crosses
+      // families: landing a DIFFERENT familyId wipes remembered name + PIN.
+      const prevFam = _getCachedFamilyId();
+      if(prevFam && prevFam !== data.familyId){
+        try{
+          localStorage.removeItem("fb_remembered_user");
+          localStorage.removeItem("fb_remembered_pin");
+        }catch(_){}
+      }
+      try{ localStorage.setItem("fb_familyId", data.familyId); }catch(_){}
+      await loadFromCloud();           // reads the freshly-cached familyId, hydrates state
+      const dn=data.displayName;
+      const valid=state.users && state.users.find(u=>u.toLowerCase()===String(dn||"").toLowerCase());
+      if(valid){
+        // v38.1-d1-3 (Bug-4, R-2) — honor remember-me on the email path.
+        // Mirrors attemptLogin's save block; runs AFTER the family-switch
+        // wipe above, so remembered identity always belongs to the landed
+        // family. Saves the RESOLVED displayName, never the typed email.
+        const rememberUser=document.getElementById("remember-me").checked;
+        const autoLogin=document.getElementById("auto-login-cb")?.checked;
+        try{
+          if(rememberUser){
+            localStorage.setItem("fb_remembered_user",valid);
+            if(autoLogin) localStorage.setItem("fb_remembered_pin",pin);
+            else          localStorage.removeItem("fb_remembered_pin");
+          } else {
+            localStorage.removeItem("fb_remembered_user");
+            localStorage.removeItem("fb_remembered_pin");
+          }
+        } catch(e){}
+        enterApp(valid);
+      }
+      else { setStatus("ready","Connected ✓"); }  // loaded but no user match — stay on login
+    } else {
+      setStatus("ready","Connected ✓");
+      showFieldError(errIn, errEl, "Email or PIN not recognised.");
+      document.getElementById("pin-input").value="";
+    }
+  }catch(e){
+    setStatus("error","Could not connect");
+    showFieldError(errIn, errEl, "Network error — try again.");
+  }
+}
+function attemptLogin(){
   clearFieldError("pin-input","pin-error");
   const userRaw=document.getElementById("username-input").value.trim();
   const pin=document.getElementById("pin-input").value;
-
-  // v37.1 BUG #6 — If currentFamilyId is null (fresh visit, logout, family-switch),
-  // we can't validate against local state.users because we may be on a multi-family
-  // backend that has state.users for family A loaded while the user belongs to family B.
-  // Call lookupFamily to get the correct familyId first, then loadFromCloud for that
-  // family, then validate and enterApp. If currentFamilyId is already set (session
-  // restore), skip lookup and validate against local state as before.
-  if(!currentFamilyId){
-    // Disable the login button to prevent double-submit while we wait
-    const loginBtn = document.getElementById("login-btn");
-    if(loginBtn) loginBtn.disabled = true;
-    try {
-      const lookupUrl = API_URL + "?action=lookupFamily&username=" +
-        encodeURIComponent(userRaw) + "&pin=" + encodeURIComponent(pin) +
-        "&t=" + Date.now();
-      let lookupRes, lookupBody;
-      try {
-        lookupRes  = await fetch(lookupUrl);
-        lookupBody = await lookupRes.json();
-      } catch(e) {
-        showToast("Could not connect — please try again.", "error", 4000);
-        return;
-      }
-      if(!lookupBody || lookupBody.status !== "ok" || !lookupBody.familyId){
-        // "not_found" covers both wrong name and wrong PIN — don't distinguish (auth hygiene)
-        showFieldError("pin-input","pin-error","Name not recognised — check spelling.");
-        return;
-      }
-      // v37.1 hotfix — consume canonicalUsername from server response per scope §4.2.
-      // Server is authoritative for canonical casing; we no longer derive it locally
-      // after loadFromCloud. Fallback to local derivation if the server response is
-      // missing the field (defensive — Code.gs v37.1+ always returns it).
-      const canonicalFromServer = lookupBody.canonicalUsername;
-      // Set familyId and reload state for this family, then fall through to enterApp
-      currentFamilyId = lookupBody.familyId;
-      try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
-      await loadFromCloud();
-      // Prefer server-provided canonical; fall back to local match if absent
-      // (shouldn't happen against v37.1+ Code.gs).
-      const user = canonicalFromServer ||
-                   state.users.find(u => u.toLowerCase() === userRaw.toLowerCase());
-      if(!user || state.pins[user] !== pin){
-        // Extremely unlikely (lookup matched, reload succeeded, but local check fails).
-        // Could happen on a concurrent PIN change. Treat as auth failure.
-        showFieldError("pin-input","pin-error","Login failed — please try again.");
-        currentFamilyId = null;
-        try { sessionStorage.removeItem("fb_session_family"); } catch(e){}
-        return;
-      }
-      // Persist remember-me / auto-login
-      const rememberUser=document.getElementById("remember-me").checked;
-      const autoLogin=document.getElementById("auto-login-cb")?.checked;
-      try{
-        if(rememberUser){
-          localStorage.setItem("fb_remembered_user",user);
-          if(autoLogin) localStorage.setItem("fb_remembered_pin",pin);
-          else          localStorage.removeItem("fb_remembered_pin");
-        } else {
-          localStorage.removeItem("fb_remembered_user");
-          localStorage.removeItem("fb_remembered_pin");
-        }
-      } catch(e){}
-      enterApp(user);
-    } finally {
-      if(loginBtn) loginBtn.disabled = false;
-    }
-    return;
-  }
-
-  // currentFamilyId already set — validate against local state (session restore path)
   const user=state.users.find(u=>u.toLowerCase()===userRaw.toLowerCase());
   if(!user){ showFieldError("pin-input","pin-error","Name not recognised — check spelling."); return; }
   if(state.pins[user]!==pin){
@@ -1157,22 +983,6 @@ async function attemptLogin(){
 // Shared landing logic used by both attemptLogin and auto-login restore
 function enterApp(user){
   currentUser=user;
-  // v37.0 — Pin currentFamilyId to the authoritative value from the state that
-  // was just authenticated against. By the time we get here, `state.familyId`
-  // came from the server on the most recent loadFromCloud (Code.gs stamps it
-  // on every loadFamilyState return). In practice currentFamilyId is already
-  // correct (set by discovery or sessionStorage restore). This guard catches
-  // drift in one scenario: loadFromCloud discovery auto-adopted family A, but
-  // Code.gs (for any reason — cache miss, manual sheet edit) returned state
-  // belonging to family B. Without this check we'd authenticate against B's
-  // user list while posting under A's familyId, scrambling two families.
-  try {
-    if(state && state.familyId && state.familyId !== currentFamilyId){
-      console.warn("[FamilyBank v37.0] familyId drift at login — session was "+currentFamilyId+", server state is "+state.familyId+". Pinning to server.");
-      currentFamilyId = state.familyId;
-      try { sessionStorage.setItem("fb_session_family", currentFamilyId); } catch(e){}
-    }
-  } catch(e){}
   // v33.1 — If the one-parent migration ran during loadFromCloud and this login
   // is that parent, persist the seeded parentChildren list now.
   try {
@@ -1180,15 +990,6 @@ function enterApp(user){
       delete state._needsSingleParentMigrationSave;
       if((state.roles||{})[user] === "parent"){
         syncToCloud("Single-parent migration");
-      }
-    }
-    // v34.0 — Persist createdAt backfill on first parent login after upgrade.
-    // Same pattern as the single-parent migration above: loadFromCloud ran
-    // before anyone was logged in, so we defer the sync to here.
-    if(state._needsCreatedAtBackfillSave){
-      delete state._needsCreatedAtBackfillSave;
-      if((state.roles||{})[user] === "parent"){
-        syncToCloud("v34.1 createdAt backfill");
       }
     }
   } catch(e){}
@@ -1213,10 +1014,6 @@ function enterApp(user){
   currentRole=state.roles[user]||"child";
   // v34.2 — persist session so page refresh doesn't log out
   try { sessionStorage.setItem("fb_session_user", user); } catch(e){}
-  // v37.0 — persist familyId so refresh skips the listFamilies round-trip
-  try {
-    if(currentFamilyId) sessionStorage.setItem("fb_session_family", currentFamilyId);
-  } catch(e){}
   // v34.2 — show share notification if another parent shared a child with this user
   try {
     const notifs = state.config.shareNotifications && state.config.shareNotifications[user];
@@ -1237,24 +1034,6 @@ function enterApp(user){
     // v32: parent uses single-line top bar, not child top-bar
     document.getElementById("child-top-bar")?.classList.add("hidden");
     document.getElementById("parent-top-bar")?.classList.remove("hidden");
-
-    // v37.0 — Family Setup Wizard trigger. Must fire BEFORE any per-child
-    // wizard trigger so we don't push a partially-setup family through the
-    // child flow. Primary parent only; gated by familySetupComplete flag.
-    // Migration stamps existing families' flag to true, so this only fires
-    // on brand-new families approved post-v37.0.
-    try {
-      if(isPrimaryParent(currentUser)
-         && state.config && state.config.familySetupComplete !== true){
-        // Defer to next tick so the parent top bar paints first.
-        setTimeout(openFamilyWizard, 40);
-        return;  // Skip the rest of enterApp's parent-branch routing. The
-                 // wizard's fwCommit() handles re-rendering after finish.
-      }
-    } catch(e){
-      console.warn("[FamilyBank v37.0] Family wizard trigger check failed:", e);
-    }
-
     const children=getAssignedChildren();
     updateChildSwitcherVisibility();  // v34.0 — hide Switch button if ≤1 child
     if(children.length===1){
@@ -1274,8 +1053,8 @@ function enterApp(user){
       setTimeout(()=>{
         if(currentRole==="parent" && typeof getMyChildrenList === "function"
            && getMyChildrenList().length === 0
-           && typeof startWizardForNewChild === "function"){
-          startWizardForNewChild();
+           && typeof uwOpenAdd === "function"){
+          uwOpenAdd();   // v38.1 — wizard v2
         }
       }, 60);
     }
@@ -1295,9 +1074,6 @@ function enterApp(user){
 
 function logout(){
   try { sessionStorage.removeItem("fb_session_user"); sessionStorage.removeItem("fb_session_child"); } catch(e){}
-  // v37.0 — clear familyId so the next login re-discovers (handles family switching)
-  try { sessionStorage.removeItem("fb_session_family"); } catch(e){}
-  currentFamilyId = null;
   currentUser=null; currentRole=null; activeChild=null;
   pendingTransactions=[];
   document.getElementById("main-screen").classList.add("hidden");
@@ -1307,6 +1083,8 @@ function logout(){
   document.getElementById("login-screen").classList.remove("hidden");
   document.getElementById("pin-input").value="";
   clearTimeout(inactivityTimer);
+  _cancelLogoutCountdown();          // v38 Bug-7b: kill any in-flight warning countdown on logout
+  prefillRememberedUser();           // v38.1-d1-4 (Bug-5): logout renders the same login screen a refresh does
 }
 
 function updateLogoutButtonLabel(){
@@ -1366,17 +1144,56 @@ function clearRememberedUser(){
   try{
     localStorage.removeItem("fb_remembered_user");
     localStorage.removeItem("fb_remembered_pin");
+    localStorage.removeItem("fb_familyId");   // v38.1-d1-1 Fix-B (Bug-3)
   }catch(e){}
   const ni=document.getElementById("username-input");
   const rc=document.getElementById("remember-me");
   const ac=document.getElementById("auto-login-cb");
   const nb=document.getElementById("not-you-btn");
   const aw=document.getElementById("auto-login-wrap");
-  if(ni){ ni.value=""; ni.focus(); }
+  if(ni){ ni.value=""; }
   if(rc) rc.checked=false;
   if(ac) ac.checked=false;
   if(nb) nb.classList.add("hidden");
   if(aw) aw.style.display="none";
+  // v38.1-d1-1 Fix-B — with no cached family, re-render to email mode so
+  // the device can switch families ("Not you?" escape now actually escapes).
+  renderLoginMode();
+  const ei=document.getElementById("login-email-input");
+  if(ei){ ei.value=""; ei.focus(); }
+}
+// v38.1-d1-4 (Bug-5) — PREFILL-ONLY restore, called from logout().
+// Mirrors what a page refresh renders (renderLoginMode + the prefill half of
+// restoreRememberedUser: remembered name, remember-me checked, "Not you?"
+// visible) but can NEVER enter the app: no session restore, no auto-login,
+// regardless of any stored flag. Never call enterApp() from here.
+function prefillRememberedUser(){
+  try{
+    renderLoginMode();
+    const ni=document.getElementById("username-input");
+    const rc=document.getElementById("remember-me");
+    const ac=document.getElementById("auto-login-cb");
+    const aw=document.getElementById("auto-login-wrap");
+    const nb=document.getElementById("not-you-btn");
+    const saved=localStorage.getItem("fb_remembered_user");
+    const valid=saved ? (state.users||[]).find(u=>u.toLowerCase()===saved.toLowerCase()) : null;
+    if(!valid){
+      if(saved){ localStorage.removeItem("fb_remembered_user"); localStorage.removeItem("fb_remembered_pin"); }
+      if(ni) ni.value="";
+      if(rc) rc.checked=false;
+      if(ac) ac.checked=false;
+      if(aw) aw.style.display="none";
+      if(nb) nb.classList.add("hidden");
+      return;
+    }
+    if(ni) ni.value=valid;
+    if(rc) rc.checked=true;
+    if(aw) aw.style.display="block";
+    if(nb) nb.classList.remove("hidden");
+    const savedPin=localStorage.getItem("fb_remembered_pin");
+    if(ac) ac.checked=!!(savedPin && state.pins && state.pins[valid]===savedPin);
+    setTimeout(()=>document.getElementById("pin-input")?.focus(),400);
+  }catch(e){}
 }
 function restoreRememberedUser(){
   // v36.1 — Guard: if a user is already logged in (currentUser set), skip the
@@ -1437,65 +1254,27 @@ function restoreRememberedUser(){
 function showChildPicker(){
   if(currentRole!=="parent") return;  // safety: children must never reach the picker
   const children=getAssignedChildren();
-  document.getElementById("picker-welcome").innerHTML=renderAvatar(currentUser,"sm")+' <span>Hi '+currentUser+'! 👋</span>';
+  document.getElementById("picker-welcome").innerHTML=renderAvatar(currentUser,"sm")+' <span>Hi '+escapeHtml(currentUser)+'! 👋</span>';
   document.getElementById("main-screen").classList.add("hidden");
   document.getElementById("child-picker-screen").classList.remove("hidden");
   const list=document.getElementById("child-picker-list");
-
-  // v37.0 — Compute deactivated children this parent would otherwise see
-  // (assigned to them, currently in deactivatedChildren). Picker is the
-  // only surface that can reveal them.
-  const assigned = (state.config.parentChildren && state.config.parentChildren[currentUser]) || [];
-  const deactivatedAll = (state.config.deactivatedChildren || []);
-  const myDeactivated = getChildNames().filter(c =>
-    assigned.indexOf(c) !== -1 && deactivatedAll.indexOf(c) !== -1
-  );
-
-  // Active children (unchanged shape)
-  let html = "";
   if(!children.length){
-    html += emptyState("children","No children assigned. Add one in Admin.");
-  } else {
-    html += children.map(name=>{
-      const d=getChildData(name);
-      const total=(d.balances?.checking||0)+(d.balances?.savings||0);
-      return `<div class="child-btn-wrap">
-        <button class="child-btn with-avatar" onclick="selectChild('${name}')">
-          ${renderAvatar(name,"md")}
-          ${name}
-          <div class="child-btn-balance">Total: ${fmt(total)}</div>
-          <span class="child-btn-arrow">›</span>
-        </button>
-        <button class="btn btn-sm btn-outline child-btn-wizard" onclick="startWizardForExistingChild('${name}')" title="Edit ${name} with Setup Wizard">🪄 Setup</button>
-      </div>`;
-    }).join("");
+    list.innerHTML=emptyState("children","No children assigned. Add one in Admin.");
+    return;
   }
-
-  // v37.0 — Deactivated toggle + conditional section
-  if(myDeactivated.length){
-    const toggleLabel = showDeactivatedInPicker
-      ? "Hide deactivated (" + myDeactivated.length + ")"
-      : "Show deactivated (" + myDeactivated.length + ")";
-    html += `<div class="picker-deactivated-toggle-wrap">
-      <button class="btn btn-sm btn-ghost" onclick="toggleShowDeactivatedInPicker()">${toggleLabel}</button>
+  list.innerHTML=children.map(name=>{
+    const d=getChildData(name);
+    const total=(d.balances?.checking||0)+(d.balances?.savings||0);
+    return `<div class="child-btn-wrap">
+      <button class="child-btn with-avatar" onclick="selectChild('${name}')">
+        ${renderAvatar(name,"md")}
+        ${escapeHtml(name)}
+        <div class="child-btn-balance">Total: ${fmt(total)}</div>
+        <span class="child-btn-arrow">›</span>
+      </button>
+      <button class="btn btn-sm btn-outline child-btn-wizard" onclick="uwOpenEdit('${name}')" title="Edit ${name} with Setup Wizard">🪄 Setup</button>
     </div>`;
-    if(showDeactivatedInPicker){
-      html += `<div class="picker-deactivated-section">
-        <div class="picker-deactivated-label">Deactivated</div>`;
-      html += myDeactivated.map(name => {
-        return `<div class="child-btn-wrap deactivated">
-          <div class="child-btn with-avatar deactivated-row">
-            ${renderAvatar(name,"md")}
-            <span class="deactivated-name">${name}</span>
-          </div>
-          <button class="btn btn-sm btn-secondary" onclick="restoreChild('${name}')" title="Restore ${name}">↩ Restore</button>
-        </div>`;
-      }).join("");
-      html += `</div>`;
-    }
-  }
-
-  list.innerHTML = html;
+  }).join("");
 }
 
 function selectChild(childName){
@@ -1530,11 +1309,7 @@ function getAssignedChildren(){
   // v33.1 — empty assigned list = sees NO children (was: sees all).
   // Admin can hand-assign via User Edit → Assigned Children. The one-parent
   // migration in loadFromCloud seeds Dad's list so existing setups don't break.
-  // v37.0 — Deactivated children are hidden globally (picker, switcher,
-  // balances, week-at-a-glance, etc.). The child picker exposes a local
-  // "Show deactivated" toggle that bypasses this filter for its own render.
-  const deactivated = (state.config.deactivatedChildren || []);
-  return all.filter(c => assigned.indexOf(c) !== -1 && deactivated.indexOf(c) === -1);
+  return all.filter(c=>assigned.indexOf(c)!==-1);
 }
 
 // v34.0 — Hide the "Switch ▼" button when this parent has 0 or 1 assigned
@@ -1676,7 +1451,7 @@ function renderPendingWithdrawals(){
   if(!el) return;
   const pending=(data.pendingWithdrawals||[]).filter(d=>d.submittedBy===currentUser);
   if(!pending.length){ el.innerHTML=""; return; }
-  el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:.78rem;color:#92400e;">
+  el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:15px;color:#92400e;">
     <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> ${pending.length} withdrawal${pending.length===1?"":"s"} awaiting approval — total ${fmt(pending.reduce((s,d)=>s+d.amount,0))}
   </div>`;
 }
@@ -1693,7 +1468,7 @@ function renderParentWithdrawalApprovals(){
     ${pending.map(d=>`
       <div class="chore-card state-pending">
         <div class="chore-card-header">
-          <span class="chore-card-name">${d.note}</span>
+          <span class="chore-card-name">${escapeHtml(d.note)}</span>
           <span class="chore-card-amount">${fmt(d.amount)}</span>
         </div>
         <div class="chore-card-meta">
@@ -1768,16 +1543,26 @@ function submitDeposit(){
   const v=validateChildForm(); if(!v) return;
   const splitChk=parseInt(document.getElementById("deposit-split").value);
   const data=getChildData(currentUser);
-  if(!data.pendingDeposits) data.pendingDeposits=[];
-  data.pendingDeposits.push({
-    id:"dep_"+Date.now(),
-    amount:v.amt, note:v.note, splitChk,
-    submittedBy:currentUser, submittedAt:fmtDate(new Date())
+  // v38.1 final (In-4) — same confirm modal as withdrawals; (In-3) sheet auto-closes on submit.
+  openModal({
+    icon:"📥", title:"Submit deposit of "+fmt(v.amt)+"?",
+    body:"This request will be sent to your parent for approval.",
+    detail:{Note:v.note, Split:splitChk+"% checking / "+(100-splitChk)+"% savings", Amount:fmt(v.amt)},
+    confirmText:"Submit Request", confirmClass:"btn-primary",
+    onConfirm:()=>{
+      if(!data.pendingDeposits) data.pendingDeposits=[];
+      data.pendingDeposits.push({
+        id:"dep_"+Date.now(),
+        amount:v.amt, note:v.note, splitChk,
+        submittedBy:currentUser, submittedAt:fmtDate(new Date())
+      });
+      syncToCloud("Deposit Submitted");
+      showToast("Deposit submitted for approval. 📥","success");
+      document.getElementById("child-amt").value=""; document.getElementById("child-note").value="";
+      try { closeSheet("sheet-manage-money", true); } catch(e){}
+      try { renderPendingDeposits(); } catch(e){}
+    }
   });
-  syncToCloud("Deposit Submitted");
-  showToast("Deposit submitted for approval. 📥","success");
-  document.getElementById("child-amt").value=""; document.getElementById("child-note").value="";
-  renderPendingDeposits();
 }
 
 function renderPendingDeposits(){
@@ -1787,7 +1572,7 @@ function renderPendingDeposits(){
   if(!el) return;
   const pending=(data.pendingDeposits||[]).filter(d=>d.submittedBy===currentUser);
   if(!pending.length){ el.innerHTML=""; return; }
-  el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:.78rem;color:#92400e;">
+  el.innerHTML=`<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-bottom:10px;font-size:15px;color:#92400e;">
     <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-hourglass'/></svg> ${pending.length} deposit${pending.length===1?"":"s"} awaiting approval — total ${fmt(pending.reduce((s,d)=>s+d.amount,0))}
   </div>`;
 }
@@ -1803,7 +1588,7 @@ function renderParentDepositApprovals(){
     ${pending.map(d=>`
       <div class="chore-card state-pending">
         <div class="chore-card-header">
-          <span class="chore-card-name">${d.note}</span>
+          <span class="chore-card-name">${escapeHtml(d.note)}</span>
           <span class="chore-card-amount">${fmt(d.amount)}</span>
         </div>
         <div class="chore-card-meta">
@@ -1954,11 +1739,11 @@ function renderAllowanceInterestProjection(){
   const annualInterest = balChk*rChk + balSav*rSav + (aChk*perYear*rChk*0.5) + (aSav*perYear*rSav*0.5);
   const total = annualAllowance + annualInterest;
   body.innerHTML =
-    `<div style="font-size:.75rem;color:var(--muted);margin-bottom:4px;">Projected in next 12 months</div>`+
+    `<div style="font-size:15px;color:var(--muted);margin-bottom:4px;">Projected in next 12 months</div>`+
     `<div style="display:flex;justify-content:space-around;flex-wrap:wrap;gap:8px;">`+
-      `<div><div style="font-size:.7rem;color:var(--muted);">Allowance</div><div style="font-weight:700;">${fmt(annualAllowance)}</div></div>`+
-      `<div><div style="font-size:.7rem;color:var(--muted);">Interest</div><div style="font-weight:700;">${fmt(annualInterest)}</div></div>`+
-      `<div><div style="font-size:.7rem;color:var(--muted);">Total</div><div style="font-weight:800;color:var(--primary);">${fmt(total)}</div></div>`+
+      `<div><div style="font-size:14px;color:var(--muted);">Allowance</div><div style="font-weight:700;">${fmt(annualAllowance)}</div></div>`+
+      `<div><div style="font-size:14px;color:var(--muted);">Interest</div><div style="font-weight:700;">${fmt(annualInterest)}</div></div>`+
+      `<div><div style="font-size:14px;color:var(--muted);">Total</div><div style="font-weight:800;color:var(--primary);">${fmt(total)}</div></div>`+
     `</div>`;
 }
 
@@ -1992,16 +1777,7 @@ function renderParentSettings(){
   }
   // v30.1: populate child profile section
   renderChildProfileSection();
-  // v32.4 item #9: populate parent's own email + clear any prior message
-  // v34.2 — email now in parent settings sheet (ps-email-input); legacy id removed from HTML
-  const peInput = document.getElementById("ps-email-input") || document.getElementById("parent-email-input");
-  const peMsg   = document.getElementById("ps-email-msg")   || document.getElementById("parent-email-msg");
-  if(peInput && currentRole === "parent" && currentUser){
-    peInput.value = (state.config.emails && state.config.emails[currentUser]) || "";
-  } else if(peInput){
-    peInput.value = "";
-  }
-  if(peMsg){ peMsg.className="field-msg"; peMsg.textContent=""; }
+  // v38.1 final (In-2) — orphan parent-email field reads removed (field retired in v38 Step 4).
 }
 
 // v30.1: Child profile — email, calendar, notifications, tabs
@@ -2035,6 +1811,7 @@ function renderChildProfileSection(){
 
 function saveChildProfile(){
   if(!activeChild) return;
+  const child = activeChild;
   const msgEl=document.getElementById("profile-msg"); msgEl.className="field-msg";
   const email=document.getElementById("profile-email").value.trim();
   const calId=document.getElementById("profile-calendar-id").value.trim();
@@ -2042,31 +1819,58 @@ function saveChildProfile(){
   if(!state.config.calendars) state.config.calendars={};
   if(!state.config.notify)    state.config.notify={};
   if(!state.config.tabs)      state.config.tabs={};
-  state.config.emails[activeChild]=email;
-  if(calId) state.config.calendars[activeChild]=calId;
-  else      delete state.config.calendars[activeChild];
-  state.config.notify[activeChild]={
+  // v38 Step 4 — non-email fields need no admin auth; apply + sync them now.
+  if(calId) state.config.calendars[child]=calId;
+  else      delete state.config.calendars[child];
+  state.config.notify[child]={
     email:        document.getElementById("profile-notify-email").checked,
     calendar:     document.getElementById("profile-notify-cal").checked,
     choreRewards: document.getElementById("profile-chore-rewards").checked
   };
-  // v32: per-user celebration sound
   if(!state.usersData) state.usersData={};
-  if(!state.usersData[activeChild]) state.usersData[activeChild]={};
+  if(!state.usersData[child]) state.usersData[child]={};
   const csProfile = document.getElementById("profile-celebration-sound");
-  if(csProfile) state.usersData[activeChild].celebrationSound = !!csProfile.checked;
+  if(csProfile) state.usersData[child].celebrationSound = !!csProfile.checked;
   const sel=getPickerSelections("profileTabs");
-  state.config.tabs[activeChild]={
+  state.config.tabs[child]={
     money:  sel.indexOf("money")!==-1,
     chores: sel.indexOf("chores")!==-1,
     loans:  sel.indexOf("loans")!==-1
   };
   syncToCloud("Child Profile Updated");
-  msgEl.className="field-msg success";
-  msgEl.textContent="Profile saved.";
-  showToast(activeChild+"'s profile updated. 💾","success");
-  // If assigned tabs changed, the child's tab bar will reflect on their next login
   renderParentTabBar();  // loan tab may appear/disappear for parent too
+
+  // v38.1 final — child email commits inside the state POST (same contract as
+  // the user wizard, d1.2): no admin PIN in user-facing UI, no setChildEmail
+  // leg. The EmailIndex is refreshed by Admin → "Rebuild email index" (In-8).
+  // Clearing an email from this form is still unsupported (use the user wizard).
+  const oldEmail = state.config.emails[child] || "";
+  const emailChanged = email.toLowerCase() !== oldEmail.toLowerCase();
+  if(!emailChanged){
+    msgEl.className="field-msg success"; msgEl.textContent="Profile saved.";
+    showToast(child+"'s profile updated. 💾","success");
+    closeSheet("sheet-child-profile", true);
+    return;
+  }
+  if(!email){
+    document.getElementById("profile-email").value = oldEmail;  // revert (clear unsupported)
+    msgEl.className="field-msg success";
+    msgEl.textContent="Saved. To remove an email, use the admin panel (coming soon).";
+    showToast("Other settings saved. Email removal needs the admin panel (coming soon).","info",4200);
+    closeSheet("sheet-child-profile", true);
+    return;
+  }
+  const taken = (typeof uwEmailTaken==="function") ? uwEmailTaken(email, child) : null;
+  if(taken){
+    msgEl.className="field-msg error"; msgEl.textContent="That email is already used by "+taken+".";
+    document.getElementById("profile-email").value = oldEmail;
+    showToast("Other settings saved. Email unchanged — already used by "+taken+".","error",4200);
+    closeSheet("sheet-child-profile", true);
+    return;
+  }
+  state.config.emails[child] = email;
+  syncToCloud("Child Email Updated");
+  showToast(child+"'s email updated. 💾","success");
   closeSheet("sheet-child-profile", true);
 }
 
@@ -2075,23 +1879,7 @@ function openProfilePicker(){ openPicker("profileTabs"); }
 // v32.4 item #9: Save parent's own email address (state.config.emails[currentUser]).
 // Parent emails share the same emails map as child notification emails, keyed by
 // display name. User renaming isn't supported so collision isn't a concern.
-function saveParentEmail(){
-  const input = document.getElementById("parent-email-input") || document.getElementById("ps-email-input");
-  const msg   = document.getElementById("parent-email-msg")   || document.getElementById("ps-email-msg");
-  if(!input || !currentUser || currentRole !== "parent") return;
-  const val = input.value.trim();
-  if(val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)){
-    if(msg){ msg.className="field-msg error"; msg.textContent="Please enter a valid email address."; }
-    showToast("Invalid email.","error");
-    return;
-  }
-  if(!state.config.emails) state.config.emails = {};
-  if(val) state.config.emails[currentUser] = val;
-  else    delete state.config.emails[currentUser];
-  syncToCloud("Parent Email Updated");
-  if(msg){ msg.className="field-msg success"; msg.textContent = val ? "Email saved." : "Email cleared."; }
-  showToast(val ? "Your email was saved." : "Your email was cleared.","success");
-}
+// v38 Step 4 — saveParentEmail removed (parent self-service email edit retired; D5/D6 throw-out).
 
 function populateAllowanceMonthlyDays(){
   const sel=document.getElementById("allow-monthly-day");
@@ -2133,200 +1921,6 @@ function setAllowanceDayToggles(days){
 // ════════════════════════════════════════════════════════════════════
 // 11. CHORES — SCHEDULE UI, PER-DAY TIMES, CREATE/EDIT/APPROVE
 // ════════════════════════════════════════════════════════════════════
-function toggleDayBtn(btn){
-  // v32.2: Both weekly AND biweekly are multi-select (was: weekly single only).
-  // Lets parents schedule "weekly Mon/Wed/Fri" style chores.
-  btn.classList.toggle("selected");
-  document.getElementById("weekday-none-msg").classList.add("hidden");
-  // Per-day-time editor visibility depends on selected days
-  refreshPerDayTimeUI();
-}
-
-function getSelectedDays(){
-  return Array.from(document.querySelectorAll("#chore-weekday-toggles .day-toggle.selected"))
-    .map(b=>parseInt(b.dataset.day));
-}
-
-function setSelectedDays(days){
-  document.querySelectorAll("#chore-weekday-toggles .day-toggle").forEach(b=>b.classList.remove("selected"));
-  days.forEach(d=>{
-    const el=document.querySelector(`#chore-weekday-toggles .day-toggle[data-day='${d}']`);
-    if(el) el.classList.add("selected");
-  });
-}
-
-function resetDayToggles(){
-  document.querySelectorAll("#chore-weekday-toggles .day-toggle").forEach(b=>b.classList.remove("selected"));
-}
-
-function populateMonthlyDays(){
-  const sel=document.getElementById("chore-monthly-day");
-  if(!sel||sel.options.length>0) return;
-  for(let i=1;i<=28;i++) sel.appendChild(new Option(i+(i===1?"st":i===2?"nd":i===3?"rd":"th"), String(i)));
-  ["last-2","last-1","last"].forEach(v=>{
-    const lbl = v==="last"?"Last day":v==="last-1"?"2nd to last":"3rd to last";
-    sel.appendChild(new Option(lbl, v));
-  });
-}
-
-function onScheduleChange(){
-  const s=document.getElementById("chore-schedule").value;
-  document.getElementById("chore-once-wrap").classList.toggle("hidden",s!=="once");
-  document.getElementById("chore-weekday-wrap").classList.toggle("hidden",s!=="weekly" && s!=="biweekly");
-  document.getElementById("chore-monthly-wrap").classList.toggle("hidden",s!=="monthly");
-
-  // v30.1: skip-first-week checkbox is bi-weekly only
-  document.getElementById("chore-skip-week-wrap").classList.toggle("hidden", s!=="biweekly");
-
-  // Per-day-time editor: only meaningful for weekly/biweekly
-  document.getElementById("chore-per-day-time-wrap").classList.toggle("hidden", s!=="weekly" && s!=="biweekly");
-  refreshPerDayTimeUI();
-
-  const wl=document.getElementById("chore-weekday-label");
-  if(wl) wl.textContent = s==="biweekly"
-    ? "Due Days (every other week — select one or more)"
-    : "Due Days of Week (select one or more)";
-
-  const streakWrap=document.getElementById("chore-streak-section");
-  if(streakWrap) streakWrap.classList.toggle("hidden",s==="once");
-
-  if(s==="once"){
-    toggleOnceDateField();
-  } else {
-    const ec=document.getElementById("chore-enddate-col");
-    if(ec) ec.classList.toggle("hidden",s==="daily");
-    const endLabel=document.getElementById("end-date-label");
-    if(endLabel) endLabel.textContent="End Date (optional)";
-    document.getElementById("chore-once-hint").style.display="none";
-    document.getElementById("chore-reminder-row")?.classList.remove("hidden");
-  }
-}
-
-// ── PER-DAY TIME EDITOR ─────────────────────────────────────────────
-// Logic: visible only when schedule is weekly/biweekly. Default "Same time
-// for all days" is checked → use the single #chore-reminder-time. Uncheck →
-// show one row per selected day with its own time.
-function onSameTimeToggle(){ refreshPerDayTimeUI(); }
-
-function refreshPerDayTimeUI(){
-  const wrap=document.getElementById("chore-per-day-time-wrap");
-  const grid=document.getElementById("chore-per-day-times");
-  const sched=document.getElementById("chore-schedule").value;
-  if(sched!=="weekly" && sched!=="biweekly"){
-    wrap.classList.add("hidden");
-    grid.classList.add("hidden");
-    grid.innerHTML="";
-    return;
-  }
-  const sameTime=document.getElementById("chore-same-time").checked;
-  const selectedDays=getSelectedDays();
-
-  // Hide single time picker when per-day mode is active and ≥1 day chosen
-  const singleRow=document.getElementById("chore-reminder-row");
-  if(!sameTime && selectedDays.length>0){
-    singleRow.classList.add("hidden");
-    grid.classList.remove("hidden");
-    renderPerDayTimeRows(selectedDays);
-  } else {
-    singleRow.classList.remove("hidden");
-    grid.classList.add("hidden");
-    grid.innerHTML="";
-  }
-}
-
-function renderPerDayTimeRows(days){
-  const grid=document.getElementById("chore-per-day-times");
-  const dayNames=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  // Preserve any existing values when rebuilding
-  const existing={};
-  grid.querySelectorAll("select[data-day]").forEach(s=>{ existing[s.dataset.day]=s.value; });
-  // Default time = current single-picker value
-  const defaultHour=document.getElementById("chore-reminder-time").value || "8";
-  grid.innerHTML=days.map(d=>{
-    const val=existing[d] || defaultHour;
-    return `<div class="per-day-time-row">
-      <div class="day-label">${dayNames[d]}</div>
-      <select data-day="${d}">
-        ${TIME_OPTIONS.map(o=>`<option value="${o.v}"${o.v===val?" selected":""}>${o.l}</option>`).join("")}
-      </select>
-    </div>`;
-  }).join("");
-}
-
-const TIME_OPTIONS = [
-  {v:"6",  l:"6:00 AM"},{v:"7",  l:"7:00 AM"},{v:"8",  l:"8:00 AM"},
-  {v:"9",  l:"9:00 AM"},{v:"10", l:"10:00 AM"},{v:"11", l:"11:00 AM"},
-  {v:"12", l:"12:00 PM (Noon)"},{v:"13", l:"1:00 PM"},{v:"14", l:"2:00 PM"},
-  {v:"15", l:"3:00 PM (After school)"},{v:"16", l:"4:00 PM"},{v:"17", l:"5:00 PM"},
-  {v:"18", l:"6:00 PM (Evening)"},{v:"19", l:"7:00 PM"},{v:"20", l:"8:00 PM"}
-];
-
-// Read per-day times from the editor. Returns {} if "same time" is checked.
-function readPerDayTimes(){
-  const sameTime=document.getElementById("chore-same-time")?.checked;
-  if(sameTime!==false) return {};  // checked or undefined → use single time
-  const out={};
-  document.querySelectorAll("#chore-per-day-times select[data-day]").forEach(s=>{
-    out[s.dataset.day]=parseInt(s.value)||8;
-  });
-  return out;
-}
-
-// Pre-populate the per-day time editor when editing a chore
-function setPerDayTimes(dayTimes){
-  if(!dayTimes || !Object.keys(dayTimes).length){
-    document.getElementById("chore-same-time").checked=true;
-  } else {
-    document.getElementById("chore-same-time").checked=false;
-  }
-  refreshPerDayTimeUI();
-  if(dayTimes && Object.keys(dayTimes).length){
-    Object.entries(dayTimes).forEach(([d,h])=>{
-      const sel=document.querySelector(`#chore-per-day-times select[data-day="${d}"]`);
-      if(sel) sel.value=String(h);
-    });
-  }
-}
-
-function updateSplitLabel(){
-  const p=parseInt(document.getElementById("chore-split").value);
-  document.getElementById("split-chk-label").textContent=p;
-  document.getElementById("split-sav-label").textContent=100-p;
-}
-
-function toggleOnceDateField(){
-  const typeEl=document.getElementById("chore-once-type");
-  if(!typeEl) return;
-  const type=typeEl.value;
-  const endDateCol=document.getElementById("chore-enddate-col");
-  const endLabel=document.getElementById("end-date-label");
-  const hint=document.getElementById("chore-once-hint");
-  const schedule=document.getElementById("chore-schedule").value;
-  if(schedule!=="once"){
-    if(endLabel) endLabel.textContent="End Date (optional)";
-    if(hint) hint.style.display="none";
-    return;
-  }
-  const reminderRow=document.getElementById("chore-reminder-row");
-  if(type==="none"){
-    if(endDateCol)   endDateCol.classList.add("hidden");
-    if(reminderRow)  reminderRow.classList.add("hidden");
-    if(hint)         hint.style.display="none";
-    document.getElementById("chore-end-date").value="";
-  } else if(type==="by"){
-    if(endDateCol)  endDateCol.classList.remove("hidden");
-    if(reminderRow) reminderRow.classList.remove("hidden");
-    if(endLabel)    endLabel.textContent="Due By Date";
-    if(hint){ hint.style.display="block"; hint.textContent="Available every day until this date. Expires after."; }
-  } else {
-    if(endDateCol)  endDateCol.classList.remove("hidden");
-    if(reminderRow) reminderRow.classList.remove("hidden");
-    if(endLabel)    endLabel.textContent="Due On Date";
-    if(hint){ hint.style.display="block"; hint.textContent="Only appears on this specific day."; }
-  }
-}
-
-// Human-readable schedule label for display in chore lists
 function scheduleLabel(chore){
   const s=chore.schedule;
   const fullDays=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -2360,183 +1954,10 @@ function resolveMonthlyDay(monthlyDay,year,month){
   return parseInt(monthlyDay)||1;
 }
 
-function getStreakFormValues(){
-  return {
-    streakStart:     parseInt(document.getElementById("chore-streak-start").value)     || 0,
-    streakMilestone: parseInt(document.getElementById("chore-streak-milestone").value) || 0,
-    streakReward:    readMoney("chore-streak-reward")  || 0
-  };
-}
-function populateStreakForm(chore){
-  document.getElementById("chore-streak-start").value     = chore.streakStart     || 0;
-  document.getElementById("chore-streak-milestone").value = chore.streakMilestone || "";
-  const srEl = document.getElementById("chore-streak-reward");
-  srEl.value = chore.streakReward || "";
-  _reformatMoneyInput(srEl);  // v34.0
-}
-function clearStreakForm(){
-  document.getElementById("chore-streak-start").value=0;
-  document.getElementById("chore-streak-milestone").value="";
-  document.getElementById("chore-streak-reward").value="";
-}
-
-function createChore(){
-  const msgEl=document.getElementById("chore-form-msg"); msgEl.className="field-msg";
-  const name=document.getElementById("chore-name").value.trim();
-  const desc=document.getElementById("chore-desc").value.trim();
-  const amount=readMoney("chore-amount");
-  const schedule=document.getElementById("chore-schedule").value;
-  const splitChk=parseInt(document.getElementById("chore-split").value);
-  const childChooses=document.getElementById("chore-child-chooses").checked;
-  const monthlyDay = schedule==="monthly" ? document.getElementById("chore-monthly-day").value : null;
-  const weekdays = (schedule==="weekly"||schedule==="biweekly") ? getSelectedDays() : null;
-
-  if((schedule==="weekly"||schedule==="biweekly") && (!weekdays||weekdays.length===0)){
-    document.getElementById("weekday-none-msg").classList.remove("hidden");
-    return;
-  }
-  const weekday = weekdays && weekdays.length>0 ? weekdays[0] : null; // legacy
-  const onceDateType = schedule==="once" ? document.getElementById("chore-once-type").value : "none";
-  const onceDate = (schedule==="once" && onceDateType!=="none")
-    ? document.getElementById("chore-end-date").value || null
-    : null;
-  const onceDueOn = onceDateType==="on";
-  const endDate = schedule!=="once" ? document.getElementById("chore-end-date").value || null : null;
-  const reminderHour = parseInt(document.getElementById("chore-reminder-time").value) || 8;
-  const dayTimes = readPerDayTimes();  // {} if "same time" is checked
-  // v30.1: only meaningful for bi-weekly; stored as bool
-  const skipFirstWeek = schedule==="biweekly" && document.getElementById("chore-skip-first-week").checked;
-
-  if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Chore name is required."; return; }
-  if(amount===null||amount===undefined||isNaN(amount)||amount<0){
-    msgEl.className="field-msg error"; msgEl.textContent="Enter a valid reward amount (0 or more)."; return;
-  }
-
-  // v33.0 — Require proof photo on submission?
-  const requiresProof = !!(document.getElementById("chore-require-proof") && document.getElementById("chore-require-proof").checked);
-
-  const data=getChildData(activeChild);
-  const streakVals=getStreakFormValues();
-  const choreFields = {
-    name,desc,amount,schedule,monthlyDay,weekday,weekdays,
-    onceDate,onceDueOn,reminderHour,dayTimes,skipFirstWeek,
-    splitChk,childChooses,paused:false,endDate,
-    requiresProof,
-    streakStart:streakVals.streakStart,
-    streakMilestone:streakVals.streakMilestone,
-    streakReward:streakVals.streakReward
-  };
-
-  if(editingChoreId){
-    const ex=data.chores.find(c=>c.id===editingChoreId);
-    if(ex) Object.assign(ex,choreFields);
-    state._editedChoreId = ex ? ex.id : null;
-    editingChoreId=null;
-    setChoreFormMode("create");
-    syncToCloud("Chore Edited");
-    delete state._editedChoreId;
-    showToast("Chore updated! ✏️","success");
-  } else {
-    data.chores.push({
-      id:"chore_"+Date.now(),
-      ...choreFields,
-      status:"available", completedBy:null, completedAt:null, denialNote:null,
-      createdAt:fmtDate(new Date()), streakCount:0
-    });
-    syncToCloud("Chore Created");
-    showToast('"'+name+'" added! 📋',"success");
-  }
-  resetChoreForm();
-  renderParentChores(); renderChildChores(); updateChoreBadges();
-  // v32.2: Auto-close the creator sheet after successful save (create or edit)
-  closeSheet("sheet-chore-creator", true);
-}
-
-function resetChoreForm(){
-  ["chore-name","chore-desc","chore-amount","chore-end-date"].forEach(id=>document.getElementById(id).value="");
-  document.getElementById("chore-reminder-time").value="8";
-  document.getElementById("chore-schedule").value="once";
-  document.getElementById("chore-split").value=50; // v32: 50/50 default (was 100)
-  document.getElementById("chore-child-chooses").checked=true;
-  document.getElementById("chore-same-time").checked=true;
-  document.getElementById("chore-skip-first-week").checked=false;
-  // v33.0 — reset proof-photo requirement
-  const rp = document.getElementById("chore-require-proof");
-  if(rp) rp.checked = false;
-  clearStreakForm();
-  resetDayToggles();
-  updateSplitLabel();
-  setChoreFormMode("create");
-  onScheduleChange();
-}
-
+// v38.1 final — chore-card Edit opens the chore wizard AT Review, pre-populated
+// (single-chore edit contract: "Chore Edited" + _editedChoreId, see cwCommitEdit).
 function editChore(choreId){
-  const data=getChildData(activeChild);
-  const chore=data.chores.find(c=>c.id===choreId);
-  if(!chore) return;
-  editingChoreId=choreId;
-  document.getElementById("chore-name").value=chore.name||"";
-  document.getElementById("chore-desc").value=chore.desc||"";
-  const caEl = document.getElementById("chore-amount");
-  caEl.value = chore.amount || "";
-  _reformatMoneyInput(caEl);  // v34.0
-  document.getElementById("chore-schedule").value=chore.schedule||"once";
-  document.getElementById("chore-split").value=chore.splitChk!==undefined?chore.splitChk:50; // v32: 50/50 fallback
-  document.getElementById("chore-child-chooses").checked=!!chore.childChooses;
-  document.getElementById("chore-end-date").value=chore.endDate||"";
-  const onceTypeEl=document.getElementById("chore-once-type");
-  if(onceTypeEl){
-    if(!chore.onceDate)    onceTypeEl.value="none";
-    else if(chore.onceDueOn) onceTypeEl.value="on";
-    else                     onceTypeEl.value="by";
-    toggleOnceDateField();
-    if(chore.onceDate) document.getElementById("chore-end-date").value=chore.onceDate;
-  }
-  document.getElementById("chore-reminder-time").value=String(chore.reminderHour||8);
-  // v33.0 — repopulate requiresProof
-  const rpEl = document.getElementById("chore-require-proof");
-  if(rpEl) rpEl.checked = !!chore.requiresProof;
-  onScheduleChange();
-  if(chore.schedule==="monthly" && chore.monthlyDay){
-    document.getElementById("chore-monthly-day").value=chore.monthlyDay;
-  }
-  if(chore.schedule==="weekly" || chore.schedule==="biweekly"){
-    const days = chore.weekdays || (chore.weekday!==undefined ? [chore.weekday] : []);
-    setSelectedDays(days);
-    setPerDayTimes(chore.dayTimes);  // restores per-day mode if set
-  }
-  // v30.1
-  document.getElementById("chore-skip-first-week").checked = !!chore.skipFirstWeek;
-  updateSplitLabel(); populateStreakForm(chore);
-  setChoreFormMode("edit",chore.name);
-  // v32.1: Reuse the chore creator bottom sheet for editing (was: scroll to inline form)
-  openSheet("sheet-chore-creator");
-  // v34.1 Item 14 — kick off calendar lookup (only if this child has calendar enabled)
-  try { checkChoreCalendar(chore); } catch(e){}
-  showToast('Editing "'+chore.name+'" — make changes and tap Save.',"info",4000);
-}
-
-function cancelChoreEdit(){
-  editingChoreId=null;
-  resetChoreForm();
-}
-
-function setChoreFormMode(mode,name){
-  const t=document.getElementById("chore-form-title");
-  const sb=document.getElementById("chore-submit-btn");
-  const cb=document.getElementById("chore-cancel-edit-btn");
-  if(mode==="edit"){
-    if(t)  t.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Editing: "+(name||"Chore");
-    if(sb) sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-floppy-disk'/></svg> Save Changes";
-    if(cb) cb.classList.remove("hidden");
-  } else {
-    if(t)  t.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-plus-circle'/></svg> Create New Chore";
-    if(sb) sb.innerHTML="<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Add Chore";
-    if(cb) cb.classList.add("hidden");
-    // v34.1 Item 14 — clear calendar status block when leaving edit mode
-    const cs = document.getElementById("chore-cal-status");
-    if(cs){ cs.classList.add("hidden"); cs.innerHTML=""; }
-  }
+  cwOpenEdit(activeChild, choreId);
 }
 
 function renderParentChores(){
@@ -2550,12 +1971,12 @@ function renderParentChores(){
       ${pending.map(c=>`
         <div class="chore-card state-pending">
           <div class="chore-card-header">
-            <span class="chore-card-name">${c.name}</span>
-            <span class="chore-card-amount">${c.amount>0 ? fmt(c.amount) : '<span style="color:var(--muted);font-size:.78rem;">No reward</span>'}</span>
+            <span class="chore-card-name">${escapeHtml(c.name)}</span>
+            <span class="chore-card-amount">${c.amount>0 ? fmt(c.amount) : '<span style="color:var(--muted);font-size:15px;">No reward</span>'}</span>
           </div>
           <div class="chore-card-meta">
             Completed by <span class="completed-by-chip">${renderAvatar(c.completedBy,"xs")}<strong>${c.completedBy}</strong></span> at ${c.completedAt}<br>
-            Split: ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+c.desc:""}
+            Split: ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+escapeHtml(c.desc):""}
           </div>
           <div class="row" style="gap:8px;">
             <button class="btn btn-secondary btn-sm col" onclick="approveChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg> Approve</button>
@@ -2575,12 +1996,12 @@ function renderParentChores(){
       : '<span class="status-badge badge-available">Active</span>';
     return `<div class="chore-card">
       <div class="chore-card-header">
-        <span class="chore-card-name">${c.name}</span>
+        <span class="chore-card-name">${escapeHtml(c.name)}</span>
         <span class="chore-card-amount">${fmt(c.amount)}</span>
       </div>
       <div class="chore-card-meta">
         ${badge} <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-calendar'/></svg> ${scheduleLabel(c)}<br>
-        <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-clock'/></svg> Ends: "+c.endDate:""}${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+c.desc:""}
+        <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-clock'/></svg> Ends: "+c.endDate:""}${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+escapeHtml(c.desc):""}
         ${_renderNextChorePill(c)}
       </div>
       <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
@@ -2772,7 +2193,7 @@ function renderChildChores(){
     notifEl.innerHTML=decisions.map(c=>`
       <div class="chore-card" style="${c.status==="approved"?"border-color:var(--secondary);background:#f0fdf4;":"border-color:var(--danger);background:#fef2f2;"}">
         <div class="chore-card-header">
-          <span class="chore-card-name">${c.status==="approved"?"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg>":"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg>"} ${c.name}</span>
+          <span class="chore-card-name">${c.status==="approved"?"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-check-circle'/></svg>":"<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg>"} ${escapeHtml(c.name)}</span>
           <span class="chore-card-amount">${fmt(c.amount)}</span>
         </div>
         <div class="chore-card-meta">${c.status==="approved" ? "Great work! "+fmt(c.amount)+" added to your account! <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-party-popper'/></svg>" : "Not approved this time."+(c.denialNote?" Reason: "+c.denialNote:"")+" Talk to your parent if you have questions."}</div>
@@ -2795,12 +2216,12 @@ function renderChildChores(){
       <button id="cf-week"  class="chore-filter-btn" onclick="setChoreFilter('week')">This Week</button>
       <button id="cf-all"   class="chore-filter-btn" onclick="setChoreFilter('all')">All Chores</button>
     </div>
-    <div style="background:var(--bg);border-radius:10px;padding:8px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;font-size:.75rem;">
+    <div style="background:var(--bg);border-radius:10px;padding:8px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;font-size:15px;">
       <span style="color:var(--muted);font-weight:600;">${available.length} chore${available.length===1?"":"s"} available</span>
       ${showRew?`<span style="color:var(--secondary);font-weight:700;font-family:var(--mono);">Up to ${fmt(totalPossible)}</span>`:""}
     </div>
     <div id="chore-table-wrap"></div>
-    <p style="font-size:.72rem;color:var(--muted);text-align:center;margin-top:8px;">Tap the checkbox when you've finished a chore ✓</p>`;
+    <p style="font-size:15px;color:var(--muted);text-align:center;margin-top:8px;">Tap the checkbox when you've finished a chore ✓</p>`;
   setChoreFilter(choreFilter);
 }
 
@@ -2827,8 +2248,8 @@ function renderChoreTable(){
     return true;  // "all" — show every available chore regardless of schedule window
   });
   function dueBadge(c){
-    if(isDueToday(c))    return `<span style="font-size:.6rem;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:10px;margin-left:5px;">Today</span>`;
-    if(isDueThisWeek(c)) return `<span style="font-size:.6rem;font-weight:700;background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:10px;margin-left:5px;">This Week</span>`;
+    if(isDueToday(c))    return `<span style="font-size:14px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:10px;margin-left:5px;">Today</span>`;
+    if(isDueThisWeek(c)) return `<span style="font-size:14px;font-weight:700;background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:10px;margin-left:5px;">This Week</span>`;
     return "";
   }
   if(!filtered.length){
@@ -2841,8 +2262,8 @@ function renderChoreTable(){
   const showRewards=choreRewardsEnabled(activeChild||currentUser);
   const expiredRows=expired.map(c=>`
     <tr style="opacity:.42;">
-      <td class="chore-check-cell"><div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.85rem;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg></div></td>
-      <td class="chore-name-cell">${c.name}<div class="chore-desc-small" style="color:var(--danger);">Expired ${c.onceDate}</div></td>
+      <td class="chore-check-cell"><div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:16px;"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-x-circle'/></svg></div></td>
+      <td class="chore-name-cell">${escapeHtml(c.name)}<div class="chore-desc-small" style="color:var(--danger);">Expired ${c.onceDate}</div></td>
       <td class="chore-schedule-cell">One-time</td>
       ${showRewards?`<td class="chore-amount-cell">${c.amount>0?fmt(c.amount):"—"}</td>`:""}
     </tr>`).join("");
@@ -2853,10 +2274,10 @@ function renderChoreTable(){
       <tbody>
         ${filtered.map(c=>`
           <tr class="chore-row" id="chore-row-${c.id}">
-            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:var(--muted);" title="Not due today"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-lock-simple'/></svg></div>`}</td>
+            <td class="chore-check-cell">${isDueToday(c) ? `<div class="chore-checkbox-wrap" id="chk-${c.id}" onclick="toggleChoreCheck('${c.id}')"></div>` : `<div style="width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--muted);" title="Not due today"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-lock-simple'/></svg></div>`}</td>
             <td class="chore-name-cell">
-              ${c.name}${dueBadge(c)}
-              ${c.desc?`<div class="chore-desc-small">${c.desc}</div>`:""}
+              ${escapeHtml(c.name)}${dueBadge(c)}
+              ${c.desc?`<div class="chore-desc-small">${escapeHtml(c.desc)}</div>`:""}
               ${showRewards?(c.childChooses?`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> You choose the split</div>`:`<div class="chore-desc-small"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Checking / ${100-c.splitChk}% Savings</div>`):""}
               ${renderInlineStreak(c)}
             </td>
@@ -2894,7 +2315,7 @@ function toggleChoreCheck(choreId){
       const de=document.getElementById("modal-detail");
       // v32: Always default split to 50/50 (drop v31.2 goal-aware conditional)
       const p = chore.splitChk ?? 50;
-      de.innerHTML=`<div class="split-display"><span class="chk-pct">Checking: <span id="msc-chk">${p}</span>%</span><span class="sav-pct">Savings: <span id="msc-sav">${100-p}</span>%</span></div><input type="range" id="modal-split-slider" min="0" max="100" value="${p}" oninput="document.getElementById('msc-chk').textContent=this.value;document.getElementById('msc-sav').textContent=100-parseInt(this.value);"><p style="font-size:.73rem;color:var(--muted);margin:6px 0 0;text-align:center;">Drag to set your split</p>`;
+      de.innerHTML=`<div class="split-display"><span class="chk-pct">Checking: <span id="msc-chk">${p}</span>%</span><span class="sav-pct">Savings: <span id="msc-sav">${100-p}</span>%</span></div><input type="range" id="modal-split-slider" min="0" max="100" value="${p}" oninput="document.getElementById('msc-chk').textContent=this.value;document.getElementById('msc-sav').textContent=100-parseInt(this.value);"><p style="font-size:15px;color:var(--muted);margin:6px 0 0;text-align:center;">Drag to set your split</p>`;
       de.classList.remove("hidden");
     },60);
   } else {
@@ -2984,15 +2405,15 @@ function renderSavingsGoals(){
     const pct=Math.min(100,Math.round((sav/g.target)*100));
     return `<div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;font-weight:700;margin-bottom:4px;">
-        <span>${g.name}</span>
+        <span>${escapeHtml(g.name)}</span>
         <span style="font-family:var(--mono);">${fmt(sav)} / ${fmt(g.target)}</span>
       </div>
       <div style="background:var(--surface);height:8px;border-radius:4px;overflow:hidden;">
         <div style="background:var(--secondary);height:100%;width:${pct}%;transition:width .3s;"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.7rem;color:var(--muted);">
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:14px;color:var(--muted);">
         <span>${pct}% there!</span>
-        <button onclick="deleteGoal('${g.id}')" style="background:none;border:none;color:var(--danger);font-size:.7rem;cursor:pointer;font-family:var(--font);">Remove</button>
+        <button onclick="deleteGoal('${g.id}')" style="background:none;border:none;color:var(--danger);font-size:15px;cursor:pointer;font-family:var(--font);">Remove</button>
       </div>
     </div>`;
   }).join("");
@@ -3033,15 +2454,15 @@ function renderParentGoals(){
     const pct=Math.min(100,Math.round((sav/g.target)*100));
     return `<div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;font-weight:700;margin-bottom:4px;">
-        <span>${g.name}</span>
+        <span>${escapeHtml(g.name)}</span>
         <span style="font-family:var(--mono);">${fmt(sav)} / ${fmt(g.target)}</span>
       </div>
       <div style="background:var(--surface);height:8px;border-radius:4px;overflow:hidden;">
         <div style="background:var(--secondary);height:100%;width:${pct}%;transition:width .3s;"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:.7rem;color:var(--muted);">
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:14px;color:var(--muted);">
         <span>${pct}% there!</span>
-        <button onclick="deleteGoal('${g.id}')" style="background:none;border:none;color:var(--danger);font-size:.7rem;cursor:pointer;font-family:var(--font);">Remove</button>
+        <button onclick="deleteGoal('${g.id}')" style="background:none;border:none;color:var(--danger);font-size:15px;cursor:pointer;font-family:var(--font);">Remove</button>
       </div>
     </div>`;
   }).join("");
@@ -3405,7 +2826,7 @@ function renderHistory(){
     const goalBadge = goalName ? `<span class="goal-hit-badge" title="Goal reached: ${goalName}"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-target'/></svg> Goal: ${goalName}</span>` : "";
     return `<div class="ledger-row${goalName?' ledger-row-goal':''}">
       <div class="${pillCls}">${isChore?"CHORE":isSav?"SAV":"CHK"}</div>
-      <div><span class="ledger-date">${h.date}</span><span class="ledger-who-wrap">${renderAvatar(h.user,"xs")}<span class="ledger-who">${h.user}</span></span><span class="ledger-note"> — ${h.note}</span>${goalBadge}</div>
+      <div><span class="ledger-date">${h.date}</span><span class="ledger-who-wrap">${renderAvatar(h.user,"xs")}<span class="ledger-who">${escapeHtml(h.user)}</span></span><span class="ledger-note"> — ${escapeHtml(h.note)}</span>${goalBadge}</div>
       <div class="ledger-amt ${h.amt>=0?"pos":"neg"}">${h.amt>=0?"+":""}${fmt(h.amt)}</div>
     </div>`;
   }).join("");
@@ -3434,6 +2855,7 @@ function closeNetWorthChart(){
 
 function drawNetWorthChart(){
   const child=activeChild||currentUser;
+  if(!child) return;   // v38.1 final (In-7) — nothing to draw before login / after logout
   let history=(state.netWorthHistory && state.netWorthHistory[child]) || [];
   const monthNames=["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -3465,9 +2887,8 @@ function drawNetWorthChart(){
     const ctx=canvas.getContext("2d");
     ctx.clearRect(0,0,canvas.width,canvas.height);
     canvas.parentElement.innerHTML=emptyState("chart","No history yet — keep saving!","padding:60px 0;");
-    document.getElementById("nw-start").textContent="$0.00";
-    document.getElementById("nw-current").textContent="$0.00";
-    document.getElementById("nw-growth").textContent="+$0.00";
+    const _z=(id,t)=>{ const el=document.getElementById(id); if(el) el.textContent=t; };
+    _z("nw-start","$0.00"); _z("nw-current","$0.00"); _z("nw-growth","+$0.00");
     return;
   }
 
@@ -3609,9 +3030,21 @@ function renderInlineStreak(c){
 // ════════════════════════════════════════════════════════════════════
 // 18. ADMIN
 // ════════════════════════════════════════════════════════════════════
+// ── v38 Step 5 (Sill) — global-admin session ────────────────────────
+// The new admin routes (adminLoad, adminListPendingSignups, adminApprove,
+// adminDeny, adminRevealSignupPin, …) are PIN-gated server-side. There is
+// no server session, so the validated admin PIN is held in memory for the
+// life of the panel session and passed to every admin route call.
+// NEVER persisted (no localStorage). Cleared on open and on close.
+let _adminSessionPin = null;   // set on successful adminLoad
+let _adminSummary    = null;   // {adminEmail, familyCount, queueLength} from adminLoad
+const _revealTimers  = {};     // signupId -> re-mask setTimeout handle
+function _clearRevealTimers(){ for(const k in _revealTimers){ clearTimeout(_revealTimers[k]); delete _revealTimers[k]; } }
+
 function openAdmin(){
   // v32.4: Admin is now a bottom sheet (sheet-admin), not a drawer.
   // Still reset to locked state every open.
+  _adminSessionPin=null; _adminSummary=null; _clearRevealTimers(); // v38 Step 5 — open locked, drop any stale session
   document.getElementById("admin-login-section").classList.remove("hidden");
   document.getElementById("admin-settings-section").classList.add("hidden");
   document.getElementById("admin-pin-input").value="";
@@ -3623,21 +3056,45 @@ function openAdmin(){
     if(pin) pin.focus();
   }, 300);
 }
-function closeAdmin(){ closeSheet("sheet-admin", true); }
+function closeAdmin(){ _adminSessionPin=null; _adminSummary=null; _clearRevealTimers(); closeSheet("sheet-admin", true); }
 
-function attemptAdminLogin(){
-  const pin=document.getElementById("admin-pin-input").value;
-  const errEl=document.getElementById("admin-pin-error");
-  if(pin !== (state.config.adminPin || DEFAULT_CONFIG.adminPin)){
+// v38 Step 5 (Sill) — admin login now validates the GLOBAL admin PIN
+// (AdminConfig!A2) server-side via the adminLoad route. The old client-side
+// check against state.config.adminPin is gone — v38 families carry no
+// per-family admin PIN. On success the PIN is held in the in-memory session
+// and the panel renders. Wrong PIN -> generic auth failure (no leakage).
+async function attemptAdminLogin(){
+  const pin   = document.getElementById("admin-pin-input").value;
+  const errEl = document.getElementById("admin-pin-error");
+  if(!/^\d{4}$/.test(pin||"")){
     errEl.className="field-msg error";
+    errEl.textContent="Enter the 4-digit Admin PIN.";
     return;
   }
   errEl.className="field-msg";
-  document.getElementById("admin-login-section").classList.add("hidden");
-  document.getElementById("admin-settings-section").classList.remove("hidden");
-  populateAdminForm();
-  renderAdminUsers();
-  renderPendingRequests(); // v33.0
+  try{
+    const url = API_URL+"?action=adminLoad&adminPin="+encodeURIComponent(pin);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.status==="ok"){
+      _adminSessionPin = pin;                       // establish session
+      _adminSummary    = { adminEmail:data.adminEmail||"", familyCount:data.familyCount||0, queueLength:data.queueLength||0 };
+      document.getElementById("admin-login-section").classList.add("hidden");
+      document.getElementById("admin-settings-section").classList.remove("hidden");
+      populateAdminForm();    // per-family settings (kept this drop — see Step 5 handoff open item)
+      renderAdminUsers();     // per-family user list (kept this drop)
+      renderAdminQueue();     // v38 Step 5 — server-backed signup queue (replaces renderPendingRequests)
+      renderFamilyList();     // v38 Step 5 — global family list (drop 2)
+      populateAdminAccount(); // v38 Step 5 drop 3 (Lintel) — global admin email/PIN card
+    } else {
+      errEl.className="field-msg error";
+      errEl.textContent="Incorrect Admin PIN.";   // generic — adminLoad returns auth for bad format AND wrong PIN
+      document.getElementById("admin-pin-input").value="";
+    }
+  }catch(e){
+    errEl.className="field-msg error";
+    errEl.textContent="Network error — try again.";
+  }
 }
 
 function populateAdminForm(){
@@ -3665,31 +3122,22 @@ function renderAdminUsers(){
   el.innerHTML=state.users.map(u=>{
     const role=state.roles[u]||"child";
     const stats=(state.config.loginStats && state.config.loginStats[u]) || null;
-    // v37.0 — Split single-line meta ("Last seen: {datetime} · {n} logins")
-    // into 3 labeled lines: Last seen (date) / Time / Logins. Matches
-    // locked scope decision on admin card layout.
-    const hasStats = !!(stats && stats.lastAt);
-    const lastDate = hasStats
-      ? new Date(stats.lastAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})
+    const lastSeen = stats && stats.lastAt
+      ? new Date(stats.lastAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) + " " + new Date(stats.lastAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
       : "never";
-    const lastTime = hasStats
-      ? new Date(stats.lastAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
-      : "—";
     const count = stats ? (parseInt(stats.count)||0) : 0;
     return `<div class="user-row">
       <div style="flex:1;display:flex;align-items:center;gap:8px;">
         ${renderAvatar(u,"sm")}
         <div class="user-row-info">
           <div>
-            <strong>${u}</strong>
+            <strong>${escapeHtml(u)}</strong>
             <span class="user-role-badge ${role==="parent"?"role-parent":"role-child"}" style="margin-left:4px;">${role.charAt(0).toUpperCase()+role.slice(1)}</span>
           </div>
-          <div class="user-row-substats user-row-meta"><span class="meta-label">Last seen</span> <span class="meta-val">${lastDate}</span></div>
-          <div class="user-row-substats user-row-meta"><span class="meta-label">Time</span> <span class="meta-val">${lastTime}</span></div>
-          <div class="user-row-substats user-row-meta"><span class="meta-label">Logins</span> <span class="meta-val">${count}</span></div>
+          <div class="user-row-substats">Last seen: ${lastSeen} · ${count} login${count===1?"":"s"}</div>
         </div>
       </div>
-      <button class="btn btn-primary btn-sm" onclick="openUserEdit('${u}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
+      <button class="btn btn-primary btn-sm" onclick="uwOpenEdit('${u}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
       ${state.users.length>1 ? `<button class="btn btn-danger btn-sm" onclick="adminRemoveUser('${u}')">Remove</button>` : ""}
     </div>`;
   }).join("");
@@ -3712,9 +3160,8 @@ function adminRemoveUser(u){
   });
 }
 
-// v32.1: addUser is now unified with saveUserEdit via the sheet-user-edit sheet.
 // Preserved as a stub in case legacy callers exist.
-function addUser(){ openUserSheetForAdd(); }
+function addUser(){ uwOpenAdd(); }   // v38.1 — wizard v2 (legacy add/edit user sheet removed in v38.1 final)
 
 function saveAdminSettings(){
   // v32.4 item #8: validate admin email if present (empty is OK — feature just disabled)
@@ -3759,182 +3206,6 @@ function changeAdminPin(){
   });
 }
 
-// ── User edit form ─────────────────────────────────────────────────
-// v32.1: Add and Edit share a single bottom sheet (#sheet-user-edit).
-// editingUserName === null means we're in "add new user" mode.
-let editingUserName = null;
-
-/** v32.1: Open the unified user sheet in ADD mode (blank form). */
-function openUserSheetForAdd(){
-  editingUserName=null;
-  // Title + button label for Add mode
-  const title = document.getElementById("admin-edit-title");
-  if(title) title.innerHTML = "<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-user-plus'/></svg> Add New User";
-  const saveBtn = document.getElementById("user-edit-save-btn");
-  if(saveBtn) saveBtn.innerHTML = "<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-plus-circle'/></svg> Add User";
-  const pinLabel = document.getElementById("edit-user-pin-label");
-  if(pinLabel) pinLabel.textContent = "PIN (4 digits)";
-  // Clear form
-  const nameEl = document.getElementById("edit-user-name");
-  if(nameEl){ nameEl.value=""; nameEl.readOnly=false; nameEl.style.background=""; nameEl.style.color=""; nameEl.placeholder="e.g. Emma"; }
-  document.getElementById("edit-user-role").value = "child";
-  document.getElementById("edit-user-pin").value = "";
-  document.getElementById("edit-user-email").value = "";
-  document.getElementById("edit-cal-id") && (document.getElementById("edit-cal-id").value = "");
-  ["edit-notify-email","edit-notify-cal","edit-chore-rewards","edit-celebration-sound"].forEach(id=>{
-    const el=document.getElementById(id); if(el) el.checked = (id==="edit-notify-email" || id==="edit-chore-rewards" || id==="edit-celebration-sound");
-  });
-  document.getElementById("new-user-msg").className="field-msg";
-  document.getElementById("new-user-msg").textContent="";
-  // Default to child — show child fields, hide parent assignment + avatar (until created)
-  document.getElementById("edit-child-fields").style.display = "";
-  document.getElementById("edit-parent-assignment").style.display = "none";
-  document.getElementById("edit-tab-visibility").style.display = "";
-  // v34.1 Item 16 — show Assign-to-Parent(s) picker for add-child (not in edit mode)
-  const assignP = document.getElementById("edit-child-parent-assignment");
-  if(assignP) assignP.style.display = "";
-  // Reset picker selection so last session's choices don't leak in
-  if(window._pickerSelections) delete window._pickerSelections.assignParents;
-  const assignDisp = document.getElementById("edit-child-parents-display");
-  if(assignDisp) assignDisp.innerHTML = `<span style="font-size:.75rem;color:var(--muted);font-style:italic;">None selected</span>`;
-  const avatarWrap = document.getElementById("edit-avatar-wrap");
-  if(avatarWrap) avatarWrap.style.display = "none"; // avatar picker needs an existing user
-  toggleEditCalField();
-  openSheet("sheet-user-edit");
-}
-
-/** Role switcher (during Add). During Edit, role is locked to current. */
-function onUserEditRoleChange(){
-  const role = document.getElementById("edit-user-role").value;
-  document.getElementById("edit-child-fields").style.display      = role==="child"  ? "" : "none";
-  document.getElementById("edit-parent-assignment").style.display = role==="parent" ? "" : "none";
-  document.getElementById("edit-tab-visibility").style.display    = role==="child"  ? "" : "none";
-  // v34.1 Item 16 — Assign-to-Parent(s) only visible when adding a child (not edit, not parent)
-  const assignP = document.getElementById("edit-child-parent-assignment");
-  if(assignP) assignP.style.display = (role==="child" && !editingUserName) ? "" : "none";
-}
-
-function openUserEdit(username){
-  editingUserName=username;
-  const role=state.roles[username]||"child";
-  const cfg=state.config;
-  // Title + button label for Edit mode
-  const title = document.getElementById("admin-edit-title");
-  if(title) title.innerHTML = "<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit "+username;
-  const saveBtn = document.getElementById("user-edit-save-btn");
-  if(saveBtn) saveBtn.innerHTML = "<svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-floppy-disk'/></svg> Save Changes";
-  const pinLabel = document.getElementById("edit-user-pin-label");
-  if(pinLabel) pinLabel.textContent = "New PIN (leave blank to keep current)";
-  // Lock name field in edit mode
-  const nameEl = document.getElementById("edit-user-name");
-  if(nameEl){ nameEl.value=username; nameEl.readOnly=true; nameEl.style.background="#f8fafc"; nameEl.style.color="var(--muted)"; }
-  document.getElementById("edit-user-role").value=role;
-  document.getElementById("edit-user-pin").value="";
-  document.getElementById("edit-user-email").value=(cfg.emails&&cfg.emails[username])||"";
-  const notify=(cfg.notify&&cfg.notify[username])||{};
-  document.getElementById("edit-notify-email").checked   = notify.email   !== false;
-  document.getElementById("edit-notify-cal").checked     = !!notify.calendar;
-  document.getElementById("edit-chore-rewards").checked  = notify.choreRewards !== false;
-  const ud = (state.usersData && state.usersData[username]) || {};
-  const csEdit = document.getElementById("edit-celebration-sound");
-  if(csEdit) csEdit.checked = (ud.celebrationSound !== false);
-  document.getElementById("edit-cal-id").value=(cfg.calendars&&cfg.calendars[username])||"";
-  toggleEditCalField();
-  // Show role-specific sections
-  onUserEditRoleChange();
-  // Populate picker displays
-  if(role==="parent"){
-    const assigned=(cfg.parentChildren && cfg.parentChildren[username]) || [];
-    if(!window._pickerSelections) window._pickerSelections={};
-    window._pickerSelections.children=[...assigned];
-    updatePickerDisplay("children", assigned, PICKER_CONFIG.children);
-  }
-  if(role==="child"){
-    const tabs=getChildTabs(username);
-    const selected=[];
-    if(tabs.money)  selected.push("money");
-    if(tabs.chores) selected.push("chores");
-    if(tabs.loans)  selected.push("loans");
-    if(!window._pickerSelections) window._pickerSelections={};
-    window._pickerSelections.tabs=[...selected];
-    updatePickerDisplay("tabs", selected, PICKER_CONFIG.tabs);
-  }
-  // Show avatar picker (only available for existing users)
-  const avatarWrap = document.getElementById("edit-avatar-wrap");
-  if(avatarWrap) avatarWrap.style.display = "";
-  renderAvatarPicker(username);
-  openSheet("sheet-user-edit");
-}
-
-// v31: avatar picker (emoji grid + photo upload)
-let _editAvatarEmoji = null;  // staged selection, applied on saveUserEdit
-
-function renderAvatarPicker(username){
-  _editAvatarEmoji = getAvatarEmoji(username);
-  const cur = document.getElementById("edit-avatar-current");
-  const grid = document.getElementById("edit-avatar-grid");
-  if(!cur || !grid) return;
-  const hasPhoto = !!getAvatarPhoto(username);
-  cur.innerHTML = renderAvatar(username,"lg") +
-    `<div class="label-stack">
-       <div class="who">${username}</div>
-       <div class="src">${hasPhoto ? "Using device photo — emoji shown if photo removed" : "Using emoji"}</div>
-     </div>`;
-  grid.innerHTML = AVATAR_EMOJIS.map(e =>
-    `<button type="button" class="${e===_editAvatarEmoji?"selected":""}" onclick="selectAvatarEmoji('${e}')">${e}</button>`
-  ).join("");
-}
-
-function selectAvatarEmoji(emoji){
-  _editAvatarEmoji = emoji;
-  // Update grid selection state
-  const grid = document.getElementById("edit-avatar-grid");
-  if(grid){
-    grid.querySelectorAll("button").forEach(b=>{
-      b.classList.toggle("selected", b.textContent===emoji);
-    });
-  }
-  // Stage the emoji in state.config so renderAvatar reflects it in the preview
-  if(editingUserName){
-    setAvatarEmoji(editingUserName, emoji);
-    // Refresh preview chip
-    const cur = document.getElementById("edit-avatar-current");
-    if(cur){
-      const hasPhoto = !!getAvatarPhoto(editingUserName);
-      cur.innerHTML = renderAvatar(editingUserName,"lg") +
-        `<div class="label-stack">
-           <div class="who">${editingUserName}</div>
-           <div class="src">${hasPhoto ? "Using device photo — emoji shown if photo removed" : "Using emoji"}</div>
-         </div>`;
-    }
-  }
-}
-
-async function onAvatarPhotoChosen(event){
-  if(!editingUserName) return;
-  const file = event.target.files && event.target.files[0];
-  if(!file) return;
-  try {
-    const dataUrl = await resizeImageFileTo200(file);
-    setAvatarPhoto(editingUserName, dataUrl);
-    showToast("Photo saved on this device.","success");
-    renderAvatarPicker(editingUserName);
-    // Refresh any live avatars
-    refreshVisibleAvatars();
-  } catch(e){
-    showToast("Could not process photo.","error");
-  }
-  event.target.value = "";
-}
-
-function removeAvatarPhoto(){
-  if(!editingUserName) return;
-  clearAvatarPhoto(editingUserName);
-  showToast("Photo removed from this device.","info");
-  renderAvatarPicker(editingUserName);
-  refreshVisibleAvatars();
-}
-
 /* Re-renders whatever is visible so avatars update immediately. */
 function refreshVisibleAvatars(){
   if(typeof renderBalances==="function") renderBalances();
@@ -3969,7 +3240,7 @@ function childSelectAvatarEmoji(emoji){
   refreshVisibleAvatars();
   // Update welcome message live
   const wm = document.getElementById("welcome-msg");
-  if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+currentUser+'! 👋</span>';
+  if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+escapeHtml(currentUser)+'! 👋</span>';
   showToast("Avatar updated!","success");
 }
 
@@ -3984,7 +3255,7 @@ async function onChildAvatarPhotoChosen(event){
     renderChildAvatar();
     refreshVisibleAvatars();
     const wm = document.getElementById("welcome-msg");
-    if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+currentUser+'! 👋</span>';
+    if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+escapeHtml(currentUser)+'! 👋</span>';
   } catch(e){
     showToast("Could not process photo.","error");
   }
@@ -3998,136 +3269,7 @@ function removeChildAvatarPhoto(){
   renderChildAvatar();
   refreshVisibleAvatars();
   const wm = document.getElementById("welcome-msg");
-  if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+currentUser+'! 👋</span>';
-}
-
-function toggleEditCalField(){
-  const checked=document.getElementById("edit-notify-cal").checked;
-  document.getElementById("edit-cal-wrap").style.display = checked ? "" : "none";
-}
-
-function cancelUserEdit(){
-  editingUserName=null;
-  closeSheet("sheet-user-edit", true);
-}
-
-function saveUserEdit(){
-  const msgEl = document.getElementById("new-user-msg");
-  if(msgEl) msgEl.className = "field-msg";
-
-  // v32.1: If editingUserName is null we're in ADD mode — create the user
-  if(!editingUserName){
-    const name = document.getElementById("edit-user-name").value.trim();
-    const role = document.getElementById("edit-user-role").value;
-    const pin  = document.getElementById("edit-user-pin").value;
-    const email= document.getElementById("edit-user-email").value.trim();
-    if(!name){ if(msgEl){msgEl.className="field-msg error"; msgEl.textContent="Name is required.";} return; }
-    if(state.users.includes(name)){ if(msgEl){msgEl.className="field-msg error"; msgEl.textContent='"'+name+'" already exists.';} return; }
-    if(!pin||pin.length!==4||!/^\d{4}$/.test(pin)){ if(msgEl){msgEl.className="field-msg error"; msgEl.textContent="PIN must be exactly 4 digits.";} return; }
-    state.users.push(name);
-    state.pins[name] = pin;
-    state.roles[name] = role;
-    if(!state.config.emails) state.config.emails = {};
-    if(email) state.config.emails[name] = email;
-    if(!state.config.notify) state.config.notify = {};
-    state.config.notify[name] = {
-      email:        document.getElementById("edit-notify-email").checked,
-      calendar:     document.getElementById("edit-notify-cal").checked,
-      choreRewards: document.getElementById("edit-chore-rewards").checked
-    };
-    if(!state.config.calendars) state.config.calendars = {};
-    const calId = document.getElementById("edit-cal-id")?.value.trim();
-    if(calId) state.config.calendars[name] = calId;
-    // v32: per-user celebration sound (default true)
-    if(!state.usersData) state.usersData = {};
-    state.usersData[name] = state.usersData[name] || {};
-    const csEdit = document.getElementById("edit-celebration-sound");
-    state.usersData[name].celebrationSound = csEdit ? !!csEdit.checked : true;
-    // Parent: assigned children
-    if(role==="parent"){
-      if(!state.config.parentChildren) state.config.parentChildren = {};
-      state.config.parentChildren[name] = getPickerSelections("children");
-    }
-    // Child: visible tabs + seed data
-    if(role==="child"){
-      if(!state.config.tabs) state.config.tabs = {};
-      const sel = getPickerSelections("tabs");
-      // Default: money+chores ON if user didn't pick any; otherwise their selection
-      state.config.tabs[name] = sel.length ? {
-        money:  sel.indexOf("money")!==-1,
-        chores: sel.indexOf("chores")!==-1,
-        loans:  sel.indexOf("loans")!==-1
-      } : {money:true,chores:true,loans:false};
-      getChildData(name); // seed balances/chores
-      // v34.1 C7 coverage — stamp createdAt so annual projection email fires at the 1-yr mark
-      state.usersData[name].createdAt = fmtDate(new Date());
-      // v34.1 Item 16 — assign this new child to one or more parents.
-      // Picker empty → auto-assign to currentUser only. Non-empty → assign to each.
-      if(!state.config.parentChildren) state.config.parentChildren = {};
-      const selectedParents = getPickerSelections("assignParents");
-      const assignTo = selectedParents.length ? selectedParents : [currentUser];
-      assignTo.forEach(p => {
-        if(!p) return;
-        if(!state.config.parentChildren[p]) state.config.parentChildren[p] = [];
-        if(state.config.parentChildren[p].indexOf(name) === -1){
-          state.config.parentChildren[p].push(name);
-        }
-      });
-    }
-    renderAdminUsers();
-    syncToCloud("User Added");
-    showToast('"'+name+'" added!',"success");
-    closeSheet("sheet-user-edit", true);
-    return;
-  }
-
-  // EDIT mode — existing flow
-  const u=editingUserName;
-  const role=document.getElementById("edit-user-role").value;
-  const pin=document.getElementById("edit-user-pin").value;
-  const email=document.getElementById("edit-user-email").value.trim();
-  if(pin){
-    if(pin.length!==4||!/^\d{4}$/.test(pin)){ showToast("PIN must be exactly 4 digits.","error"); return; }
-    state.pins[u]=pin;
-  }
-  state.roles[u]=role;
-  if(!state.config.emails) state.config.emails={};
-  state.config.emails[u]=email;
-  if(!state.config.notify) state.config.notify={};
-  state.config.notify[u]={
-    email:        document.getElementById("edit-notify-email").checked,
-    calendar:     document.getElementById("edit-notify-cal").checked,
-    choreRewards: document.getElementById("edit-chore-rewards").checked
-  };
-  if(!state.config.calendars) state.config.calendars={};
-  const calId=document.getElementById("edit-cal-id").value.trim();
-  if(calId) state.config.calendars[u]=calId;
-  else delete state.config.calendars[u];
-  // v32: per-user celebration sound
-  if(!state.usersData) state.usersData={};
-  if(!state.usersData[u]) state.usersData[u]={};
-  const csEdit = document.getElementById("edit-celebration-sound");
-  if(csEdit) state.usersData[u].celebrationSound = !!csEdit.checked;
-  // Parent: assigned children
-  if(role==="parent"){
-    if(!state.config.parentChildren) state.config.parentChildren={};
-    state.config.parentChildren[u]=getPickerSelections("children");
-  }
-  // Child: visible tabs
-  if(role==="child"){
-    if(!state.config.tabs) state.config.tabs={};
-    const sel=getPickerSelections("tabs");
-    state.config.tabs[u]={
-      money:  sel.indexOf("money")!==-1,
-      chores: sel.indexOf("chores")!==-1,
-      loans:  sel.indexOf("loans")!==-1
-    };
-  }
-  syncToCloud("User Edited");
-  showToast(u+" updated.","success");
-  closeSheet("sheet-user-edit", true);
-  renderAdminUsers();
-  editingUserName=null;
+  if(wm) wm.innerHTML = renderAvatar(currentUser,"sm") + ' <span>Hi, '+escapeHtml(currentUser)+'! 👋</span>';
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -4188,7 +3330,7 @@ function openPicker(mode){
   const items=cfg.getItems();
   const listEl=document.getElementById("picker-items");
   if(!items.length){
-    listEl.innerHTML=`<p style="color:var(--muted);font-size:.82rem;text-align:center;padding:20px 0;">${cfg.noItemsText}</p>`;
+    listEl.innerHTML=`<p style="color:var(--muted);font-size:16px;text-align:center;padding:20px 0;">${cfg.noItemsText}</p>`;
   } else {
     listEl.innerHTML=items.map(item=>`
       <div class="picker-item" onclick="togglePickerItem('${item.value}',this)">
@@ -4224,13 +3366,13 @@ function updatePickerDisplay(mode,selected,cfg){
   const displayEl=document.getElementById(cfg.displayId);
   if(!displayEl) return;
   if(!selected.length){
-    displayEl.innerHTML=`<span style="font-size:.75rem;color:var(--muted);font-style:italic;">None selected</span>`;
+    displayEl.innerHTML=`<span style="font-size:15px;color:var(--muted);font-style:italic;">None selected</span>`;
     return;
   }
   const items=cfg.getItems();
   displayEl.innerHTML=selected.map(v=>{
     const item=items.find(i=>i.value===v);
-    return item ? `<span style="background:var(--primary);color:white;border-radius:20px;padding:4px 12px;font-size:.75rem;font-weight:700;">${item.label}</span>` : "";
+    return item ? `<span style="background:var(--primary);color:white;border-radius:20px;padding:4px 12px;font-size:15px;font-weight:700;">${item.label}</span>` : "";
   }).join("");
 }
 
@@ -4284,6 +3426,16 @@ const IDLE_THRESHOLD_MS = 30*1000;  // 30 seconds of no taps before auto-applyin
 if("serviceWorker" in navigator){
   window.addEventListener("load",()=>{
     navigator.serviceWorker.register("service-worker.js").catch(()=>{});
+    // v38.1 final (In-6) — when a new SW takes control, reload ONCE so the page
+    // runs the code that matches the new cache. sessionStorage flag = no loops.
+    const _hadController = !!navigator.serviceWorker.controller;   // first install: no reload needed
+    navigator.serviceWorker.addEventListener("controllerchange", ()=>{
+      if(!_hadController) return;
+      let done=false; try{ done = sessionStorage.getItem("fb_sw_reloaded")==="1"; }catch(_){}
+      if(done) return;
+      try{ sessionStorage.setItem("fb_sw_reloaded","1"); }catch(_){}
+      location.reload();
+    });
     navigator.serviceWorker.addEventListener("message", e=>{
       if(e.data && e.data.type==="NEW_VERSION_AVAILABLE"){
         pendingUpdate=true;
@@ -4359,12 +3511,14 @@ function _startLogoutWarning(){
       _cancelLogoutCountdown();
       closeModal();
       showToast("Logged out due to inactivity.","info",3000);
+      logout();
       setTimeout(()=>location.reload(),1500);
     }
   }, 1000);
 }
 
 function resetInactivityTimer(){
+  if(!currentUser) return;          // v38 Bug-7: no session, no timer
   const mins=parseInt((state.config && state.config.autoLogout)||0);
   if(!mins) return;
   _cancelLogoutCountdown();
@@ -4377,6 +3531,7 @@ function resetInactivityTimer(){
     _cancelLogoutCountdown();
     closeModal();
     showToast("Logged out due to inactivity.","info",3000);
+    logout();
     setTimeout(()=>location.reload(),1500);
   }, mins*60*1000);
 }
@@ -4388,6 +3543,7 @@ function initInactivityTimer(){
   );
   _cancelLogoutCountdown();
   clearTimeout(inactivityTimer);
+  if(!currentUser) return;          // v38 Bug-7: no session, no timer
   const mins=parseInt((state.config && state.config.autoLogout)||0);
   if(!mins) return; // disabled — timers already cleared above
   ["click","touchstart","keydown","scroll"].forEach(ev=>
@@ -4606,7 +3762,7 @@ function openQuickApprove(){
   list.innerHTML = pending.map(c=>`
     <div class="qa-row">
       <div class="qa-info">
-        <div class="qa-name">${c.name}</div>
+        <div class="qa-name">${escapeHtml(c.name)}</div>
         <div class="qa-meta">${renderAvatar(c.completedBy,"xs")} ${c.completedBy} · ${fmt(c.amount)}</div>
       </div>
       <div class="qa-btns">
@@ -4681,44 +3837,39 @@ function quickDenyOne(choreId){
 // ── PDF monthly statement ────────────────────────────────────────────
 
 
-// v31.3: stamp version on splash + login (runs before loadFromCloud)
-// v37.0 — Fetch version from version.json so splash/login never drift.
+// v38 Step 4 — granular version stamp from version.json (cache-busted).
+// Displays version + " · build " + build so Mike can confirm a force-refresh
+// landed on the intended build. Falls back to APP_VERSION if the fetch fails,
+// so the stamp is never blank. version.json stores version WITHOUT a "v" prefix
+// (SW version-check invariant); we prefix "v" for display only.
 (function stampVersion(){
-  const paint = (v) => {
-    const tag = "v" + v;
-    const sv = document.getElementById("splash-version");
-    const lv = document.getElementById("login-version");
-    if(sv) sv.textContent = tag;
-    if(lv) lv.textContent = tag;
-  };
-  // Paint fallback immediately so we never show blank
-  paint(APP_VERSION);
-  // Async fetch — authoritative source
-  try {
-    fetch("version.json?t=" + Date.now())
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        if (j && j.version) {
-          APP_VERSION = String(j.version);
-          paint(APP_VERSION);
-        }
-      })
-      .catch(()=>{});
-  } catch(e) {}
+  const sv = document.getElementById("splash-version");
+  const lv = document.getElementById("login-version");
+  const fallback = "v" + APP_VERSION;
+  if(sv) sv.textContent = fallback;
+  if(lv) lv.textContent = fallback;
+  fetch("version.json?t=" + Date.now())
+    .then(r => r.json())
+    .then(v => {
+      if(!v) return;
+      const ver   = v.version ? ("v" + String(v.version).replace(/^v/, "")) : fallback;
+      const stamp = ver + (v.build ? " · build " + v.build : "");
+      if(sv) sv.textContent = stamp;
+      if(lv) lv.textContent = stamp;
+    })
+    .catch(() => { /* keep fallback */ });
 })();
 
-populateMonthlyDays();
 populateAllowanceMonthlyDays();
 populateLoanDueDayPicker();
-onScheduleChange();          // show/hide fields for default "One-time"
 onAllowanceScheduleChange();
 document.querySelector("#allow-day-toggles .day-toggle[data-day='1']")?.classList.add("selected");
-updateSplitLabel();
 updateDepositSplitLabel();
 onChildActionChange();
+document.getElementById("login-email-input")?.addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("pin-input").focus(); });
 document.getElementById("username-input").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("pin-input").focus(); });
-document.getElementById("pin-input").addEventListener("keydown",      e=>{ if(e.key==="Enter") attemptLogin(); });
-document.getElementById("admin-pin-input").addEventListener("keydown",e=>{ if(e.key==="Enter") attemptAdminLogin(); });
+document.getElementById("pin-input").addEventListener("keydown",      e=>{ if(e.key==="Enter") doLoginSubmit(); });
+document.getElementById("admin-pin-input").addEventListener("keydown",e=>{ if(e.key==="Enter") attemptAdminLogin(); });   // In-5 (already in place; verified v38.1 final)
 loadFromCloud();
 
 // ════════════════════════════════════════════════════════════════════
@@ -4735,17 +3886,14 @@ loadFromCloud();
  * OR call clearSheetDirty(id) explicitly.
  */
 const EXIT_WARN_SHEETS = new Set([
-  "sheet-chore-creator",
   "sheet-loan-creator",
   "sheet-adjust",
-  "sheet-user-edit",
   "sheet-allowance-interest",
   "sheet-manage-money",
   "sheet-child-profile",
   "sheet-add-child",
   "sheet-share-child",
   // v33.0
-  "sheet-wizard",
   "sheet-signup-request"
 ]);
 const _sheetDirty = {}; // sheetId -> bool
@@ -4866,17 +4014,6 @@ function toggleCollapsible(id){
  * Launcher helpers — open the right sheet and also reset/populate the form
  * inside so the user gets a clean experience each time.
  */
-function openChoreCreator(){
-  // v32.3: Always reset to fresh form when not editing. Belt-and-suspenders:
-  // also force the split slider to 50 explicitly in case a stale value lingers.
-  if(typeof editingChoreId === "undefined" || !editingChoreId){
-    try { resetChoreForm(); } catch(e){}
-    const sp = document.getElementById("chore-split");
-    if(sp) sp.value = 50;
-    try { updateSplitLabel(); } catch(e){}
-  }
-  openSheet("sheet-chore-creator");
-}
 function openLoanCreator(){
   if(typeof editingLoanId === "undefined" || !editingLoanId){
     try { resetLoanForm(); } catch(e){}
@@ -4888,13 +4025,6 @@ function openChildProfileSheet(){
   try { renderChildProfileSection(); } catch(e){}
   openSheet("sheet-child-profile");
 }
-
-// v32: Auto-close chore/loan sheets when the Cancel/Save handlers finish their work.
-// We don't need to modify those handlers — instead, hook into the hidden-attribute
-// changes on the edit wrappers, which is what their existing cancel/reset code touches.
-// (Handled implicitly by form-submit flows calling resetChoreForm / cancelChoreEdit.)
-// If you want the sheet to auto-close on successful chore creation, extend createChore()
-// accordingly. For now, the user taps ✕ Close or the backdrop.
 
 // v32: When parent changes active child, close any open sheets that show stale data
 (function(){
@@ -5068,7 +4198,7 @@ function renderMyChildren(){
   if(currentRole !== "parent"){ el.innerHTML = ""; return; }
   const mine = getMyChildrenList();
   if(!mine.length){
-    el.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:.85rem;text-align:center;">No children yet. Tap "Add Child" below to create one.</div>';
+    el.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:16px;text-align:center;">No children yet. Tap "Add Child" below to create one.</div>';
     return;
   }
   el.innerHTML = mine.map(name => {
@@ -5077,8 +4207,8 @@ function renderMyChildren(){
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;">
         <div style="flex-shrink:0;">${renderAvatar(name,"sm")}</div>
         <div style="flex:1;min-width:0;">
-          <div style="font-weight:700;font-size:.92rem;">${name}</div>
-          ${shared ? '<div style="font-size:.68rem;color:var(--muted);">Shared with '+(getParentsOfChild(name).length-1)+' other parent'+(getParentsOfChild(name).length>2?'s':'')+'</div>' : '<div style="font-size:.68rem;color:var(--muted);">Only on your account</div>'}
+          <div style="font-weight:700;font-size:17px;">${escapeHtml(name)}</div>
+          ${shared ? '<div style="font-size:14px;color:var(--muted);">Shared with '+(getParentsOfChild(name).length-1)+' other parent'+(getParentsOfChild(name).length>2?'s':'')+'</div>' : '<div style="font-size:14px;color:var(--muted);">Only on your account</div>'}
         </div>
         <button class="btn btn-sm btn-outline" style="width:auto;margin:0;padding:6px 10px;" onclick="openShareChildSheet('${name.replace(/'/g,"\\'")}')">Share</button>
         <button class="btn btn-sm btn-ghost" style="width:auto;margin:0;padding:6px 10px;color:var(--danger);" onclick="removeChildFromMyView('${name.replace(/'/g,"\\'")}')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-trash"/></svg></button>
@@ -5312,505 +4442,402 @@ function openSignupRequest(){
   openSheet("sheet-signup-request");
 }
 
-function submitSignupRequest(){
-  const msgEl=document.getElementById("signup-msg");
-  msgEl.className="field-msg";
-  const name = (document.getElementById("signup-name").value||"").trim();
-  const email= (document.getElementById("signup-email").value||"").trim();
-  const pin  = (document.getElementById("signup-pin").value||"").trim();
-  const hp   = (document.getElementById("signup-honeypot").value||"").trim();
+async function submitSignupRequest(){
+  // ── v38 Step 6 (Transom) — server-backed public signup ────────────
+  // Replaces the v37 state.config.pendingUsers writer. Submits via GET
+  // to _routeSignup (Code.gs). Backend stays authoritative on ALL
+  // validation; the client checks below are instant-feedback mirrors.
+  const msgEl = document.getElementById("signup-msg");
+  msgEl.className = "field-msg";
+  msgEl.textContent = "";
 
-  // Honeypot — silently drop
-  if(hp){ msgEl.className="field-msg info"; msgEl.textContent="Thanks — we'll review your request."; return; }
+  // Read + trim all four fields. Honeypot is trimmed but passed through
+  // verbatim — NO client-side honeypot branch (bots get the normal flow).
+  const name  = (document.getElementById("signup-name").value     || "").trim();
+  const email = (document.getElementById("signup-email").value    || "").trim();
+  const pin   = (document.getElementById("signup-pin").value      || "").trim();
+  const hp    = (document.getElementById("signup-honeypot").value || "").trim();
 
-  if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Display name is required."; return; }
-  if(!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
-    msgEl.className="field-msg error"; msgEl.textContent="Valid email is required."; return;
+  // Client-side validation — mirrors _routeSignup; locked copy strings.
+  if(!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{4}$/.test(pin)){
+    msgEl.className = "field-msg error";
+    msgEl.textContent = "Please check your entries — name, valid email, and a 4-digit PIN are required.";
+    return;
   }
-  if(!pin || pin.length!==4 || !/^\d{4}$/.test(pin)){
-    msgEl.className="field-msg error"; msgEl.textContent="PIN must be exactly 4 digits."; return;
-  }
-
-  if(!state.config.adminEmail){
-    showToast("Admin email not configured — ask admin to set it up first.","error",5000);
+  if(name.toLowerCase() === "admin"){  // backend additionally strips zero-width chars (D6.5) and remains the real gate
+    msgEl.className = "field-msg error";
+    msgEl.textContent = "That name is reserved — please choose another.";
     return;
   }
 
-  state.config.pendingUsers = Array.isArray(state.config.pendingUsers) ? state.config.pendingUsers : [];
+  // In-flight disable (Dec-4 / NTH-5-C class) — re-enabled in finally on ANY outcome.
+  const btn = document.getElementById("signup-submit-btn");
+  if(btn) btn.disabled = true;
 
-  if(state.config.pendingUsers.length >= SIGNUP_QUEUE_CAP){
-    msgEl.className="field-msg error";
-    msgEl.textContent="The request queue is full right now. Please try again later.";
-    return;
-  }
+  try{
+    // Plain awaited GET — no no-cors (D5), no custom headers. The honeypot
+    // param is ALWAYS present, even when empty: _routeSignup returns
+    // badInput if the param is absent (typeof check at route step 0.5).
+    const url = API_URL
+      + "?action=signup"
+      + "&name="     + encodeURIComponent(name)
+      + "&email="    + encodeURIComponent(email)
+      + "&pin="      + encodeURIComponent(pin)
+      + "&honeypot=" + encodeURIComponent(hp);
+    const resp = await fetch(url);
+    const data = await resp.json();
 
-  const emailLower = email.toLowerCase();
-  const dupe = state.config.pendingUsers.some(p => (p.email||"").toLowerCase() === emailLower);
-  if(dupe){
-    msgEl.className="field-msg error";
-    msgEl.textContent="A request from this email is already pending.";
-    return;
-  }
-
-  // Also block if an account with that display name already exists
-  if((state.users||[]).indexOf(name) !== -1){
-    msgEl.className="field-msg error";
-    msgEl.textContent='"'+name+'" is already taken. Pick a different display name.';
-    return;
-  }
-
-  state.config.pendingUsers.push({
-    id:          "pu_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
-    name:        name,
-    email:       email,
-    pin:         pin,
-    requestedAt: fmtDate(new Date()),
-    honeypot:    ""
-  });
-
-  syncToCloud("Signup Requested");
-  closeSheet("sheet-signup-request", true);
-  showToast("Request submitted! You'll get an email when it's reviewed.","success",4200);
-}
-
-function renderPendingRequests(){
-  const listEl = document.getElementById("pending-requests-list");
-  const badgeEl= document.getElementById("pending-requests-badge");
-  if(!listEl || !badgeEl) return;
-  const arr = (state.config && state.config.pendingUsers) || [];
-  const n = arr.length;
-  badgeEl.textContent = String(n);
-  badgeEl.classList.toggle("hidden", n===0);
-
-  // v37.0 — Auto-expand the Pending Requests card when there's something to
-  // review. Does NOT auto-collapse when it goes to zero — respects the admin's
-  // current expand state for other cards. toggleCollapsible enforces the
-  // "only one expanded sibling" rule, but direct class toggles bypass it.
-  if(n > 0){
-    const card = document.getElementById("cc-pending-requests");
-    if(card) card.classList.add("expanded");
-  }
-
-  if(!n){
-    listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:.85rem;text-align:center;">No pending requests.</div>';
-    return;
-  }
-
-  listEl.innerHTML = arr.map(req => {
-    const rid = (req.id||"").replace(/'/g,"\\'");
-    return `
-      <div class="pending-request-card">
-        <div class="pending-request-meta">
-          <div class="pr-name">${(req.name||"").replace(/</g,"&lt;")}</div>
-          <div class="pr-line"><span class="pr-label">Email</span> <span>${(req.email||"").replace(/</g,"&lt;")}</span></div>
-          <div class="pr-line"><span class="pr-label">Requested</span> <span>${(req.requestedAt||"")}</span></div>
-        </div>
-        <div class="pending-request-actions">
-          <button class="btn btn-sm btn-secondary" style="width:auto;margin:0;" onclick="approvePendingRequest('${rid}')">✅ Approve</button>
-          <button class="btn btn-sm btn-danger" style="width:auto;margin:0;" onclick="denyPendingRequest('${rid}')">❌ Deny</button>
-        </div>
-      </div>`;
-  }).join("");
-}
-
-// v37.0 — MULTI-FAMILY APPROVE
-// Row-per-family: approved signups become their OWN family, not rows inside
-// the admin's. Ordering below is deliberate for partial-failure recovery:
-//
-//   1. POST new-family row FIRST, under a freshly generated familyId.
-//   2. If that succeeds, mutate admin state (remove from pendingUsers) and
-//      POST admin state SECOND.
-//   3. If step 2 fails: new family exists in the Sheet, but pendingUsers
-//      still lists the signup. The admin sees the request as un-approved and
-//      can retry. Retry will generate a NEW familyId and create a DUPLICATE
-//      family row — undesirable but recoverable (admin can delete the
-//      orphaned row via Sheet or the audit-log-driven delete family tool).
-//
-// The inverse ordering (admin cleanup first, then new family) has a worse
-// failure mode: if new-family POST fails after admin cleanup succeeds, the
-// signup is silently lost with no record.
-//
-// Welcome email: Code.gs fires it on wizard completion in v37.0, NOT on
-// approval. The approved parent gets {familySetupComplete: false} and hits
-// the wizard on first login.
-async function approvePendingRequest(id){
-  const arr = (state.config && state.config.pendingUsers) || [];
-  const idx = arr.findIndex(p => p.id === id);
-  if(idx === -1) return;
-  const req = arr[idx];
-
-  // Pre-flight: name uniqueness is scoped per-family in v37.0 (each family
-  // has its own users[] list), but a name collision inside that family's
-  // fresh state is impossible — a brand-new family has zero existing users.
-  // We still defensively check req.name isn't empty.
-  if(!req.name || typeof req.name !== "string"){
-    showToast("Cannot approve — malformed request.", "error", 4500);
-    return;
-  }
-
-  // STEP 1 — Build the new family's initial state and POST under a NEW familyId.
-  const newFamilyId = generateFamilyId();
-  const newFamilyState = {
-    config: {
-      ...DEFAULT_CONFIG,
-      // Admin email of the NEW family = the approved parent's email (they
-      // are primary and solo — matches locked decision: solo parents are
-      // primary of their own family).
-      adminEmail: req.email || "",
-      emails: { [req.name]: req.email || "" },
-      // Notify defaults lifted from v36's approve flow.
-      notify: { [req.name]: { email: true, calendar: false, choreRewards: true } },
-      loginStats: {},
-      pendingUsers: [],
-      avatars: {},
-      parentChildren: { [req.name]: [] },
-      // v37.0 locked: primary = creator. Wizard stores primaryParent in config
-      // but we set it now so Transfer Primary UI finds a value before the
-      // wizard runs.
-      primaryParent: req.name,
-      // v37.0 locked: wizard fires on primary's first login when this is false.
-      familySetupComplete: false,
-      // v37.0 locked: per-child email digest prefs + child-email gates live in
-      // config, but they're seeded lazily by the wizard. Leave them off here.
-      deactivatedChildren: []
-    },
-    users: [req.name],
-    pins:  { [req.name]: req.pin },
-    roles: { [req.name]: "parent" },
-    children: {},
-    history:  {},
-    usersData: { [req.name]: { createdAt: new Date().toISOString() } },
-    _savedAt: new Date().toISOString(),
-    // Signal to Code.gs that this POST is creating a brand-new family row, not
-    // overwriting an existing one. Code.gs v37.0 tolerates a POST with a
-    // familyId that doesn't yet exist — it creates the row — so this flag is
-    // informational for the server-side audit log. Stripped before save.
-    _newFamilyCreate: true,
-    // v37.0 — last action tag so the server logs this as a provisioning event,
-    // not a generic save.
-    lastAction: "Family Provisioned (Signup Approved)",
-    familyId: newFamilyId
-  };
-
-  let step1Failed = false;
-  try {
-    // v37.1 FEAT-9 — mode:'no-cors' removed. Read the real response so a server
-    // rejection (familyId collision, malformed state, etc.) stops us from
-    // proceeding to Step 2. Without this, Step 2 would clear the admin's
-    // pendingUsers entry for a family that doesn't exist on the server, orphaning
-    // the approved user with no account and no pending request.
-    const step1Res = await fetch(API_URL, {
-      method: "POST",
-      body:   JSON.stringify(newFamilyState)
-    });
-    let step1Body = null;
-    try { step1Body = await step1Res.json(); } catch(e) {}
-    if(!step1Res.ok || (step1Body && step1Body.status === "error")){
-      const reason = (step1Body && step1Body.reason) ? step1Body.reason : "server error";
-      console.error("[FamilyBank] approve step 1 (new family POST) server error:", reason, step1Body);
-      showToast("Could not create family — " + reason + ". Please retry.", "error", 6000);
-      step1Failed = true;
-    }
-  } catch(err){
-    console.error("[FamilyBank] approve step 1 (new family POST) network error:", err);
-    showToast("Could not create family — network error. Please retry.", "error", 5000);
-    step1Failed = true;
-  }
-
-  if(step1Failed) return;
-
-  // STEP 2 — Clean up admin's pendingUsers and sync admin state.
-  // If this throws/fails, the pending request stays visible to admin and can
-  // be retried. Retry will create a duplicate family row (known limitation,
-  // logged above).
-  arr.splice(idx, 1);
-  state.config.pendingUsers = arr;
-
-  // v37.0.2 — Suppress server-side processSignupDiff on this cleanup POST.
-  // The diff engine (Code.gs processSignupDiff) looks at the request leaving
-  // pendingUsers and checks whether the approved name is in newState.users.
-  // In multi-family world it won't be — approved user lives in a separate
-  // family row — so the diff falls through to the denial branch and emails
-  // the user "request denied." The sentinel flag skips the diff entirely
-  // for this specific POST. Code.gs v37.0.2+ strips the flag before saving,
-  // so it never persists in state.
-  state._suppressSignupDiff = true;
-
-  try {
-    // syncToCloud chains behind any in-flight syncs and attaches the admin's
-    // currentFamilyId automatically.
-    await syncToCloud("Signup Approved — Admin Cleanup");
-  } catch(err){
-    console.error("[FamilyBank] approve step 2 (admin cleanup sync) failed:", err);
-    // Restore pendingUsers locally so admin UI reflects the still-pending state.
-    // The authoritative truth on next loadFromCloud will match whichever of
-    // local vs. server won — if the admin-side POST silently failed in no-cors
-    // land (no throw), the next load will re-hydrate pendingUsers from server.
-    arr.splice(idx, 0, req);
-    state.config.pendingUsers = arr;
-    showToast("Family created, but admin cleanup failed. Please retry to clear the request.", "error", 6000);
-    renderPendingRequests();
-    // v37.0.2 — Strip the flag so a retry doesn't ship a stale sentinel.
-    delete state._suppressSignupDiff;
-    return;
-  }
-
-  // v37.0.2 — Flag already shipped in the sync above. Strip locally so a
-  // subsequent unrelated sync doesn't carry it.
-  delete state._suppressSignupDiff;
-
-  renderPendingRequests();
-  try { renderAdminUsers(); } catch(e){}
-  showToast('"'+req.name+'" approved as primary of a new family. They\'ll complete setup on first login.',"success",4500);
-}
-
-function denyPendingRequest(id){
-  const arr = (state.config && state.config.pendingUsers) || [];
-  const idx = arr.findIndex(p => p.id === id);
-  if(idx === -1) return;
-  const req = arr[idx];
-
-  openInputModal({
-    icon:"❌", title:"Deny request?",
-    body:"Optional reason (the requester will see this in their denial email):",
-    inputType:"text",
-    inputAttrs:'placeholder="e.g. Please confirm your identity first" maxlength="200"',
-    confirmText:"Deny", confirmClass:"btn-danger",
-    onConfirm:(reason)=>{
-      // v37.0 — Deny is SINGLE-POST: no new family is created. Just remove
-      // from admin's pendingUsers and sync admin state under admin's familyId.
-      // Attach reason via the transient key that Code.gs consumes & strips.
-      const cleaned = (reason||"").toString().trim().slice(0,200);
-      state._denialReasons = state._denialReasons || {};
-      if(cleaned) state._denialReasons[req.id] = cleaned;
-
-      // Remove from pending
-      arr.splice(idx, 1);
-      state.config.pendingUsers = arr;
-
-      syncToCloud("Signup Denied");
-      renderPendingRequests();
-      showToast("Request denied. Notification email sent.","info",3600);
-    }
-  });
-}
-
-// ────────────────────────────────────────────────────────────────────
-// v37.0 — DELETE FAMILY (primary parent only, irreversible)
-// ────────────────────────────────────────────────────────────────────
-// Scrubs the current family's row, ledger rows, audit log rows, and
-// calendar events via Code.gs deleteFamilyFull(). Primary-only; UI
-// visibility is gated on state.config.primaryParent === currentUser.
-//
-// Not routed through _doSyncToCloud — that ships the full state and
-// strips _* keys. This is a minimal one-shot POST with only the two
-// required fields. Backend validates equality as a safety interlock:
-// body._deleteFamilyFullRequest must === body.familyId.
-//
-// No audit log write — the family row is about to be deleted; writing
-// to a sheet that's being scrubbed is wasted work and the write itself
-// could race with the scrub.
-//
-// Reauth is the sole confirmation. No stacked "are you sure?" prompt.
-async function deleteFamily(){
-  // Defense-in-depth: re-check primary gate at action time in case the UI
-  // was manipulated or stale. The render-side visibility gate is the
-  // first line; this is the second.
-  if(!state.config || state.config.primaryParent !== currentUser){
-    showToast("Only the primary parent can delete the family.", "error", 4500);
-    return;
-  }
-  if(!currentFamilyId){
-    showToast("No family loaded — nothing to delete.", "error", 4000);
-    return;
-  }
-
-  confirmReauth("Delete Family", async () => {
-    const fid = currentFamilyId;  // capture before we null it below
-    try {
-      // v37.1 FEAT-9 — mode:'no-cors' removed. Read the real response so a server
-      // error stops us from scrubbing client state. If we scrubbed first and the
-      // server rejected, the user would be logged out with their family still on
-      // the sheet — broken state with no recovery path.
-      const res = await fetch(API_URL, {
-        method: "POST",
-        body:   JSON.stringify({
-          _deleteFamilyFullRequest: fid,
-          familyId: fid
-        })
+    if(data && data.status === "ok"){
+      // Locked success copy (Dec-3); v38.1 final (In-9) — confirmation toast and the sheet closes.
+      msgEl.className = "field-msg success";
+      msgEl.textContent = "Your application is in the queue. The admin will be in touch once your family is approved.";
+      ["signup-name","signup-email","signup-pin"].forEach(id=>{
+        const el = document.getElementById(id); if(el) el.value = "";
       });
-      let resBody = null;
-      try { resBody = await res.json(); } catch(e) {}
-      if(!res.ok || (resBody && resBody.status === "error")){
-        const reason = (resBody && resBody.reason) ? resBody.reason : "server error";
-        console.error("[FamilyBank v37.1] deleteFamily server error:", reason, resBody);
-        showToast("Could not delete family — " + reason + ". Please try again.", "error", 5000);
-        return;
-      }
-    } catch(err){
-      console.error("[FamilyBank v37.1] deleteFamily POST failed:", err);
-      showToast("Could not reach the bank — please try again.", "error", 5000);
+      showToast("Request sent. The admin will be in touch once your family is approved.","success",6000);
+      setTimeout(()=>{ try{ closeSheet("sheet-signup-request", true); }catch(_){} }, 900);
+    } else {
+      const reason = data && data.reason;
+      msgEl.className = "field-msg error";
+      if(reason === "duplicateEmail")      msgEl.textContent = "That email is already registered or pending approval.";
+      else if(reason === "reservedName")   msgEl.textContent = "That name is reserved — please choose another.";
+      else if(reason === "queueFull")      msgEl.textContent = "Signups are temporarily closed. Please try again later.";
+      else if(reason === "badInput")       msgEl.textContent = "Please check your entries — name, valid email, and a 4-digit PIN are required.";
+      else                                 msgEl.textContent = "Something went wrong — please try again.";
+    }
+  } catch(err){
+    // Network throw / non-JSON body → generic error.
+    msgEl.className = "field-msg error";
+    msgEl.textContent = "Something went wrong — please try again.";
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+// ── v38 Step 5 (Sill) — server-backed signup queue ──────────────────
+// Replaces the v37 renderPendingRequests / approvePendingRequest /
+// denyPendingRequest (which read state.config.pendingUsers). The queue now
+// lives in the PendingSignups Sheet tab, read via adminListPendingSignups
+// (oldest-first, PIN masked "***"). Reveal is on-demand via
+// adminRevealSignupPin. Approve/deny call the adminApprove / adminDeny routes
+// with the in-memory admin-session PIN.
+//
+// NOTE: the v37 submitSignupRequest writer was replaced in Step 6 (Transom)
+// with a server-backed submit (GET ?action=signup → _routeSignup). The
+// state.config.pendingUsers default (buildDefaultState + load-time ensure)
+// remains as a dead, harmless initializer — nothing reads or writes it in v38.
+
+function _escHtml(s){
+  return String(s==null?"":s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function _fmtSignupDate(iso){
+  try{
+    const d=new Date(iso);
+    if(isNaN(d.getTime())) return String(iso||"");
+    return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})
+         + " " + d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+  }catch(e){ return String(iso||""); }
+}
+
+async function renderAdminQueue(){
+  const listEl  = document.getElementById("pending-requests-list");
+  const badgeEl = document.getElementById("pending-requests-badge");
+  if(!listEl) return;
+  if(!_adminSessionPin){ listEl.innerHTML=""; if(badgeEl) badgeEl.classList.add("hidden"); return; }
+  listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:16px;text-align:center;">Loading…</div>';
+  try{
+    const url = API_URL+"?action=adminListPendingSignups&adminPin="+encodeURIComponent(_adminSessionPin);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!data || data.status!=="ok"){
+      listEl.innerHTML = '<div style="padding:12px;color:var(--danger);font-size:16px;text-align:center;">Could not load the queue.</div>';
+      if(badgeEl) badgeEl.classList.add("hidden");
       return;
     }
+    const arr = Array.isArray(data.signups) ? data.signups : [];
+    if(badgeEl){ badgeEl.textContent=String(arr.length); badgeEl.classList.toggle("hidden", arr.length===0); }
+    if(!arr.length){
+      listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:16px;text-align:center;">No pending requests.</div>';
+      return;
+    }
+    listEl.innerHTML = arr.map(s=>{
+      const sid  = String(s.signupId||"");   // server-minted sig_xxxxxxxx — no quotes/specials
+      const sidA = _escHtml(sid);
+      return `
+      <div class="pending-request-card" data-signup-id="${sidA}">
+        <div class="pending-request-meta">
+          <div class="pr-name">${_escHtml(s.name)}</div>
+          <div class="pr-line"><span class="pr-label">Email</span> <span>${_escHtml(s.email)}</span></div>
+          <div class="pr-line"><span class="pr-label">PIN</span> <span class="pr-pin" id="pin-${sidA}">***</span>
+            <button class="btn btn-sm btn-ghost" style="width:auto;margin:0 0 0 6px;padding:2px 10px;" onclick="revealSignupPin('${sid}')">👁 Reveal</button></div>
+          <div class="pr-line"><span class="pr-label">Requested</span> <span>${_escHtml(_fmtSignupDate(s.submittedAt))}</span></div>
+        </div>
+        <div class="pending-request-actions">
+          <button class="btn btn-sm btn-secondary" style="width:auto;margin:0;" onclick="approveSignup('${sid}')">✅ Approve</button>
+          <button class="btn btn-sm btn-danger" style="width:auto;margin:0;" onclick="denySignup('${sid}')">❌ Deny</button>
+        </div>
+      </div>`;
+    }).join("");
+  }catch(e){
+    listEl.innerHTML = '<div style="padding:12px;color:var(--danger);font-size:16px;text-align:center;">Network error loading the queue.</div>';
+    if(badgeEl) badgeEl.classList.add("hidden");
+  }
+}
 
-    // Scrub client-side: sessionStorage, globals, in-memory state. After
-    // the POST the family row is gone; continuing with the old familyId
-    // would surface "familyId required" errors on every subsequent read.
-    try {
-      sessionStorage.removeItem("fb_session_user");
-      sessionStorage.removeItem("fb_session_child");
-      sessionStorage.removeItem("fb_session_family");
-    } catch(e){}
-    currentFamilyId = null;
-    currentUser = null;
-    currentRole = null;
-    activeChild = null;
-    state = {
-      config:   {...DEFAULT_CONFIG},
-      pins: {}, roles: {}, users: [],
-      children: {},
-      history:  {}
-    };
+// Reveal one signup's PIN on demand (adminRevealSignupPin); show ~10s then
+// re-mask. The revealed PIN only ever lives in the DOM text node — never stored.
+async function revealSignupPin(signupId){
+  const span = document.getElementById("pin-"+signupId);
+  if(!span || !_adminSessionPin) return;
+  if(_revealTimers[signupId]){ clearTimeout(_revealTimers[signupId]); delete _revealTimers[signupId]; }
+  span.textContent = "…";
+  try{
+    const url = API_URL+"?action=adminRevealSignupPin&adminPin="+encodeURIComponent(_adminSessionPin)+"&signupId="+encodeURIComponent(signupId);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.status==="ok"){
+      span.textContent = String(data.pin);
+      _revealTimers[signupId] = setTimeout(()=>{
+        const s2=document.getElementById("pin-"+signupId);
+        if(s2) s2.textContent="***";
+        delete _revealTimers[signupId];
+      }, 10000);
+    } else {
+      span.textContent = "***";
+      showToast("Could not reveal PIN.","error");
+    }
+  }catch(e){
+    span.textContent = "***";
+    showToast("Network error.","error");
+  }
+}
 
-    showToast("Family deleted. Reloading…", "info", 2500);
-    // Hard reload to re-run the discovery flow cleanly. Short delay so
-    // the toast is visible and the server has a moment to finalize the
-    // scrub before the next listFamilies call.
-    setTimeout(() => { location.reload(); }, 1500);
+// Approve a queued signup (adminApprove). Family is created server-side; we
+// refresh the queue (row gone). Family-list refresh lands in drop 2.
+async function approveSignup(signupId){
+  if(!_adminSessionPin) return;
+  try{
+    const url = API_URL+"?action=adminApprove&adminPin="+encodeURIComponent(_adminSessionPin)+"&signupId="+encodeURIComponent(signupId);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.status==="ok"){
+      showToast("Signup approved. Family created.","success",4000);
+    } else {
+      showToast("Approve failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500);
+    }
+  }catch(e){ showToast("Network error.","error"); }
+  renderAdminQueue();
+}
+
+// Deny a queued signup (adminDeny). Destructive removal -> confirm first.
+// adminDeny takes no reason param (the denial-reason email is a backend Open Item).
+async function denySignup(signupId){
+  if(!_adminSessionPin) return;
+  openModal({
+    icon:"❌", title:"Deny this request?",
+    body:"This removes the signup request from the queue. It can't be undone.",
+    confirmText:"Deny", confirmClass:"btn-danger",
+    onConfirm: async ()=>{
+      try{
+        const url = API_URL+"?action=adminDeny&adminPin="+encodeURIComponent(_adminSessionPin)+"&signupId="+encodeURIComponent(signupId);
+        const res = await fetch(url);
+        const data = await res.json();
+        if(data && data.status==="ok"){ showToast("Request denied.","info",3600); }
+        else { showToast("Deny failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500); }
+      }catch(e){ showToast("Network error.","error"); }
+      renderAdminQueue();
+    }
   });
 }
-window.deleteFamily = deleteFamily;
 
-// ────────────────────────────────────────────────────────────────────
-// v37.0 — PRIMARY PARENT ROLE
-// ────────────────────────────────────────────────────────────────────
-// Exactly one parent per family holds the "primary" role, tracked at
-// state.config.primaryParent. The wizard seeds this as the parent who
-// completes setup; the approve-pending flow seeds it as the approved
-// signup. Role powers:
-//   - Can Transfer Primary to another parent in the family
-//   - Can Delete Family (render-gated + action-gated)
-//   - Cannot delete their own parent account without transferring first
-//
-// These are all soft UX rails — the authoritative source is config.
-// No server-side enforcement in v37.0; trust is per-device.
-
-function isPrimaryParent(name){
-  if(!name || !state || !state.config) return false;
-  return state.config.primaryParent === name;
-}
-window.isPrimaryParent = isPrimaryParent;
-
-// Returns the list of OTHER parents (not currentUser) eligible to
-// receive the primary role. A single-parent family has none.
-function getTransferablePrimaryCandidates(){
-  const parents = (state.users || []).filter(u =>
-    (state.roles || {})[u] === "parent" && u !== currentUser
-  );
-  return parents;
-}
-
-function openTransferPrimary(){
-  if(!isPrimaryParent(currentUser)){
-    showToast("Only the primary parent can transfer the role.", "error", 4000);
-    return;
-  }
-  const candidates = getTransferablePrimaryCandidates();
-  if(!candidates.length){
-    openModal({
-      icon: "ℹ️",
-      title: "No one to transfer to",
-      body: "You're the only parent in this family. Add another parent first, then come back to transfer the primary role.",
-      confirmText: "OK",
-      hideCancel: true
-    });
-    return;
-  }
-  // Simple picker: if one candidate, use the modal confirm path. If
-  // multiple, render a sheet with buttons. Wizard patterns (sheets)
-  // require index.html markup — for now, fall back to a chained prompt
-  // flow that works with only the core modal surface.
-  if(candidates.length === 1){
-    _transferPrimaryTo(candidates[0]);
-    return;
-  }
-  // Multi-candidate: sheet-based picker. Markup for #transfer-primary-sheet
-  // lands in the index.html pass. Graceful-degrade to modal with numbered
-  // list so the action is still reachable.
-  const sheet = document.getElementById("transfer-primary-sheet");
-  if(sheet){
-    const list = document.getElementById("transfer-primary-list");
-    if(list){
-      list.innerHTML = candidates.map(name => `
-        <button class="btn btn-outline" style="width:100%;margin:6px 0;text-align:left;"
-                onclick="_transferPrimaryTo('${name.replace(/'/g, "\\'")}')">
-          ${renderAvatar(name,"sm")} ${name}
-        </button>
-      `).join("");
+// ── v38 Step 5 (Sill) — global family list ──────────────────────────
+// adminListFamilies returns familyIds only; per-family label + email(s) come
+// from N+1 ?familyId= fetches (Gap-3 path-a). label = the parent-role user's
+// name (state has no family-name field). Each row gets a delete affordance
+// behind a type-"delete" confirm -> adminDeleteFamily (LockService + tombstone
+// + Ledger audit server-side). The 2-fetch / batched variant is logged NTH.
+async function renderFamilyList(){
+  const listEl = document.getElementById("admin-family-list");
+  if(!listEl) return;
+  if(!_adminSessionPin){ listEl.innerHTML=""; return; }
+  listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:16px;text-align:center;">Loading…</div>';
+  try{
+    const res = await fetch(API_URL+"?action=adminListFamilies&adminPin="+encodeURIComponent(_adminSessionPin));
+    const data = await res.json();
+    if(!data || data.status!=="ok"){
+      listEl.innerHTML = '<div style="padding:12px;color:var(--danger);font-size:16px;text-align:center;">Could not load families.</div>';
+      return;
     }
-    openSheet("transfer-primary-sheet");
-    return;
+    const ids = Array.isArray(data.familyIds) ? data.familyIds : [];
+    if(!ids.length){
+      listEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:16px;text-align:center;">No families yet.</div>';
+      return;
+    }
+    // N+1: fetch each family's state for label + email(s) (parallel; per-row failure -> dash).
+    const details = await Promise.all(ids.map(async (fid)=>{
+      try{
+        const r  = await fetch(API_URL+"?t="+Date.now()+"&familyId="+encodeURIComponent(fid));
+        const st = await r.json();
+        if(!st || st.status==="error") return { fid, label:"—", emails:"" };
+        const users   = Array.isArray(st.users) ? st.users : Object.keys(st.pins||{});
+        const roles   = st.roles || {};
+        const parents = users.filter(u => roles[u]==="parent");
+        const labelUsers = parents.length ? parents : users.slice(0,1);
+        const emailMap   = (st.config && st.config.emails) || {};
+        const emails     = labelUsers.map(u => emailMap[u]).filter(Boolean);
+        return { fid, label: labelUsers.join(", ") || "—", emails: emails.join(", ") };
+      }catch(e){ return { fid, label:"—", emails:"" }; }
+    }));
+    listEl.innerHTML = details.map(d=>{
+      const fidA = _escHtml(d.fid);
+      return `
+      <div class="user-row" data-family-id="${fidA}" data-label="${_escHtml(d.label)}">
+        <div style="flex:1;min-width:0;">
+          <div><strong>${_escHtml(d.label)}</strong></div>
+          <div class="user-row-substats">${_escHtml(d.emails) || "no email on file"}</div>
+          <div class="user-row-substats" style="opacity:.7;font-size:14px;">${fidA}</div>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="deleteFamilyConfirm('${d.fid}')">Delete</button>
+      </div>`;
+    }).join("");
+  }catch(e){
+    listEl.innerHTML = '<div style="padding:12px;color:var(--danger);font-size:16px;text-align:center;">Network error loading families.</div>';
   }
-  // Markup missing — fall back to a plain prompt so the flow is still usable.
-  const labeled = candidates.map((n, i) => (i+1) + ". " + n).join("\n");
-  const choice = prompt("Transfer primary role to which parent?\n\n" + labeled + "\n\nEnter the number:");
-  const idx = parseInt(choice, 10) - 1;
-  if(isNaN(idx) || idx < 0 || idx >= candidates.length){
-    showToast("Transfer cancelled.", "info", 2500);
-    return;
-  }
-  _transferPrimaryTo(candidates[idx]);
 }
-window.openTransferPrimary = openTransferPrimary;
 
-function _transferPrimaryTo(newPrimary){
-  if(!newPrimary) return;
-  if(!isPrimaryParent(currentUser)){
-    showToast("Only the primary parent can transfer the role.", "error", 4000);
-    return;
-  }
-  const candidates = getTransferablePrimaryCandidates();
-  if(candidates.indexOf(newPrimary) === -1){
-    showToast('"' + newPrimary + '" is not eligible.', "error", 4000);
-    return;
-  }
-  // Close the transfer picker sheet if it was open
-  try { closeSheet("transfer-primary-sheet"); } catch(e){}
-
-  confirmReauth("Transfer Primary to " + newPrimary, async () => {
-    const priorPrimary = state.config.primaryParent;
-    state.config.primaryParent = newPrimary;
-    appendAuditLog("Transfer Primary", currentUser + " → " + newPrimary);
-    // v37.1 BUG #9 — await the sync before showing success toast. If sync fails,
-    // revert primaryParent locally so the Transfer/Delete Family UI doesn't lie.
-    // v37.1 hotfix — 10s Promise.race timeout per scope §4.3.2. If an unrelated
-    // sync is queued ahead of us and stalls, we surface a timeout rather than
-    // hanging the UI indefinitely. On timeout: revert locally, tell user to refresh.
-    showToast("Transferring primary…", "info", 10000);
-    try {
-      await Promise.race([
-        syncToCloud("Primary Transferred"),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
-      ]);
-      showToast('"' + newPrimary + '" is now the primary parent.', "success", 4500);
-      // Re-render settings so the Transfer/Delete Family buttons update their
-      // visibility based on the new primaryParent.
-      try { renderParentSettings(); } catch(e){}
-    } catch(err) {
-      // Revert so local UI doesn't show a transfer that didn't persist
-      state.config.primaryParent = priorPrimary;
-      const isTimeout = err && err.message === "timeout";
-      if(isTimeout){
-        showToast("Transfer timed out — please refresh and try again.", "error", 6000);
-      } else {
-        showToast("Transfer failed — please try again.", "error", 5000);
+// Delete a family (adminDeleteFamily) behind a type-"delete" confirm. Server-side
+// this scrubs EmailIndex, deletes the Families row, writes a DeletedFamilies
+// tombstone, and audits the Ledger. Wrong confirm text -> no-op.
+function deleteFamilyConfirm(familyId){
+  const row   = document.querySelector('[data-family-id="'+familyId+'"]');
+  const label = row ? (row.getAttribute("data-label") || familyId) : familyId;
+  openInputModal({
+    icon:"⚠️", title:"Delete this family?",
+    body:'Permanently deletes "'+label+'" and all its data. Type delete to confirm. This cannot be undone.',
+    inputType:"text", inputAttrs:'placeholder="delete" maxlength="10" autocapitalize="off" autocomplete="off"',
+    confirmText:"Delete", confirmClass:"btn-danger",
+    onConfirm: async (val)=>{
+      if(String(val||"").trim().toLowerCase()!=="delete"){
+        showToast('Type "delete" to confirm.',"error");
+        return;
       }
-      console.error("[FamilyBank v37.1] _transferPrimaryTo sync failed:", err);
-      try { renderParentSettings(); } catch(e){}
+      if(!_adminSessionPin){ showToast("Admin session expired — reopen the panel.","error"); return; }
+      try{
+        const url = API_URL+"?action=adminDeleteFamily&adminPin="+encodeURIComponent(_adminSessionPin)+"&familyId="+encodeURIComponent(familyId);
+        const res = await fetch(url);
+        const data = await res.json();
+        if(data && data.status==="ok"){ showToast("Family deleted.","info",3600); }
+        else { showToast("Delete failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500); }
+      }catch(e){ showToast("Network error.","error"); }
+      renderFamilyList();
     }
   });
 }
-window._transferPrimaryTo = _transferPrimaryTo;
+
+// v38 Step 5 drop 3 (Lintel) -- global Admin Account (admin email + admin PIN).
+// GLOBAL admin config (AdminConfig sheet), distinct from the per-family
+// admin-email-input / changeAdminPin controls, which stay this drop (Option-A)
+// until NTH-5-A relocates them off the parent surface. Email is populated from
+// the adminLoad summary (_adminSummary.adminEmail); both writes go through the
+// dedicated routes (setAdminEmail / setAdminPin).
+function populateAdminAccount(){
+  const aeEl  = document.getElementById("global-admin-email-input");
+  const aeMsg = document.getElementById("global-admin-email-msg");
+  if(aeEl)  aeEl.value = (_adminSummary && _adminSummary.adminEmail) || "";
+  if(aeMsg){ aeMsg.className = "field-msg"; aeMsg.textContent = ""; }
+}
+
+// setAdminEmail: params adminPin (= session PIN, the auth) + newEmail. The backend
+// normalizes (trim + lowercase) and writes AdminConfig col B -- it does NOT validate
+// email format, so we validate client-side here. Empty is allowed (clears the admin
+// email -> statements disabled), mirroring the per-family field.
+// v38.1 final (In-8) — admin: rebuild the EmailIndex tab (existing rebuildEmailIndex route).
+async function adminRebuildEmailIndex(){
+  if(!_adminSessionPin){ showToast("Admin session expired — reopen the panel.","error"); return; }
+  const btn = document.getElementById("admin-rebuild-email-btn");
+  if(btn){ btn.disabled=true; btn.textContent="Rebuilding…"; }
+  try{
+    const url = API_URL+"?action=rebuildEmailIndex&adminPin="+encodeURIComponent(_adminSessionPin)+"&t="+Date.now();
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.status==="ok"){
+      const n = (data.indexedCount!==undefined) ? data.indexedCount : "all";
+      showToast("Email index rebuilt — "+n+" address"+(n===1?"":"es")+" indexed.","success",4500);
+    } else if(data && data.reason==="auth"){
+      showToast("Admin session expired — reopen the panel.","error",4500);
+    } else {
+      showToast("Rebuild failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500);
+    }
+  }catch(e){
+    showToast("Couldn't reach the server — index not rebuilt.","error",4500);
+  }
+  if(btn){ btn.disabled=false; btn.textContent="Rebuild email index"; }
+}
+window.adminRebuildEmailIndex = adminRebuildEmailIndex;
+
+async function saveGlobalAdminEmail(){
+  if(!_adminSessionPin){ showToast("Admin session expired — reopen the panel.","error"); return; }
+  const inp = document.getElementById("global-admin-email-input");
+  const msg = document.getElementById("global-admin-email-msg");
+  const val = inp ? inp.value.trim() : "";
+  if(val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)){
+    if(msg){ msg.className="field-msg error"; msg.textContent="Please enter a valid email address."; }
+    showToast("Invalid admin email.","error");
+    return;
+  }
+  if(msg){ msg.className="field-msg"; msg.textContent=""; }
+  try{
+    const url = API_URL+"?action=setAdminEmail&adminPin="+encodeURIComponent(_adminSessionPin)+"&newEmail="+encodeURIComponent(val);
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data && data.status==="ok"){
+      if(_adminSummary) _adminSummary.adminEmail = val.toLowerCase();
+      if(msg){ msg.className="field-msg success"; msg.textContent="Admin email saved."; }
+      showToast("Admin email saved.","success");
+    } else if(data && data.reason==="auth"){
+      showToast("Admin session expired — reopen the panel.","error",4500);
+    } else {
+      showToast("Save failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500);
+    }
+  }catch(e){ showToast("Network error.","error"); }
+}
+
+// setAdminPin: params oldPin (= session PIN, the auth) + newPin. Backend validates
+// newPin /^\d{4}$/ and writes AdminConfig col A. On success the session PIN is stale,
+// so re-lock the panel and force a fresh sign-in with the new PIN.
+function changeGlobalAdminPin(){
+  if(!_adminSessionPin){ showToast("Admin session expired — reopen the panel.","error"); return; }
+  openInputModal({
+    icon:"\ud83d\udd11", title:"New Admin PIN",
+    body:"Enter a new 4-digit admin PIN. The panel will lock and you'll sign in again with the new PIN.",
+    inputType:"password", inputAttrs:'maxlength="4" inputmode="numeric" placeholder="\u2022\u2022\u2022\u2022" autocomplete="off"',
+    confirmText:"Save", confirmClass:"btn-primary",
+    onConfirm: async (v)=>{
+      if(!v || !/^\d{4}$/.test(v)){ showToast("Admin PIN must be exactly 4 digits.","error"); return; }
+      if(!_adminSessionPin){ showToast("Admin session expired — reopen the panel.","error"); return; }
+      try{
+        const url = API_URL+"?action=setAdminPin&oldPin="+encodeURIComponent(_adminSessionPin)+"&newPin="+encodeURIComponent(v);
+        const res = await fetch(url);
+        const data = await res.json();
+        if(data && data.status==="ok"){
+          showToast("Admin PIN updated — sign in with the new PIN.","success",4000);
+          _adminSessionPin=null; _adminSummary=null; _clearRevealTimers();
+          document.getElementById("admin-settings-section").classList.add("hidden");
+          document.getElementById("admin-login-section").classList.remove("hidden");
+          const pinEl=document.getElementById("admin-pin-input"); if(pinEl) pinEl.value="";
+          const errEl=document.getElementById("admin-pin-error"); if(errEl) errEl.className="field-msg";
+        } else if(data && data.reason==="badInput"){
+          showToast("Admin PIN must be exactly 4 digits.","error");
+        } else if(data && data.reason==="auth"){
+          showToast("Current session PIN no longer valid — reopen the panel.","error",4500);
+        } else {
+          showToast("PIN change failed"+(data&&data.reason?(" ("+data.reason+")"):"")+".","error",4500);
+        }
+      }catch(e){ showToast("Network error.","error"); }
+    }
+  });
+}
 
 // ────────────────────────────────────────────────────────────────────
 // 22.2 — PROOF PHOTO CAPTURE
@@ -5823,7 +4850,7 @@ function openProofPhotoCapture(choreId){
   pendingProofChoreId = choreId;
   // Wipe previous preview
   const prev = document.getElementById("proof-preview");
-  if(prev) prev.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:.8rem;text-align:center;">No photo yet — tap "Take Photo" to capture.</div>';
+  if(prev) prev.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:16px;text-align:center;">No photo yet — tap "Take Photo" to capture.</div>';
   const cont = document.getElementById("proof-continue-btn");
   if(cont) cont.disabled = true;
   const fileEl = document.getElementById("proof-file-input");
@@ -5858,7 +4885,7 @@ function handleProofFileSelected(inputEl){
           const approxKb = Math.round((dataUrl.length * 3/4) / 1024);
           prev.innerHTML =
             '<img src="'+dataUrl+'" class="proof-thumb" alt="Proof photo preview">' +
-            '<div style="font-size:.7rem;color:var(--muted);margin-top:6px;text-align:center;">'+w+'×'+h+' • ~'+approxKb+' KB</div>';
+            '<div style="font-size:14px;color:var(--muted);margin-top:6px;text-align:center;">'+w+'×'+h+' • ~'+approxKb+' KB</div>';
         }
         const cont = document.getElementById("proof-continue-btn");
         if(cont) cont.disabled = false;
@@ -6013,7 +5040,7 @@ function calcMaxAnnualEarnings(childName){
 function renderEarningsCard(childName){
   const el = document.getElementById("earnings-card-body");
   if(!el) return;
-  if(!childName){ el.innerHTML = '<div style="color:var(--muted);font-size:.8rem;">Select a child to see projections.</div>'; return; }
+  if(!childName){ el.innerHTML = '<div style="color:var(--muted);font-size:16px;">Select a child to see projections.</div>'; return; }
   const r = calcMaxAnnualEarnings(childName);
   el.innerHTML = `
     <div class="earnings-grid">
@@ -6034,1556 +5061,11 @@ function renderEarningsCard(childName){
         <div class="earnings-value">${fmt(r.gamesIt)}</div>
       </div>
     </div>
-    <div style="font-size:.68rem;color:var(--muted);margin-top:8px;">
+    <div style="font-size:14px;color:var(--muted);margin-top:8px;">
       Compounded monthly using each account's APR. "Games it" assumes every dollar routes to the higher-yield account.
     </div>`;
 }
 
-// ────────────────────────────────────────────────────────────────────
-// 22.3 — v37.0 FAMILY SETUP WIZARD (new-family first-login flow)
-// ────────────────────────────────────────────────────────────────────
-// Trigger: primary parent's first login when familySetupComplete !== true.
-// Fired from enterApp() BEFORE the per-child wizard trigger.
-//
-// Design notes:
-//   • Holds all edits client-side across Steps 1-3. ONE syncToCloud on
-//     Step 4 Finish — Code.gs sees one transition (skeleton → full family),
-//     so welcome emails fire predictably (see Step 4 commit below).
-//   • Welcome emails go out via the v37.0.1 _sendWelcomeEmail intercept
-//     (added to Code.gs this session). One fire-and-forget POST per new
-//     co-parent and child. Primary already got their welcome at signup
-//     approval — wizard does NOT re-email them.
-//   • Step 3 captures the MINIMUM viable child record (name, PIN, avatar,
-//     assigned-parents). Does NOT set childSetupComplete[name]=true, so
-//     the full 9-step per-child wizard still fires on first open of each
-//     child. That's locked scope.
-//   • Graceful-degrade: if the wizard markup isn't present in index.html
-//     yet, opener logs a warning and flips familySetupComplete to true
-//     with a minimal commit (so a beta without the HTML doesn't
-//     infinite-loop the trigger). Real users won't hit this once the
-//     markup ships in the same release.
-
-// In-memory wizard buffer. Lives only while wizard is open.
-let familyWizardState = null;
-
-const FW_MAX_PARENTS = 6;   // primary + 5 co-parents (arbitrary sane cap)
-const FW_MAX_CHILDREN = 6;  // matches MAX_CHILDREN_PER_PARENT
-
-// Local HTML escape — used for safe rendering of user-entered names/emails
-// in the wizard's list and review DOM. No global `escapeHtml` in this file,
-// and we don't want to introduce one this session without wider audit.
-function fwEscapeHtml(s){
-  if(s == null) return "";
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Fire-and-forget welcome email POST. Mirrors appendAuditLog shape.
-// Code.gs v37.0.1 intercept handler: sendWelcomeEmail_().
-function sendWelcomeEmail(recipient, name, role, defaultPin){
-  if(!currentFamilyId) return;
-  if(!recipient || !name || !role) return;
-  const body = {
-    _sendWelcomeEmail: {
-      recipient: String(recipient),
-      name:      String(name),
-      role:      String(role),       // "parent" | "child"
-      defaultPin: String(defaultPin || "0000")
-    },
-    familyId: currentFamilyId
-  };
-  try {
-    fetch(API_URL, {
-      method: "POST",
-      mode:   "no-cors",
-      body:   JSON.stringify(body)
-    }).catch(err => {
-      console.warn("[FamilyBank v37.0] sendWelcomeEmail failed:", recipient, err);
-    });
-  } catch(err){
-    console.warn("[FamilyBank v37.0] sendWelcomeEmail threw:", recipient, err);
-  }
-}
-window.sendWelcomeEmail = sendWelcomeEmail;
-
-// Entry — called from enterApp when trigger conditions met.
-function openFamilyWizard(){
-  // Idempotency: if wizard is already open or already completed, bail.
-  if(familyWizardState && familyWizardState.open) return;
-  if(state && state.config && state.config.familySetupComplete === true) return;
-  if(!isPrimaryParent(currentUser)){
-    console.warn("[FamilyBank v37.0] openFamilyWizard called for non-primary; skipping.");
-    return;
-  }
-
-  // Graceful-degrade: check markup exists. If not, flip the flag and sync
-  // so the trigger doesn't fire on every subsequent login. This is a beta
-  // safety net; production ship has the markup.
-  const sheet = document.getElementById("family-wizard-sheet");
-  if(!sheet){
-    console.warn("[FamilyBank v37.0] Family wizard markup missing — auto-completing.");
-    if(!state.config) state.config = {};
-    state.config.familySetupComplete = true;
-    try { syncToCloud("Family Setup Auto-Complete (no markup)"); } catch(e){}
-    return;
-  }
-
-  // Seed buffer from current state (primary already exists; we let the
-  // user edit identity fields but keep the primary's own entry fixed).
-  const cfg = state.config || {};
-  familyWizardState = {
-    open: true,
-    step: 1,
-    // Step 1 — identity (pre-fill from current config; user edits)
-    identity: {
-      bankName:       cfg.bankName       || CFG_BANK_NAME,
-      tagline:        cfg.tagline        || CFG_BANK_TAGLINE,
-      colorPrimary:   cfg.colorPrimary   || CFG_COLOR_PRIMARY,
-      colorSecondary: cfg.colorSecondary || CFG_COLOR_SECONDARY,
-      imgLogo:        cfg.imgLogo        || "",
-      imgBanner:      cfg.imgBanner      || ""
-    },
-    // Step 2 — parents (primary is fixed; coParents are wizard-added)
-    primaryName: currentUser,
-    primaryEmail: (cfg.emails && cfg.emails[currentUser]) || "",
-    coParents: [],   // [{name, email}]
-    // Step 3 — children
-    children: []     // [{name, pin, avatar, assignedParents:[names]}]
-  };
-
-  // Show the sheet, render Step 1.
-  try { closeAllSheets(); } catch(e){}
-  openSheet("family-wizard-sheet");
-  fwRenderStep(1);
-}
-window.openFamilyWizard = openFamilyWizard;
-
-function fwCloseSheet(){
-  try { closeSheet("family-wizard-sheet", true); } catch(e){}
-  if(familyWizardState) familyWizardState.open = false;
-}
-
-// Navigation
-function fwStepNext(){
-  if(!familyWizardState) return;
-  // Validate current step before advancing
-  if(!fwValidateStep(familyWizardState.step)) return;
-  if(familyWizardState.step < 4){
-    familyWizardState.step += 1;
-    fwRenderStep(familyWizardState.step);
-  }
-}
-window.fwStepNext = fwStepNext;
-
-function fwStepBack(){
-  if(!familyWizardState) return;
-  if(familyWizardState.step > 1){
-    familyWizardState.step -= 1;
-    fwRenderStep(familyWizardState.step);
-  }
-}
-window.fwStepBack = fwStepBack;
-
-// Dispatcher — reads current step, writes fields back into buffer before
-// render (so "Back" preserves user input), paints the target step content.
-function fwRenderStep(n){
-  if(!familyWizardState) return;
-  // Persist any edits from the step we're leaving (in case caller skipped
-  // fwValidateStep — defensive).
-  fwCaptureStepInputs(familyWizardState.step);
-
-  // Flip step dots / step number display if present
-  const indicator = document.getElementById("fw-step-indicator");
-  if(indicator) indicator.textContent = "Step " + n + " of 4";
-
-  // Hide all step bodies, show the target
-  for(let i = 1; i <= 4; i++){
-    const el = document.getElementById("fw-step-" + i);
-    if(el) el.classList.toggle("hidden", i !== n);
-  }
-
-  // Toggle nav buttons: no Back on Step 1, no Next on Step 4, Finish only on Step 4
-  const backBtn   = document.getElementById("fw-back-btn");
-  const nextBtn   = document.getElementById("fw-next-btn");
-  const finishBtn = document.getElementById("fw-finish-btn");
-  if(backBtn)   backBtn.classList.toggle("hidden",   n === 1);
-  if(nextBtn)   nextBtn.classList.toggle("hidden",   n === 4);
-  if(finishBtn) finishBtn.classList.toggle("hidden", n !== 4);
-
-  if(n === 1) fwRenderStep1();
-  else if(n === 2) fwRenderStep2();
-  else if(n === 3) fwRenderStep3();
-  else if(n === 4) fwRenderStep4();
-}
-
-// Capture inputs from current DOM step into the buffer. Called before any
-// step transition. Silent on missing fields (they just keep their previous
-// buffer value).
-function fwCaptureStepInputs(step){
-  if(!familyWizardState) return;
-  const id = familyWizardState.identity;
-  if(step === 1){
-    const v = k => { const el = document.getElementById(k); return el ? el.value.trim() : ""; };
-    if(document.getElementById("fw-bank-name"))       id.bankName       = v("fw-bank-name")       || id.bankName;
-    if(document.getElementById("fw-tagline"))         id.tagline        = v("fw-tagline")         || id.tagline;
-    if(document.getElementById("fw-color-primary"))   id.colorPrimary   = v("fw-color-primary")   || id.colorPrimary;
-    if(document.getElementById("fw-color-secondary")) id.colorSecondary = v("fw-color-secondary") || id.colorSecondary;
-    if(document.getElementById("fw-img-logo"))        id.imgLogo        = v("fw-img-logo");
-    if(document.getElementById("fw-img-banner"))      id.imgBanner      = v("fw-img-banner");
-  }
-  // Step 2/3 edits are captured by add/remove actions in real time; no
-  // bulk read needed here. Primary's own email IS editable on Step 2:
-  if(step === 2){
-    const primEmailEl = document.getElementById("fw-primary-email");
-    if(primEmailEl) familyWizardState.primaryEmail = primEmailEl.value.trim();
-  }
-}
-
-// STEP 1 — Family Identity
-function fwRenderStep1(){
-  const id = familyWizardState.identity;
-  const set = (k, v) => { const el = document.getElementById(k); if(el) el.value = v || ""; };
-  set("fw-bank-name",       id.bankName);
-  set("fw-tagline",          id.tagline);
-  set("fw-color-primary",   id.colorPrimary);
-  set("fw-color-secondary", id.colorSecondary);
-  set("fw-img-logo",         id.imgLogo);
-  set("fw-img-banner",       id.imgBanner);
-}
-
-// STEP 2 — Parents
-function fwRenderStep2(){
-  // Primary (fixed name, editable email)
-  const primNameEl = document.getElementById("fw-primary-name");
-  if(primNameEl) primNameEl.textContent = familyWizardState.primaryName;
-  const primEmailEl = document.getElementById("fw-primary-email");
-  if(primEmailEl) primEmailEl.value = familyWizardState.primaryEmail || "";
-
-  // Co-parent list
-  const list = document.getElementById("fw-coparent-list");
-  if(list){
-    if(!familyWizardState.coParents.length){
-      list.innerHTML = '<p class="fw-empty-hint">No co-parents yet. You can add them now or later in Settings.</p>';
-    } else {
-      list.innerHTML = familyWizardState.coParents.map((p, i) =>
-        '<div class="fw-row">'
-        + '<div class="fw-row-main"><strong>'+fwEscapeHtml(p.name)+'</strong>'
-        + '<div class="fw-row-sub">'+fwEscapeHtml(p.email || "(no email)")+'</div></div>'
-        + '<button type="button" class="fw-row-remove" onclick="fwRemoveCoParent('+i+')">Remove</button>'
-        + '</div>'
-      ).join("");
-    }
-  }
-
-  // Hide add form if at cap
-  const addBtn = document.getElementById("fw-add-coparent-btn");
-  if(addBtn){
-    const atCap = familyWizardState.coParents.length >= (FW_MAX_PARENTS - 1);
-    addBtn.disabled = atCap;
-    addBtn.textContent = atCap ? "Max co-parents reached" : "+ Add co-parent";
-  }
-}
-
-function fwAddCoParent(){
-  if(!familyWizardState) return;
-  const nameEl  = document.getElementById("fw-new-coparent-name");
-  const emailEl = document.getElementById("fw-new-coparent-email");
-  const name  = nameEl  ? nameEl.value.trim()  : "";
-  const email = emailEl ? emailEl.value.trim() : "";
-  if(!name){ showToast("Enter a name.", "error"); return; }
-  if(familyWizardState.coParents.length >= (FW_MAX_PARENTS - 1)){
-    showToast("Max co-parents reached.", "error"); return;
-  }
-  // Name collision (against primary + existing co-parents)
-  const taken = new Set([familyWizardState.primaryName.toLowerCase()]);
-  familyWizardState.coParents.forEach(p => taken.add(p.name.toLowerCase()));
-  if(taken.has(name.toLowerCase())){
-    showToast("That name is already used.", "error"); return;
-  }
-  familyWizardState.coParents.push({ name, email });
-  if(nameEl)  nameEl.value  = "";
-  if(emailEl) emailEl.value = "";
-  fwRenderStep2();
-}
-window.fwAddCoParent = fwAddCoParent;
-
-function fwRemoveCoParent(i){
-  if(!familyWizardState) return;
-  familyWizardState.coParents.splice(i, 1);
-  fwRenderStep2();
-}
-window.fwRemoveCoParent = fwRemoveCoParent;
-
-// STEP 3 — Children (minimal inline add; per-child wizard runs later)
-function fwRenderStep3(){
-  const list = document.getElementById("fw-child-list");
-  if(list){
-    if(!familyWizardState.children.length){
-      list.innerHTML = '<p class="fw-empty-hint">No children yet. You can add them now or later from the main screen.</p>';
-    } else {
-      list.innerHTML = familyWizardState.children.map((c, i) =>
-        '<div class="fw-row">'
-        + '<div class="fw-row-main"><strong>'+fwEscapeHtml(c.name)+'</strong>'
-        + '<div class="fw-row-sub">PIN: '+fwEscapeHtml(c.pin)+' · Assigned to: '+fwEscapeHtml(c.assignedParents.join(", "))+'</div></div>'
-        + '<button type="button" class="fw-row-remove" onclick="fwRemoveChild('+i+')">Remove</button>'
-        + '</div>'
-      ).join("");
-    }
-  }
-  const addBtn = document.getElementById("fw-add-child-btn");
-  if(addBtn){
-    const atCap = familyWizardState.children.length >= FW_MAX_CHILDREN;
-    addBtn.disabled = atCap;
-    addBtn.textContent = atCap ? "Max children reached" : "+ Add child";
-  }
-}
-
-function fwAddChild(){
-  if(!familyWizardState) return;
-  const nameEl = document.getElementById("fw-new-child-name");
-  const pinEl  = document.getElementById("fw-new-child-pin");
-  const avEl   = document.getElementById("fw-new-child-avatar");
-  const name = nameEl ? nameEl.value.trim() : "";
-  const pin  = pinEl  ? (pinEl.value.trim() || "0000") : "0000";
-  const av   = avEl   ? avEl.value.trim() : "";
-  if(!name){ showToast("Enter a name.", "error"); return; }
-  if(familyWizardState.children.length >= FW_MAX_CHILDREN){
-    showToast("Max children reached.", "error"); return;
-  }
-  // Collision check across the whole family (parents + existing children)
-  const taken = new Set([familyWizardState.primaryName.toLowerCase()]);
-  familyWizardState.coParents.forEach(p => taken.add(p.name.toLowerCase()));
-  familyWizardState.children.forEach(c => taken.add(c.name.toLowerCase()));
-  if(taken.has(name.toLowerCase())){
-    showToast("That name is already used.", "error"); return;
-  }
-  // Default: all parents assigned to this child
-  const allParents = [familyWizardState.primaryName].concat(
-    familyWizardState.coParents.map(p => p.name)
-  );
-  familyWizardState.children.push({
-    name,
-    pin,
-    avatar: av,
-    assignedParents: allParents.slice()
-  });
-  if(nameEl) nameEl.value = "";
-  if(pinEl)  pinEl.value  = "";
-  if(avEl)   avEl.value   = "";
-  fwRenderStep3();
-}
-window.fwAddChild = fwAddChild;
-
-function fwRemoveChild(i){
-  if(!familyWizardState) return;
-  familyWizardState.children.splice(i, 1);
-  fwRenderStep3();
-}
-window.fwRemoveChild = fwRemoveChild;
-
-// STEP 4 — Review
-function fwRenderStep4(){
-  const id = familyWizardState.identity;
-  const esc = s => fwEscapeHtml(s || "");
-
-  // Identity summary
-  const idSummary = document.getElementById("fw-review-identity");
-  if(idSummary){
-    idSummary.innerHTML =
-      '<div class="fw-review-row"><span class="fw-review-label">Bank name</span><span class="fw-review-val">'+esc(id.bankName)+'</span></div>'
-      + '<div class="fw-review-row"><span class="fw-review-label">Tagline</span><span class="fw-review-val">'+esc(id.tagline)+'</span></div>'
-      + '<div class="fw-review-row"><span class="fw-review-label">Primary color</span><span class="fw-review-val">'+esc(id.colorPrimary)+'</span></div>'
-      + '<div class="fw-review-row"><span class="fw-review-label">Secondary color</span><span class="fw-review-val">'+esc(id.colorSecondary)+'</span></div>'
-      + (id.imgLogo   ? '<div class="fw-review-row"><span class="fw-review-label">Logo URL</span><span class="fw-review-val">'+esc(id.imgLogo)+'</span></div>'   : "")
-      + (id.imgBanner ? '<div class="fw-review-row"><span class="fw-review-label">Banner URL</span><span class="fw-review-val">'+esc(id.imgBanner)+'</span></div>' : "");
-  }
-
-  // Parents summary
-  const parSummary = document.getElementById("fw-review-parents");
-  if(parSummary){
-    const lines = [
-      '<div class="fw-review-row"><span class="fw-review-label">'+esc(familyWizardState.primaryName)+' (primary)</span><span class="fw-review-val">'+esc(familyWizardState.primaryEmail || "no email")+'</span></div>'
-    ].concat(
-      familyWizardState.coParents.map(p =>
-        '<div class="fw-review-row"><span class="fw-review-label">'+esc(p.name)+'</span><span class="fw-review-val">'+esc(p.email || "no email")+'</span></div>'
-      )
-    );
-    parSummary.innerHTML = lines.join("");
-  }
-
-  // Children summary
-  const chSummary = document.getElementById("fw-review-children");
-  if(chSummary){
-    if(!familyWizardState.children.length){
-      chSummary.innerHTML = '<p class="fw-empty-hint">No children added. You can add them anytime from the main screen.</p>';
-    } else {
-      chSummary.innerHTML = familyWizardState.children.map(c =>
-        '<div class="fw-review-row"><span class="fw-review-label">'+esc(c.name)+'</span><span class="fw-review-val">PIN '+esc(c.pin)+'</span></div>'
-      ).join("");
-    }
-  }
-}
-
-function fwValidateStep(n){
-  if(!familyWizardState) return false;
-  fwCaptureStepInputs(n);
-  if(n === 1){
-    const id = familyWizardState.identity;
-    if(!id.bankName){ showToast("Bank name is required.", "error"); return false; }
-    return true;
-  }
-  // Steps 2 and 3 accept zero additions (co-parents and children both optional).
-  // Step 4 is terminal — fwCommit handles finish.
-  return true;
-}
-
-// STEP 4 — Finish: commit everything in one syncToCloud, then fire
-// welcome emails to co-parents and children (primary already received
-// their welcome at signup approval).
-async function fwCommit(){
-  if(!familyWizardState) return;
-  // Final capture in case user clicks Finish without tabbing out of a field.
-  fwCaptureStepInputs(familyWizardState.step);
-
-  const id = familyWizardState.identity;
-  const cfg = state.config || (state.config = {});
-
-  // --- Apply Step 1: identity ---
-  cfg.bankName       = id.bankName;
-  cfg.tagline        = id.tagline;
-  cfg.colorPrimary   = id.colorPrimary;
-  cfg.colorSecondary = id.colorSecondary;
-  cfg.imgLogo        = id.imgLogo;
-  cfg.imgBanner      = id.imgBanner;
-
-  // --- Apply Step 2: primary email edits + co-parents ---
-  if(!cfg.emails) cfg.emails = {};
-  if(!cfg.notify) cfg.notify = {};
-  if(!cfg.parentChildren) cfg.parentChildren = {};
-  if(!state.users) state.users = [];
-  if(!state.pins)  state.pins  = {};
-  if(!state.roles) state.roles = {};
-  if(!state.usersData) state.usersData = {};
-
-  // Primary email update (keep existing notify settings; default Instant
-  // for primary per locked scope — if already set, leave alone)
-  cfg.emails[familyWizardState.primaryName] = familyWizardState.primaryEmail || "";
-  if(!cfg.notify[familyWizardState.primaryName]){
-    cfg.notify[familyWizardState.primaryName] = {
-      email: true, calendar: false, choreRewards: true,
-      digestFrequency: "instant"
-    };
-  } else if(cfg.notify[familyWizardState.primaryName].digestFrequency == null){
-    cfg.notify[familyWizardState.primaryName].digestFrequency = "instant";
-  }
-
-  // Collect new parents for post-sync welcome emails
-  const newParentEmails = [];
-  familyWizardState.coParents.forEach(p => {
-    if(state.users.indexOf(p.name) === -1) state.users.push(p.name);
-    state.pins[p.name]  = "0000";
-    state.roles[p.name] = "parent";
-    state.usersData[p.name] = { createdAt: new Date().toISOString() };
-    cfg.emails[p.name] = p.email || "";
-    cfg.notify[p.name] = {
-      email: true, calendar: false, choreRewards: true,
-      digestFrequency: "daily",
-      digestTimeOfDay: "08:00"
-    };
-    if(!cfg.parentChildren[p.name]) cfg.parentChildren[p.name] = [];
-    if(p.email) newParentEmails.push({ recipient: p.email, name: p.name });
-  });
-
-  // --- Apply Step 3: children ---
-  if(!state.children) state.children = {};
-  if(!cfg.avatars) cfg.avatars = {};
-  if(!cfg.childSetupComplete) cfg.childSetupComplete = {};
-  if(!cfg.childEmails){
-    // v37.0 locked defaults — see scope doc "Child email gating"
-    cfg.childEmails = {
-      choreCreated: true, choreApproved: false, choreDenied: true,
-      depositApproved: false, depositDenied: false,
-      withdrawalApproved: true, withdrawalDenied: true
-    };
-  }
-
-  const newChildEmails = [];  // children don't have emails in v37 typical flow;
-                              // wizard doesn't collect child emails, so this
-                              // list stays empty. Kept for future use.
-
-  familyWizardState.children.forEach(c => {
-    if(state.users.indexOf(c.name) === -1) state.users.push(c.name);
-    state.pins[c.name]  = c.pin || "0000";
-    state.roles[c.name] = "child";
-    state.usersData[c.name] = { createdAt: new Date().toISOString() };
-    if(!state.children[c.name]){
-      state.children[c.name] = { balance: 0, balanceSav: 0, chores: [], goals: [] };
-    }
-    if(c.avatar) cfg.avatars[c.name] = c.avatar;
-    // Wire to parentChildren — all selected parents get this child in their list
-    (c.assignedParents || []).forEach(pn => {
-      if(!cfg.parentChildren[pn]) cfg.parentChildren[pn] = [];
-      if(cfg.parentChildren[pn].indexOf(c.name) === -1){
-        cfg.parentChildren[pn].push(c.name);
-      }
-    });
-    // DELIBERATE: do NOT set cfg.childSetupComplete[c.name] = true.
-    // Locked scope: per-child 9-step wizard must still fire on first open.
-  });
-
-  // --- Flip the completion flag ---
-  cfg.familySetupComplete = true;
-  if(!cfg.primaryParent) cfg.primaryParent = familyWizardState.primaryName;
-
-  // --- Commit: ONE sync. ---
-  try {
-    await syncToCloud("Family Provisioned");
-  } catch(err){
-    console.error("[FamilyBank v37.0] Family wizard sync failed:", err);
-    showToast("Couldn't save family — please retry.", "error", 5000);
-    return;
-  }
-
-  // --- Post-commit side effects ---
-  // Audit log (fire-and-forget)
-  try { appendAuditLog("Family Setup Complete", currentFamilyId || ""); } catch(e){}
-
-  // Welcome emails (fire-and-forget). One POST per recipient.
-  newParentEmails.forEach(p => {
-    sendWelcomeEmail(p.recipient, p.name, "parent", "0000");
-  });
-  newChildEmails.forEach(c => {
-    sendWelcomeEmail(c.recipient, c.name, "child", c.pin || "0000");
-  });
-
-  // --- UI close + land user somewhere sensible ---
-  fwCloseSheet();
-  familyWizardState = null;
-
-  showToast("Family setup complete! 🎉", "success", 4000);
-
-  // Re-render the parent view. If children were added, this will show
-  // the picker; if not, main screen with the empty-children prompt
-  // (which will trigger the per-child wizard path for future adds).
-  try { applyBranding(); } catch(e){}
-  try { renderAll && renderAll(); } catch(e){}
-  try {
-    const kids = getAssignedChildren();
-    if(kids.length === 1){
-      selectChild(kids[0]);
-    } else if(kids.length > 1){
-      document.getElementById("main-screen").classList.add("hidden");
-      document.getElementById("child-picker-screen").classList.remove("hidden");
-      showChildPicker();
-    }
-    // kids.length === 0 → user stays on main/parent-panel view
-  } catch(e){}
-}
-window.fwCommit = fwCommit;
-
-// ────────────────────────────────────────────────────────────────────
-// 22.4 — GUIDED CHILD SETUP WIZARD
-// ────────────────────────────────────────────────────────────────────
-
-/** Start wizard for a brand-new child. Step 1 will create the child on Next. */
-function startWizardForNewChild(){
-  if(currentRole !== "parent"){ showToast("Wizard is parent-only.","error"); return; }
-  const mine = getMyChildrenList();
-  if(mine.length >= MAX_CHILDREN_PER_PARENT){
-    showToast("You've hit the "+MAX_CHILDREN_PER_PARENT+"-child limit.","error");
-    return;
-  }
-  wizardState = {
-    mode: "new",
-    step: 1,
-    childName: null,            // populated after Step 1 save
-    data: {
-      name: "",
-      pin:  "",
-      tabs: {money:false, chores:false, loans:false}, // v35.0 — no default selection
-      useAllowance: undefined,                        // v35.0 — no default
-      structure: "both",
-      schedule: "weekly",
-      allowWeekday: 1,  // Monday default
-      allowMonthlyDay: "1",
-      choreRewards: undefined,                        // v35.0 — no default
-      allowChk: 0,
-      allowSav: 0,
-      rateChk: "",
-      rateSav: "",
-      email: "",
-      notifyEmail: undefined,                         // v35.0 — no default
-      notifyChoreRewards: undefined,                  // v35.0 — no default
-      useCalendar: undefined,                         // v35.0 — no default
-      calendarId: "",
-      celebrationSound: undefined,                    // v35.0 — no default
-      avatar: ""
-    },
-    chores: [],                 // wizard-only scratchpad; once child is created,
-                                // chores live directly on state.children[name].chores
-    editingFromSummary: 0       // step number we came from in summary mode (0 = not editing)
-  };
-  openSheet("sheet-wizard");
-  wizardRender();
-}
-
-/** Start wizard for an existing child — pre-populates from state. */
-function startWizardForExistingChild(name){
-  if(!name || !state.children || !state.children[name]){ showToast("Child not found.","error"); return; }
-  const data = state.children[name];
-  const ad = data.autoDeposit || {};
-  const rates = data.rates || {};
-  const tabs = (state.config.tabs && state.config.tabs[name]) || {money:true, chores:true, loans:false};
-  const notify = (state.config.notify && state.config.notify[name]) || {email:true, choreRewards:true};
-  const email = (state.config.emails && state.config.emails[name]) || "";
-  const structure = (ad.checking>0 && ad.savings>0) ? "both" : (ad.savings>0 ? "savings" : "checking");
-  wizardState = {
-    mode: "edit",
-    step: 1,
-    childName: name,
-    data: {
-      name: name,
-      pin:  state.pins[name] || "",
-      tabs: {...tabs},
-      useAllowance: !!((ad.checking||0) + (ad.savings||0)),
-      structure: structure,
-      schedule: ad.schedule || "weekly",
-      allowWeekday: ad.weekday !== undefined ? ad.weekday : 1,
-      allowMonthlyDay: ad.monthlyDay || "1",
-      choreRewards: !!(state.config.notify && state.config.notify[name] && state.config.notify[name].choreRewards !== false),
-      allowChk: ad.checking || 0,
-      allowSav: ad.savings  || 0,
-      rateChk: rates.checking || "",
-      rateSav: rates.savings  || "",
-      email: email,
-      notifyEmail: notify.email !== false,
-      notifyChoreRewards: notify.choreRewards !== false,
-      useCalendar: !!(state.config.calendars && state.config.calendars[name]),
-      calendarId: (state.config.calendars && state.config.calendars[name]) || "",
-      celebrationSound: !!(state.usersData && state.usersData[name] && state.usersData[name].celebrationSound),
-      avatar: (state.config.avatars && state.config.avatars[name]) || ""
-    },
-    chores: [], // for existing child we don't touch existing chores from wizard
-    editingFromSummary: 0
-  };
-  openSheet("sheet-wizard");
-  wizardRender();
-}
-
-function wizardClose(){
-  // EXIT_WARN_SHEETS covers the dirty-confirm; we just close gracefully
-  closeSheet("sheet-wizard", false);
-}
-
-function wizardRender(){
-  const wrap = document.getElementById("wizard-body");
-  const progEl = document.getElementById("wizard-progress");
-  const navEl  = document.getElementById("wizard-nav");
-  if(!wrap || !progEl || !navEl) return;
-  const st = wizardState; if(!st) return;
-
-  progEl.innerHTML = `
-    <div class="wizard-progress-bar"><div class="wizard-progress-fill" style="width:${Math.round((st.step/wizardTotalSteps)*100)}%"></div></div>
-    <div class="wizard-progress-text">Step ${st.step} of ${wizardTotalSteps}</div>`;
-
-  // Dispatch per step (v34.1 reorder: 1 Basic, 2 Tabs, 3 Allow?, 4 Allow&Rates,
-  // 5 Email, 6 Calendar, 7 Chores, 8 Streaks, 9 Celebration, 10 Summary)
-  let stepHtml = "";
-  switch(st.step){
-    case 1:  stepHtml = wizardRenderStep1();  break;
-    case 2:  stepHtml = wizardRenderStep2();  break;
-    case 3:  stepHtml = wizardRenderStep3();  break;
-    case 4:  stepHtml = wizardRenderStep4();  break;
-    case 5:  stepHtml = wizardRenderStep5();  break;
-    case 6:  stepHtml = wizardRenderStep6();  break;
-    case 7:  stepHtml = wizardRenderStep7();  break;  // Chores + streak review
-    case 8:  stepHtml = wizardRenderStep8();  break;  // Celebration (was 9)
-    case 9:  stepHtml = wizardRenderStep9();  break;  // Summary (was 10)
-  }
-  wrap.innerHTML = stepHtml;
-
-  // Nav buttons
-  const backDisabled = (st.step === 1);
-  const nextLabel    = st.editingFromSummary ? "Save & Return to Summary" :
-                       (st.step === wizardTotalSteps ? "Done" : "Next");
-  navEl.innerHTML = `
-    <button class="btn btn-ghost" ${backDisabled?"disabled":""} onclick="wizardBack()">‹ Back</button>
-    <button class="btn btn-primary" onclick="wizardNext()">${nextLabel}</button>`;
-
-  // Post-render hooks
-  if(st.step === 1) wizardStep1WireAvatar();        // avatar picker
-  if(st.step === 4) wizardStep4WireLive();
-  if(st.step === 7) wizardStep7RenderChoreList();   // v34.2 — chores step 7 (with streak inline)
-  if(st.step === 9) wizardRenderSummary();           // v34.2 — summary is step 9
-}
-
-function wizardBack(){
-  if(!wizardState) return;
-  if(wizardState.step > 1){ wizardState.step--; wizardRender(); }
-}
-
-function wizardNext(){
-  if(!wizardState) return;
-  if(!wizardValidateCurrentStep()) return;
-  wizardSaveCurrentStep();
-
-  // Handle summary-edit short-circuit (v34.2: summary is now step 9)
-  if(wizardState.editingFromSummary){
-    wizardState.editingFromSummary = 0;
-    wizardState.step = 9;
-    wizardRender();
-    return;
-  }
-
-  // Linear flow with v34.1 branching:
-  //   Step 3 "No allowance" → skip Step 4 (Allowance & Rates), jump to Step 5 (Email)
-  //   Step 6 (Calendar) → if chores tab OFF, skip Steps 7 (Chores) + 8 (Streaks), jump to Step 9 (Celebration)
-  //   Step 9 Done → finish
-  const st = wizardState;
-  if(st.step === 3 && !st.data.useAllowance){ st.step = 5; wizardRender(); return; }
-  if(st.step === 6 && !st.data.tabs.chores){  st.step = 8; wizardRender(); return; } // v34.2 — skip chores→streak, go to celebration
-  if(st.step === wizardTotalSteps){ wizardFinish(); return; }
-
-  st.step++;
-  wizardRender();
-}
-
-function wizardValidateCurrentStep(){
-  const st = wizardState;
-  if(!st) return false;
-  if(st.step === 1){
-    const nameEl = document.getElementById("wiz-name");
-    const pinEl  = document.getElementById("wiz-pin");
-    const msgEl  = document.getElementById("wiz-msg");
-    const name = (nameEl.value||"").trim();
-    const pin  = (pinEl.value||"").trim();
-    if(!name){ msgEl.className="field-msg error"; msgEl.textContent="Display name is required."; return false; }
-    if(!pin || pin.length!==4 || !/^\d{4}$/.test(pin)){ msgEl.className="field-msg error"; msgEl.textContent="PIN must be 4 digits."; return false; }
-    // v35.0 — chore rewards pill required (no default)
-    const cr = document.querySelector('input[name="wiz-chore-rewards"]:checked');
-    if(!cr){ msgEl.className="field-msg error"; msgEl.textContent='Pick Yes or No for chore rewards.'; return false; }
-    // Only validate uniqueness on the FIRST time we create the child
-    if(st.mode === "new" && !st.childName){
-      if((state.users||[]).indexOf(name) !== -1){
-        msgEl.className="field-msg error"; msgEl.textContent='"'+name+'" is already taken.'; return false;
-      }
-      // pin+name collision guard
-      const col = (typeof checkNamePinCollision === "function") ? checkNamePinCollision(name, pin) : {collision:false};
-      if(col.collision){ msgEl.className="field-msg error"; msgEl.textContent=col.reason||"Name/PIN conflict."; return false; }
-    }
-  }
-  // v35.0 — pill requirement validations (no default means user must pick)
-  if(st.step === 2){
-    const d = st.data;
-    if(!d.tabs || (!d.tabs.money && !d.tabs.chores && !d.tabs.loans)){
-      showToast("Pick at least one tab.","error"); return false;
-    }
-  }
-  if(st.step === 3){
-    if(!document.querySelector('input[name="wiz-allow"]:checked')){
-      showToast("Pick Yes or No for allowance.","error"); return false;
-    }
-  }
-  if(st.step === 5){
-    const ne = document.querySelector('input[name="wiz-notify-email-r"]:checked');
-    const nr = document.querySelector('input[name="wiz-notify-rewards-r"]:checked');
-    if(!ne || !nr){ showToast("Pick Yes or No for both email options.","error"); return false; }
-  }
-  if(st.step === 6){
-    if(!document.querySelector('input[name="wiz-cal"]:checked')){
-      showToast("Pick Yes or No for calendar.","error"); return false;
-    }
-  }
-  if(st.step === 8){
-    if(!document.querySelector('input[name="wiz-cele"]:checked')){
-      showToast("Pick Yes or No for celebration sound.","error"); return false;
-    }
-  }
-  return true;
-}
-
-function wizardSaveCurrentStep(){
-  const st = wizardState; if(!st) return;
-  const d = st.data;
-  switch(st.step){
-    case 1: {
-      d.name = (document.getElementById("wiz-name").value||"").trim();
-      d.pin  = (document.getElementById("wiz-pin").value||"").trim();
-      const crEl = document.querySelector('input[name="wiz-chore-rewards"]:checked');
-      d.choreRewards = crEl ? (crEl.value !== "no") : undefined; // v35.0 — undefined when no pick
-      // Progressive save: create child on first time through Step 1
-      if(st.mode === "new" && !st.childName){
-        state.users = state.users || [];
-        state.users.push(d.name);
-        state.pins[d.name]  = d.pin;
-        state.roles[d.name] = "child";
-        getChildData(d.name); // seed empty data
-        state.config.tabs = state.config.tabs || {};
-        state.config.tabs[d.name] = {...d.tabs};
-        state.config.notify = state.config.notify || {};
-        state.config.notify[d.name] = {email:d.notifyEmail, calendar:false, choreRewards:d.notifyChoreRewards && d.choreRewards!==false};
-        // v34.2 — also persist choreRewards display flag set in step 1
-        state.config.notify[d.name].choreRewards = d.choreRewards !== false;
-        state.usersData = state.usersData || {};
-        state.usersData[d.name] = {
-          celebrationSound: d.celebrationSound,
-          createdAt: new Date().toISOString()  // v34.0 — anchor for annual projection anniversary
-        };
-        state.config.parentChildren = state.config.parentChildren || {};
-        state.config.parentChildren[currentUser] = state.config.parentChildren[currentUser] || [];
-        if(state.config.parentChildren[currentUser].indexOf(d.name) === -1){
-          state.config.parentChildren[currentUser].push(d.name);
-        }
-        st.childName = d.name;
-        syncToCloud("Child Created (Wizard Step 1)");
-      } else if(st.mode === "edit" && st.childName && d.name !== st.childName){
-        // Renames not supported by wizard — ignore silently.
-      } else if(st.childName){
-        state.pins[st.childName] = d.pin;
-        syncToCloud("Child PIN Updated (Wizard)");
-      }
-      // v34.1 Item 1 — persist avatar emoji (photo is stored local-only on select)
-      if(st.childName && d._avatarEmoji){
-        state.avatars = state.avatars || {};
-        state.avatars[st.childName] = d._avatarEmoji;
-        syncToCloud("Child Avatar (Wizard)");
-      }
-      break;
-    }
-    case 2: {
-      // v35.0 — tabs already tracked in wizardState.data.tabs via wizardToggleTab; just persist
-      if(st.childName){
-        state.config.tabs[st.childName] = {...d.tabs};
-        syncToCloud("Child Tabs (Wizard)");
-      }
-      break;
-    }
-    case 3: {
-      const yes = document.querySelector('input[name="wiz-allow"]:checked');
-      d.useAllowance = yes && yes.value === "yes";
-      if(!d.useAllowance && st.childName){
-        const data = getChildData(st.childName);
-        data.autoDeposit = {checking:0, savings:0};
-        syncToCloud("Allowance Disabled (Wizard)");
-      }
-      break;
-    }
-    case 4: {
-      const struct = document.querySelector('input[name="wiz-struct"]:checked');
-      d.structure = struct ? struct.value : "both";
-      const sched = document.querySelector('input[name="wiz-sched"]:checked');
-      d.schedule = sched ? sched.value : "weekly";
-      // v34.2 — capture payment day
-      if(d.schedule === "monthly"){
-        d.allowMonthlyDay = document.getElementById("wiz-monthly-day")?.value || "1";
-        d.allowWeekday = undefined;
-      } else {
-        const selDay = document.querySelector("#wiz-day-toggles .day-toggle.selected");
-        d.allowWeekday = selDay ? parseInt(selDay.dataset.day) : 1;
-        d.allowMonthlyDay = undefined;
-      }
-      d.allowChk = readMoney("wiz-allow-chk")||0;
-      d.allowSav = readMoney("wiz-allow-sav")||0;
-      // v34.1 Item 8 — percent inputs now use readPercent helper
-      d.rateChk  = readPercent("wiz-rate-chk");
-      d.rateSav  = readPercent("wiz-rate-sav");
-      if(isNaN(d.rateChk)) d.rateChk = "";
-      if(isNaN(d.rateSav)) d.rateSav = "";
-      if(d.structure === "checking") d.allowSav = 0;
-      if(d.structure === "savings")  d.allowChk = 0;
-      if(st.childName){
-        const data = getChildData(st.childName);
-        data.autoDeposit = data.autoDeposit || {};
-        data.autoDeposit.checking = d.allowChk;
-        data.autoDeposit.savings  = d.allowSav;
-        data.autoDeposit.schedule = d.schedule;
-        if(d.schedule === "monthly") data.autoDeposit.monthlyDay = d.allowMonthlyDay;
-        else                         data.autoDeposit.weekday = (d.allowWeekday !== undefined ? d.allowWeekday : 1);
-        data.rates = data.rates || {};
-        data.rates.checking = (d.rateChk === "" ? 0 : d.rateChk);
-        data.rates.savings  = (d.rateSav === "" ? 0 : d.rateSav);
-        syncToCloud("Allowance & Rates (Wizard)");
-      }
-      break;
-    }
-    case 5: {
-      // Email (v34.1 — was step 6)
-      d.email = (document.getElementById("wiz-email").value||"").trim();
-      d.email                 = (document.getElementById("wiz-email") && document.getElementById("wiz-email").value.trim()) || "";
-      const ne = document.querySelector('input[name="wiz-notify-email-r"]:checked');
-      const nr = document.querySelector('input[name="wiz-notify-rewards-r"]:checked');
-      d.notifyEmail           = ne ? (ne.value === "yes") : undefined;
-      d.notifyChoreRewards    = nr ? (nr.value === "yes") : undefined;
-      if(st.childName){
-        state.config.emails = state.config.emails || {};
-        state.config.emails[st.childName] = d.email;
-        state.config.notify = state.config.notify || {};
-        state.config.notify[st.childName] = state.config.notify[st.childName] || {};
-        state.config.notify[st.childName].email = d.notifyEmail;
-        state.config.notify[st.childName].choreRewards = d.notifyChoreRewards;
-        syncToCloud("Child Email Prefs (Wizard)");
-      }
-      break;
-    }
-    case 6: {
-      // Calendar (v34.1 — was step 7); v35.0 — undefined when no pill selected
-      const yes = document.querySelector('input[name="wiz-cal"]:checked');
-      d.useCalendar = yes ? (yes.value === "yes") : undefined;
-      d.calendarId  = (document.getElementById("wiz-cal-id") && document.getElementById("wiz-cal-id").value.trim()) || "";
-      if(st.childName){
-        state.config.calendars = state.config.calendars || {};
-        state.config.notify    = state.config.notify    || {};
-        state.config.notify[st.childName] = state.config.notify[st.childName] || {};
-        if(d.useCalendar && d.calendarId){
-          state.config.calendars[st.childName] = d.calendarId;
-          state.config.notify[st.childName].calendar = true;
-        } else {
-          delete state.config.calendars[st.childName];
-          state.config.notify[st.childName].calendar = false;
-        }
-        syncToCloud("Child Calendar (Wizard)");
-      }
-      break;
-    }
-    case 7: {
-      // Chores (v34.1 — was step 5; chores persist as they're added)
-      break;
-    }
-    case 8: {
-      // Streak review (v34.1 — new step; edits happen via inline re-open of the chore sheet)
-      break;
-    }
-    case 8: {
-      // Celebration sound (v34.2 — was step 9)
-      const ce = document.querySelector('input[name="wiz-cele"]:checked');
-      d.celebrationSound = ce ? (ce.value === "yes") : undefined;
-      if(st.childName){
-        state.usersData = state.usersData || {};
-        state.usersData[st.childName] = state.usersData[st.childName] || {};
-        state.usersData[st.childName].celebrationSound = d.celebrationSound;
-        syncToCloud("Child Finishing Touches (Wizard)");
-      }
-      break;
-    }
-    case 9: {
-      // Summary (v34.2) — no inputs to save, wizardFinish() handles commit
-      break;
-    }
-  }
-}
-
-function wizardFinish(){
-  const name = wizardState && wizardState.childName;
-  // Close the wizard sheet first so the setup-complete sheet layers over the
-  // parent panel cleanly.
-  wizardState = null;
-  closeSheet("sheet-wizard", true);
-  if(name){
-    syncToCloud("Child Setup Complete");
-    showToast('Setup complete for "'+name+'". 🎉',"success",3000);
-  }
-  try { renderMyChildren && renderMyChildren(); } catch(e){}
-  try { renderParentTabBar && renderParentTabBar(); } catch(e){}
-
-  // v34.0 — Open the setup-complete BOTTOM SHEET (was an openModal prompt
-  // in v33.1; modal was centered/short and didn't match the rest of the
-  // wizard flow). Deferred via setTimeout so the wizard's close animation
-  // can finish before this sheet slides up.
-  setTimeout(()=>{
-    const nameEl = document.getElementById("setup-complete-child-name");
-    if(nameEl) nameEl.textContent = name || "Child";
-    openSheet("sheet-setup-complete");
-  }, 350);
-}
-
-// v34.0 — Handler for "Yes, add another" on the setup-complete sheet.
-// Closes this sheet, then opens the wizard for another child.
-function setupCompleteAddAnother(){
-  closeSheet("sheet-setup-complete", true);
-  setTimeout(()=>{
-    try { startWizardForNewChild(); } catch(e){}
-  }, 250);
-}
-
-function wizardJumpFromSummary(stepN){
-  if(!wizardState) return;
-  wizardState.editingFromSummary = stepN;
-  wizardState.step = stepN;
-  wizardRender();
-}
-
-// ── Step renderers ────────────────────────────────────────────────
-
-function wizardRenderStep1(){
-  const d = wizardState.data;
-  const childName = wizardState.childName || d.name || "";
-  const curEmoji = d._avatarEmoji || (childName && state.avatars && state.avatars[childName]) || "🙂";
-  const hasPhoto = childName ? !!(typeof getAvatarPhoto === "function" && getAvatarPhoto(childName)) : false;
-  const emojiGrid = (typeof AVATAR_EMOJIS !== "undefined" ? AVATAR_EMOJIS : ["🙂","😀","😎","🐱","🐶","🦊","🐼","🐸","🦄","🐵","🐯","🦁"])
-    .map(e => `<button type="button" class="${e===curEmoji?"selected":""}" onclick="wizardStep1PickEmoji('${e}')">${e}</button>`)
-    .join("");
-  const photoBtn = childName
-    ? (hasPhoto
-        ? `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="wizardStep1RemovePhoto()">Remove Photo</button>`
-        : `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="document.getElementById('wiz-avatar-file').click()">Upload Photo</button>`)
-    : `<button type="button" class="btn btn-outline btn-sm" style="width:auto;margin:0;" onclick="wizardStep1StartPhotoFlow()">Add Photo</button>`;
-  return `
-    <h3 class="wizard-step-title">${wizardState.mode==="edit" ? "Edit " + (wizardState.childName||"Child") + "'s Account" : "Set Up Your Child's Account"}</h3>
-    <div class="wizard-helper" style="margin-bottom:14px;">${wizardState.mode==="edit" ? "Update the settings below. Changes save as you go." : "Let's get started! We'll walk through your child's profile, allowance, chores, and more."}</div>
-    <label class="field-label">Display Name <span class="req-star">*</span></label>
-    <input type="text" id="wiz-name" value="${(d.name||"").replace(/"/g,"&quot;")}" placeholder="e.g. Linnea">
-    <label class="field-label">PIN (4 digits) <span class="req-star">*</span></label>
-    <input type="text" id="wiz-pin" class="pin-input" maxlength="4" inputmode="numeric" autocomplete="off" value="${(d.pin||"")}" placeholder="••••">
-    <div class="field-msg" id="wiz-msg"></div>
-    <label class="field-label" style="margin-top:14px;">Do you want your child to earn rewards for chores?</label>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-chore-rewards" value="yes" ${d.choreRewards===true?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-chore-rewards" value="no"  ${d.choreRewards===false?"checked":""}> No</label>
-    </div>
-    <div class="wizard-helper">Your child can change their PIN from their own settings. If they forget it, you can reset it from Settings → My Children.</div>
-    <label class="field-label" style="margin-top:14px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-user"/></svg> Avatar</label>
-    <div class="avatar-picker-current" id="wiz-avatar-current">${curEmoji}</div>
-    <div class="avatar-picker-grid" id="wiz-avatar-grid">${emojiGrid}</div>
-    <div style="margin-top:8px;">${photoBtn}</div>
-    <input type="file" id="wiz-avatar-file" accept="image/*" style="display:none;" onchange="wizardStep1UploadPhoto(event)">`;
-}
-
-function wizardStep1WireAvatar(){ /* no-op — rendering does the work */ }
-
-// v35.0 — Item 7: Allow adding photo from Step 1 BEFORE advancing.
-// If the child hasn't been created yet, validate + save Step 1 first
-// (which creates the child without advancing), then open the file picker.
-function wizardStep1StartPhotoFlow(){
-  const st = wizardState; if(!st) return;
-  if(!wizardValidateCurrentStep()) return;
-  if(!st.childName){
-    wizardSaveCurrentStep();  // persists child creation; does NOT advance step
-    wizardRender();           // re-render so photo button reflects new childName
-    // Defer file picker click to next tick so DOM is fresh
-    setTimeout(()=>{
-      const el = document.getElementById("wiz-avatar-file");
-      if(el) el.click();
-    }, 30);
-  } else {
-    const el = document.getElementById("wiz-avatar-file");
-    if(el) el.click();
-  }
-}
-window.wizardStep1StartPhotoFlow = wizardStep1StartPhotoFlow;
-
-function wizardStep1PickEmoji(emoji){
-  if(!wizardState) return;
-  wizardState.data._avatarEmoji = emoji;
-  // Live update selected class without re-render
-  const grid = document.getElementById("wiz-avatar-grid");
-  if(grid){
-    grid.querySelectorAll("button").forEach(btn => {
-      btn.classList.toggle("selected", btn.textContent === emoji);
-    });
-  }
-  const cur = document.getElementById("wiz-avatar-current");
-  if(cur) cur.innerHTML = emoji + ' <span style="font-size:.78rem;color:var(--muted);margin-left:8px;">Emoji selected</span>';
-  // Persist immediately if the child record already exists
-  if(wizardState.childName){
-    state.avatars = state.avatars || {};
-    state.avatars[wizardState.childName] = emoji;
-    syncToCloud("Child Avatar (Wizard)");
-  }
-}
-window.wizardStep1PickEmoji = wizardStep1PickEmoji;
-
-function wizardStep1UploadPhoto(ev){
-  if(!wizardState || !wizardState.childName) return;
-  const file = ev && ev.target && ev.target.files && ev.target.files[0];
-  if(!file) return;
-  if(typeof resizeImageFileTo200 !== "function"){ showToast("Image resize unavailable.", "error"); return; }
-  resizeImageFileTo200(file).then(dataUrl => {
-    try { localStorage.setItem("fb_avatar_" + wizardState.childName, dataUrl); } catch(e){}
-    wizardRender();
-    showToast("Photo set.", "success");
-  }).catch(()=>{
-    showToast("Couldn't process image.", "error");
-  });
-}
-window.wizardStep1UploadPhoto = wizardStep1UploadPhoto;
-
-function wizardStep1RemovePhoto(){
-  if(!wizardState || !wizardState.childName) return;
-  try { localStorage.removeItem("fb_avatar_" + wizardState.childName); } catch(e){}
-  wizardRender();
-  showToast("Photo removed.", "success");
-}
-window.wizardStep1RemovePhoto = wizardStep1RemovePhoto;
-
-function wizardRenderStep2(){
-  const d = wizardState.data;
-  // v35.0 — multi-select button pills (was checkboxes). No default selection.
-  // This also eliminates the v34.3 "Loans checkbox crashes wizard" regression.
-  return `
-    <h3 class="wizard-step-title">Tabs</h3>
-    <div class="wizard-helper">Decide which features ${d.name||"this child"} will see. Tap to toggle. Pick at least one.</div>
-    <div class="wizard-pill-group wizard-pill-multi">
-      <button type="button" class="wizard-pill-btn ${d.tabs.money?"selected":""}"  onclick="wizardToggleTab('money',this)">Money</button>
-      <button type="button" class="wizard-pill-btn ${d.tabs.chores?"selected":""}" onclick="wizardToggleTab('chores',this)">Chores</button>
-      <button type="button" class="wizard-pill-btn ${d.tabs.loans?"selected":""}"  onclick="wizardToggleTab('loans',this)">Loans</button>
-    </div>`;
-}
-
-// v35.0 — toggle a tab pill; updates wizardState.data.tabs without re-rendering
-function wizardToggleTab(tab, btn){
-  const d = wizardState.data;
-  d.tabs = d.tabs || {};
-  d.tabs[tab] = !d.tabs[tab];
-  btn.classList.toggle("selected", !!d.tabs[tab]);
-}
-
-function wizardRenderStep3(){
-  const d = wizardState.data;
-  return `
-    <h3 class="wizard-step-title">Allowance</h3>
-    <div class="wizard-helper">Do you want to use this app to manage ${d.name||"this child"}'s allowance?</div>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="yes" ${d.useAllowance===true?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-allow" value="no"  ${d.useAllowance===false?"checked":""}> No</label>
-    </div>`;
-}
-
-function wizardRenderStep4(){
-  const d = wizardState.data;
-  return `
-    <h3 class="wizard-step-title">Allowance & Interest</h3>
-    <div class="wizard-helper">Account structure</div>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="checking" ${d.structure==="checking"?"checked":""}> Checking</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="savings"  ${d.structure==="savings"?"checked":""}> Savings</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-struct" value="both"     ${d.structure==="both"?"checked":""}> Both</label>
-    </div>
-    <div class="wizard-helper">Schedule</div>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="weekly"   ${d.schedule==="weekly"?"checked":""} onchange="wizardStep4UpdateSchedUI()"> Weekly</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="biweekly" ${d.schedule==="biweekly"?"checked":""} onchange="wizardStep4UpdateSchedUI()"> Biweekly</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-sched" value="monthly"  ${d.schedule==="monthly"?"checked":""} onchange="wizardStep4UpdateSchedUI()"> Monthly</label>
-    </div>
-    <!-- v34.2 — Payment day selector (weekly/biweekly: day-of-week toggles; monthly: day-of-month select) -->
-    <div id="wiz-day-wrap" style="${d.schedule==="monthly"?"display:none":""}">
-      <label class="field-label" id="wiz-day-label">${d.schedule==="biweekly"?"Day of Week (every other week)":"Day of Week"}</label>
-      <div class="day-toggles" id="wiz-day-toggles">
-        ${["Su","Mo","Tu","We","Th","Fr","Sa"].map((lbl,i)=>`<button type="button" class="day-toggle${(d.allowWeekday!==undefined&&d.allowWeekday===i)||(d.allowWeekday===undefined&&i===1)?" selected":""}" data-day="${i}" onclick="wizardToggleAllowDay(this)">${lbl}</button>`).join("")}
-      </div>
-    </div>
-    <div id="wiz-monthly-wrap" style="${d.schedule==="monthly"?"":"display:none"}">
-      <label class="field-label">Day of Month</label>
-      <select id="wiz-monthly-day" onchange=""></select>
-    </div>
-    <div class="row">
-      <div class="col" id="wiz-col-chk"><label class="field-label">Checking each allowance payment</label><input type="number" class="money-input" id="wiz-allow-chk" step="0.01" min="0" value="${d.allowChk||""}"></div>
-      <div class="col" id="wiz-col-sav"><label class="field-label">Savings each allowance payment</label><input type="number" class="money-input" id="wiz-allow-sav" step="0.01" min="0" value="${d.allowSav||""}"></div>
-    </div>
-    <div class="row">
-      <div class="col"><label class="field-label">Checking APR %</label><input type="number" class="percent-input" id="wiz-rate-chk" step="0.01" min="0" value="${d.rateChk===""?"":d.rateChk}" placeholder="e.g. 1.0"></div>
-      <div class="col"><label class="field-label">Savings APR %</label><input type="number" class="percent-input" id="wiz-rate-sav" step="0.01" min="0" value="${d.rateSav===""?"":d.rateSav}" placeholder="e.g. 5.0"></div>
-    </div>
-    <div class="wizard-live-calc" id="wiz-live-calc"></div>`;
-}
-
-function wizardStep4WireLive(){
-  const ids = ["wiz-allow-chk","wiz-allow-sav","wiz-rate-chk","wiz-rate-sav"];
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.addEventListener("input", wizardStep4UpdateLive);
-  });
-  document.querySelectorAll('input[name="wiz-struct"], input[name="wiz-sched"]').forEach(r=>{
-    r.addEventListener("change", ()=>{ wizardStep4ToggleStructCols(); wizardStep4UpdateLive(); });
-  });
-  wizardStep4ToggleStructCols();
-  wizardStep4UpdateLive();
-  wizardStep4PopulateMonthlyDay(); // v34.2 — populate day-of-month options
-}
-
-// v34.2 — Toggle between day-of-week and day-of-month pickers when schedule changes
-function wizardStep4UpdateSchedUI(){
-  const sched = (document.querySelector('input[name="wiz-sched"]:checked')||{}).value||"weekly";
-  const dayWrap = document.getElementById("wiz-day-wrap");
-  const monWrap = document.getElementById("wiz-monthly-wrap");
-  const dayLbl  = document.getElementById("wiz-day-label");
-  if(dayWrap) dayWrap.style.display = sched==="monthly" ? "none" : "";
-  if(monWrap) monWrap.style.display = sched==="monthly" ? "" : "none";
-  if(dayLbl)  dayLbl.textContent = sched==="biweekly" ? "Day of Week (every other week)" : "Day of Week";
-  wizardStep4UpdateLive();
-}
-
-function wizardStep4PopulateMonthlyDay(){
-  const sel = document.getElementById("wiz-monthly-day");
-  if(!sel || sel.options.length > 0) return;
-  for(let i=1;i<=28;i++) sel.appendChild(new Option(i+(i===1?"st":i===2?"nd":i===3?"rd":"th"), String(i)));
-  ["last-2","last-1","last"].forEach(v=>{
-    const lbl = v==="last"?"Last day":v==="last-1"?"2nd to last":"3rd to last";
-    sel.appendChild(new Option(lbl, v));
-  });
-  // restore saved value
-  const saved = wizardState && wizardState.data && wizardState.data.allowMonthlyDay;
-  if(saved) sel.value = String(saved);
-}
-
-function wizardToggleAllowDay(btn){
-  document.querySelectorAll("#wiz-day-toggles .day-toggle").forEach(b=>b.classList.remove("selected"));
-  btn.classList.add("selected");
-}
-
-function wizardStep4ToggleStructCols(){
-  const struct = (document.querySelector('input[name="wiz-struct"]:checked')||{}).value || "both";
-  const chkCol = document.getElementById("wiz-col-chk");
-  const savCol = document.getElementById("wiz-col-sav");
-  if(chkCol) chkCol.style.display = (struct === "savings") ? "none" : "";
-  if(savCol) savCol.style.display = (struct === "checking") ? "none" : "";
-}
-
-function wizardStep4UpdateLive(){
-  const calcEl = document.getElementById("wiz-live-calc");
-  if(!calcEl) return;
-  // Push form values into a temp child for the calc engine, without touching state.
-  // We do a quick inline FV calc instead to keep this cheap and avoid mutating state.
-  const struct = (document.querySelector('input[name="wiz-struct"]:checked')||{}).value || "both";
-  const sched  = (document.querySelector('input[name="wiz-sched"]:checked')||{}).value  || "weekly";
-  const chk    = readMoney("wiz-allow-chk")||0;
-  const sav    = readMoney("wiz-allow-sav")||0;
-  const rChk   = (parseFloat((document.getElementById("wiz-rate-chk")||{}).value)||0)/100/12;
-  const rSav   = (parseFloat((document.getElementById("wiz-rate-sav")||{}).value)||0)/100/12;
-  const rHigh  = Math.max(rChk, rSav);
-  const cycles = {weekly:52, biweekly:26, monthly:12}[sched] || 0;
-  const chkUse = (struct==="savings")  ? 0 : chk;
-  const savUse = (struct==="checking") ? 0 : sav;
-  const annualDeposited = (chkUse + savUse) * cycles;
-  const perWeek = cycles ? (annualDeposited / 52) : 0;
-
-  function fv(perCycle, n, rate){
-    if(!perCycle || !n) return 0;
-    let t = 0;
-    for(let k=1; k<=n; k++){
-      const monthsRem = Math.max(0, 12 - k*(12/n));
-      t += perCycle * Math.pow(1+rate, monthsRem);
-    }
-    return t;
-  }
-  const staysPut = fv(chkUse, cycles, rChk) + fv(savUse, cycles, rSav);
-  const gamesIt  = fv(chkUse + savUse, cycles, rHigh);
-
-  calcEl.innerHTML = `
-    <div class="wizard-calc-row"><span>Annual allowance deposited</span><strong>${fmt(annualDeposited)}</strong></div>
-    <div class="wizard-calc-row"><span>Per-week equivalent</span><strong>${fmt(perWeek)}</strong></div>
-    <div class="wizard-calc-row"><span>Max annual — stays put</span><strong>${fmt(staysPut)}</strong></div>
-    <div class="wizard-calc-row wizard-calc-row-warn"><span>Max annual — games it (highest-yield)</span><strong>${fmt(gamesIt)}</strong></div>`;
-}
-
-function wizardRenderStep5(){
-  const d = wizardState.data;
-  return `
-    <h3 class="wizard-step-title">Email Notifications</h3>
-    <label class="field-label">Child email address</label>
-    <input type="email" id="wiz-email" value="${(d.email||"").replace(/"/g,"&quot;")}" placeholder="optional">
-    <label class="field-label" style="margin-top:12px;">Email on events?</label>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-notify-email-r" value="yes" ${d.notifyEmail===true?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-notify-email-r" value="no"  ${d.notifyEmail===false?"checked":""}> No</label>
-    </div>
-    <label class="field-label" style="margin-top:12px;">Chore reward emails?</label>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-notify-rewards-r" value="yes" ${d.notifyChoreRewards===true?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-notify-rewards-r" value="no"  ${d.notifyChoreRewards===false?"checked":""}> No</label>
-    </div>
-    <div class="wizard-helper">Monthly statements and event alerts go to this address.</div>`;
-}
-
-function wizardRenderStep6(){
-  const d = wizardState.data;
-  return `
-    <h3 class="wizard-step-title">Google Calendar</h3>
-    <div class="wizard-helper">Would you like to integrate chores into Google Calendar? Chores can sync as events with reminders; recurring schedules show up automatically.</div>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="yes" ${d.useCalendar===true?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display=''"> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-cal" value="no"  ${d.useCalendar===false?"checked":""} onchange="document.getElementById('wiz-cal-row').style.display='none'"> No</label>
-    </div>
-    <div id="wiz-cal-row" style="display:${d.useCalendar===true?"":"none"}">
-      <label class="field-label">Calendar ID</label>
-      <input type="text" id="wiz-cal-id" value="${(d.calendarId||"").replace(/"/g,"&quot;")}" placeholder="childname@group.calendar.google.com">
-      <a class="btn btn-outline" href="docs/calendar-setup-guide.pdf" target="_blank" rel="noopener"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-download-simple"/></svg> Download Setup Guide</a>
-    </div>`;
-}
-
-// v34.2 — Step 7: Chores + inline streak review. Calendar reminder option only shown if
-// calendar was configured in step 6. Streak bonus shown per-chore inline.
-function wizardRenderStep7(){
-  const d = wizardState.data;
-  const hasCalendar = !!(d.useCalendar && d.calendarId);
-  return `
-    <h3 class="wizard-step-title">Chores</h3>
-    <div class="wizard-helper">Add recurring chores for ${d.name||"this child"}. One-offs can be added later. Tap a chore to set streak bonuses inline.</div>
-    ${!hasCalendar ? '<div class="info-box" style="margin-bottom:8px;font-size:.75rem;">Calendar reminders unavailable — no calendar was set up in Step 6.</div>' : ""}
-    <div class="wizard-chore-list" id="wiz-chore-list"></div>
-    <button class="btn btn-secondary" onclick="wizardAddChoreStart()"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-plus-circle"/></svg> Add Chore</button>
-    <div class="wizard-chore-totals" id="wiz-chore-totals"></div>`;
-}
-
-// v34.2 — Step 8 = Celebration + Share Child
-function wizardRenderStep8(){
-  const d = wizardState.data;
-  const childName = wizardState.childName || "";
-  return `
-    <h3 class="wizard-step-title">Celebration &amp; Sharing 🎉</h3>
-    <div class="wizard-helper">When ${d.name||"your child"} completes a chore, a celebration plays. Milestones like savings goals and streak rewards also celebrate.</div>
-    <label class="field-label">Celebration sound?</label>
-    <div class="wizard-pill-group">
-      <label class="wizard-pill"><input type="radio" name="wiz-cele" value="yes" ${d.celebrationSound===true?"checked":""}> Yes</label>
-      <label class="wizard-pill"><input type="radio" name="wiz-cele" value="no"  ${d.celebrationSound===false?"checked":""}> No</label>
-    </div>
-    ${childName ? `
-    <div class="reports-divider" style="margin-top:20px;">Share Child</div>
-    <div class="wizard-helper">Share ${childName} with another parent account so they can also manage this child.</div>
-    <button class="btn btn-outline" onclick="openShareChildSheet('${childName}')" style="margin-top:4px;"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-share-network"/></svg> Share ${childName}</button>` : ""}`;
-}
-
-function wizardStep8RenderStreaksList(){
-  const listEl = document.getElementById("wiz-streaks-list");
-  const emptyEl = document.getElementById("wiz-streaks-empty");
-  if(!listEl) return;
-  const name = wizardState.childName;
-  const data = name ? getChildData(name) : {chores:[]};
-  const chores = (data.chores||[]).filter(c => c.schedule && c.schedule !== "once");
-  if(!chores.length){
-    listEl.innerHTML = "";
-    if(emptyEl) emptyEl.classList.remove("hidden");
-    return;
-  }
-  if(emptyEl) emptyEl.classList.add("hidden");
-  listEl.innerHTML = chores.map(c => {
-    const hasStreak = !!(c.streakMilestone && c.streakReward);
-    const streakTxt = hasStreak
-      ? `Every ${c.streakMilestone} in a row → +${fmt(c.streakReward)}`
-      : `<span style="color:var(--muted);font-style:italic;">No streak bonus</span>`;
-    return `
-      <div class="wizard-chore-item">
-        <div class="wiz-chore-main">
-          <div class="wiz-chore-name">${c.name||""}</div>
-          <div class="wiz-chore-meta">${streakTxt}</div>
-        </div>
-        <div class="wiz-chore-actions">
-          <button class="btn btn-sm btn-outline" style="width:auto;margin:0;padding:6px 10px;" onclick="wizardEditChoreStart('${c.id}')">Edit</button>
-        </div>
-      </div>`;
-  }).join("");
-}
-
-// v34.2 — Step 9 = Summary (was step 10)
-function wizardRenderStep9(){
-  return `
-    <h3 class="wizard-step-title">Review & Confirm</h3>
-    <div id="wiz-summary"></div>`;
-}
-
-function wizardRenderStep9_DELETED(){
-  return `
-    <h3 class="wizard-step-title">Review & Confirm</h3>
-    <div id="wiz-summary"></div>`;
-}
-
-function wizardRenderSummary(){
-  const wrap = document.getElementById("wiz-summary");
-  if(!wrap) return;
-  const d = wizardState.data;
-  const name = wizardState.childName || d.name;
-  const r = name ? calcMaxAnnualEarnings(name) : {allowance:0,chores:0,staysPut:0,gamesIt:0};
-  const schedLabel = {weekly:"Weekly",biweekly:"Biweekly",monthly:"Monthly"}[d.schedule] || d.schedule;
-  const choresArr = name ? (getChildData(name).chores||[]).filter(c=>c.schedule!=="once") : [];
-  const streakCount = choresArr.filter(c => c.streakMilestone && c.streakReward).length;
-  wrap.innerHTML = `
-    <div class="wiz-summary-totals">
-      <div class="wizard-calc-row"><span>Allowance / yr</span><strong>${fmt(r.allowance)}</strong></div>
-      <div class="wizard-calc-row"><span>Chores / yr (max)</span><strong>${fmt(r.chores)}</strong></div>
-      <div class="wizard-calc-row"><span>Stays put</span><strong>${fmt(r.staysPut)}</strong></div>
-      <div class="wizard-calc-row wizard-calc-row-warn"><span>Games it</span><strong>${fmt(r.gamesIt)}</strong></div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Basic</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(1)">Edit</button></div>
-      <div>Name: ${d.name||"—"} • PIN: ••••</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Tabs</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(2)">Edit</button></div>
-      <div>${d.tabs.money?"Money ":""}${d.tabs.chores?"Chores ":""}${d.tabs.loans?"Loans":""}</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Allowance</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(3)">Edit</button></div>
-      <div>${d.useAllowance ? (schedLabel+" • Chk "+fmt(d.allowChk)+" • Sav "+fmt(d.allowSav)+" • APR "+(d.rateChk||0)+"% / "+(d.rateSav||0)+"%") : "Disabled"}</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Email</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(5)">Edit</button></div>
-      <div>${d.email||"(none)"} • ${d.notifyEmail?"events on":"events off"}</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Calendar</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(6)">Edit</button></div>
-      <div>${d.useCalendar ? (d.calendarId||"(yes)") : "No"}</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Chores</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(7)">Edit</button></div>
-      <div>${choresArr.length} recurring chore(s)</div>
-    </div>
-    <div class="wiz-summary-section">
-      <div class="wiz-sum-head"><strong>Celebration</strong><button class="btn btn-sm btn-outline" style="width:auto;margin:0;" onclick="wizardJumpFromSummary(8)">Edit</button></div>
-      <div>Celebration sound: ${d.celebrationSound?"on":"off"}</div>
-    </div>`;
-}
-
-function wizardStep7RenderChoreList(){
-  const listEl = document.getElementById("wiz-chore-list");
-  const totalsEl = document.getElementById("wiz-chore-totals");
-  if(!listEl || !totalsEl) return;
-  const name = wizardState.childName;
-  const data = name ? getChildData(name) : {chores:[]};
-  const chores = (data.chores||[]).filter(c => c.schedule && c.schedule !== "once");
-  if(!chores.length){
-    listEl.innerHTML = '<div style="color:var(--muted);font-size:.8rem;padding:10px 0;">No chores yet.</div>';
-  } else {
-    listEl.innerHTML = chores.map(c => {
-      const occ =
-        c.schedule === "daily"    ? 365 :
-        c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*52 : 52) :
-        c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*26 : 26) :
-        c.schedule === "monthly"  ? 12 : 0;
-      const annual = (parseFloat(c.amount)||0) * occ;
-      const hasStreak = !!(c.streakMilestone && c.streakReward);
-      const streakTxt = hasStreak
-        ? `<span style="color:var(--secondary);font-size:.72rem;">⚡ Every ${c.streakMilestone} → +${fmt(c.streakReward)}</span>`
-        : `<span style="color:var(--muted);font-size:.72rem;font-style:italic;">No streak bonus — Edit to add</span>`;
-      return `
-        <div class="wizard-chore-item">
-          <div class="wiz-chore-main">
-            <div class="wiz-chore-name">${c.name||""}</div>
-            <div class="wiz-chore-meta">${({daily:"Daily",weekly:"Weekly",biweekly:"Biweekly",monthly:"Monthly"})[c.schedule]||c.schedule} • ${fmt(c.amount)} • max ${fmt(annual)}/yr</div>
-            <div style="margin-top:2px;">${streakTxt}</div>
-          </div>
-          <div class="wiz-chore-actions">
-            <button class="btn btn-sm btn-outline" style="width:auto;margin:0;padding:6px 10px;" onclick="wizardEditChoreStart('${c.id}')">Edit</button>
-            <button class="btn btn-sm btn-ghost" style="width:auto;margin:0;padding:6px 10px;color:var(--danger);" onclick="wizardDeleteChore('${c.id}')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-trash"/></svg></button>
-          </div>
-        </div>`;
-    }).join("");
-  }
-  // Totals card
-  let totalAnnual = 0;
-  chores.forEach(c => {
-    const occ =
-      c.schedule === "daily"    ? 365 :
-      c.schedule === "weekly"   ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*52 : 52) :
-      c.schedule === "biweekly" ? ((c.weekdays && c.weekdays.length) ? c.weekdays.length*26 : 26) :
-      c.schedule === "monthly"  ? 12 : 0;
-    totalAnnual += (parseFloat(c.amount)||0) * occ;
-  });
-  totalsEl.innerHTML = chores.length ? `<div class="wizard-calc-row"><span>Max annual chore earnings</span><strong>${fmt(totalAnnual)}</strong></div>` : "";
-}
-
-function wizardAddChoreStart(){
-  if(!wizardState || !wizardState.childName){ showToast("Finish Step 1 first.","error"); return; }
-  // Reuse the main chore creator sheet with the activeChild temporarily set to
-  // this wizard child, so createChore() targets the right data.
-  activeChild = wizardState.childName;
-  editingChoreId = null;
-  try { resetChoreForm(); } catch(e){}
-  // Hide the One-time option inside the wizard flow (recurring only)
-  const schedSel = document.getElementById("chore-schedule");
-  if(schedSel){
-    schedSel.value = "weekly";
-    const onceOpt = schedSel.querySelector('option[value="once"]');
-    if(onceOpt){ onceOpt.dataset.wizardHidden="1"; onceOpt.style.display="none"; }
-    try { onScheduleChange(); } catch(e){}
-  }
-  // v34.2 — hide reminder-time if wizard has no calendar configured
-  const hasCalendar = !!(wizardState.data.useCalendar && wizardState.data.calendarId);
-  const reminderRow = document.getElementById("chore-reminder-time")?.closest(".row,.section-block") ||
-                      document.getElementById("chore-reminder-time")?.parentElement;
-  if(reminderRow) reminderRow.style.display = hasCalendar ? "" : "none";
-  // v34.2 — hide streak start-at field in wizard
-  const streakStartRow = document.getElementById("chore-streak-start")?.closest(".row,.section-block") ||
-                         document.getElementById("chore-streak-start")?.parentElement;
-  if(streakStartRow) streakStartRow.style.display = "none";
-  // v34.2 — hide reward $ and streak reward when choreRewards=false; show $0 hint when true
-  const noRewards = wizardState.data.choreRewards === false;
-  const amtRow = document.getElementById("chore-amount")?.closest(".row");
-  if(amtRow) amtRow.style.display = noRewards ? "none" : "";
-  const streakRewardRow = document.getElementById("chore-streak-reward")?.closest(".row,.section-block") ||
-                          document.getElementById("chore-streak-reward")?.parentElement;
-  if(streakRewardRow) streakRewardRow.style.display = noRewards ? "none" : "";
-  // $0 hint
-  const amtHint = document.getElementById("chore-amount-wiz-hint");
-  if(!amtHint && !noRewards){
-    const amtEl = document.getElementById("chore-amount");
-    if(amtEl){ const h=document.createElement("div"); h.id="chore-amount-wiz-hint"; h.className="wizard-helper"; h.style.marginTop="-8px"; h.style.marginBottom="8px"; h.textContent="$0 is OK for unpaid chores."; amtEl.closest(".row")?.after(h); }
-  }
-  openSheet("sheet-chore-creator");
-}
-
-function wizardEditChoreStart(choreId){
-  if(!wizardState || !wizardState.childName) return;
-  activeChild = wizardState.childName;
-  try { editChore(choreId); } catch(e){}
-  // v34.2 — gate reminder-time visibility on calendar config
-  const hasCalendar = !!(wizardState.data.useCalendar && wizardState.data.calendarId);
-  const reminderRow = document.getElementById("chore-reminder-time")?.closest(".row,.section-block") ||
-                      document.getElementById("chore-reminder-time")?.parentElement;
-  if(reminderRow) reminderRow.style.display = hasCalendar ? "" : "none";
-  const streakStartRow2 = document.getElementById("chore-streak-start")?.closest(".row,.section-block") ||
-                          document.getElementById("chore-streak-start")?.parentElement;
-  if(streakStartRow2) streakStartRow2.style.display = "none";
-  const schedSel = document.getElementById("chore-schedule");
-  if(schedSel){
-    const onceOpt = schedSel.querySelector('option[value="once"]');
-    if(onceOpt){ onceOpt.dataset.wizardHidden="1"; onceOpt.style.display="none"; }
-  }
-  openSheet("sheet-chore-creator");
-}
-
-function wizardDeleteChore(choreId){
-  if(!wizardState || !wizardState.childName) return;
-  const data = getChildData(wizardState.childName);
-  openModal({
-    icon:"🗑️", title:"Delete chore?", body:"This cannot be undone.",
-    confirmText:"Delete", confirmClass:"btn-danger",
-    onConfirm:()=>{
-      data.chores = (data.chores||[]).filter(c => c.id !== choreId);
-      syncToCloud("Chore Deleted (Wizard)");
-      wizardStep7RenderChoreList();
-    }
-  });
-}
-
-// Hook: when the chore creator sheet closes, if we're in the wizard re-render the list
-(function wireWizardChoreCreatorClose(){
-  const origCreate = typeof createChore === "function" ? createChore : null;
-  if(!origCreate) return;
-  window.createChore = function(){
-    const r = origCreate.apply(this, arguments);
-    try {
-      // v34.1 — chore editor is reachable from Step 7 (Chores) AND Step 8 (Streaks)
-      if(wizardState && (wizardState.step === 7 || wizardState.step === 8)){
-        // restore hidden once option so non-wizard flows still work
-        const schedSel = document.getElementById("chore-schedule");
-        if(schedSel){
-          const onceOpt = schedSel.querySelector('option[value="once"]');
-          if(onceOpt && onceOpt.dataset.wizardHidden){ onceOpt.style.display=""; delete onceOpt.dataset.wizardHidden; }
-        }
-        if(wizardState.step === 7) wizardStep7RenderChoreList();
-        // v34.2 — step 8 is Celebration+Share, no streak list
-      }
-    } catch(e){}
-    return r;
-  };
-})();
-
-
-// ── Hook Guided Setup buttons into My Children list ───────────────
-// v34.2 — wireGuidedSetupButton removed; Guided Setup is now in the Parent Settings sheet
 
 // Attach earnings card auto-refresh to Child Profile sheet open
 (function wireEarningsCardRefresh(){
@@ -7605,7 +5087,7 @@ function wizardDeleteChore(choreId){
 //   • On paste: accepts "$1,234.56", "1234.56", "1,234", etc. Keeps digits
 //     and one decimal point, drops everything else.
 // Works on both static inputs (tagged in index.html) and dynamically-
-// rendered wizard inputs (tagged in the wizardRenderStep4 template string).
+// rendered inputs (any template string that emits class="money-input").
 // installMoneyInputs() is idempotent — safe to call repeatedly.
 // ════════════════════════════════════════════════════════════════════
 
@@ -7691,17 +5173,6 @@ if(document.readyState === "loading"){
 } else {
   installMoneyInputs();
 }
-
-// Re-install after wizard renders (wizard generates its own money inputs)
-(function wireWizardMoneyInputs(){
-  const orig = typeof wizardRender === "function" ? wizardRender : null;
-  if(!orig) return;
-  window.wizardRender = function(){
-    const r = orig.apply(this, arguments);
-    try { installMoneyInputs(document.getElementById("sheet-wizard")); } catch(e){}
-    return r;
-  };
-})();
 
 // Global helper for submit handlers — safely reads a money-input field
 // whether it's in focused raw-number state or blurred formatted-text state.
@@ -7936,17 +5407,6 @@ if(document.readyState === "loading"){
 } else {
   installPercentInputs();
 }
-(function wireWizardPercentInputs(){
-  const orig = typeof window.wizardRender === "function" ? window.wizardRender : null;
-  if(!orig) return;
-  const already = orig;
-  window.wizardRender = function(){
-    const r = already.apply(this, arguments);
-    try { installPercentInputs(document.getElementById("sheet-wizard")); } catch(e){}
-    return r;
-  };
-})();
-
 // Combined reformat helper for setters writing both types of fields
 function reformatAllMoneyPercentInputs(scope){
   const s = scope || document;
@@ -7984,281 +5444,12 @@ function _purgeUserFromState(name){
 }
 window._purgeUserFromState = _purgeUserFromState;
 
-// ════════════════════════════════════════════════════════════════════
-// v37.0 — AUDIT LOG + CHILD LIFECYCLE
-// ════════════════════════════════════════════════════════════════════
-
-// ──────────────────────────────────────────────────────────────────
-// appendAuditLog(action, target)
-// ──────────────────────────────────────────────────────────────────
-// Fire-and-forget POST to the _auditLogAppend interceptor in Code.gs.
-// Called from the client for structural changes that MODIFY a family
-// which continues to exist (child deactivate/delete/restore, parent
-// add/remove, PIN reset, config changes, etc.). NOT called from Delete
-// Family — that scrubs the log alongside the family.
-//
-// Shape server expects:
-//   body._auditLogAppend = {parent, action, target}
-//   body.familyId        = currentFamilyId   // required by doPost gate
-//
-// Dedicated fetch path (same pattern as deleteFamily). Does not go
-// through _doSyncToCloud — the log write is a side-event, not a state
-// sync, and coupling the two would mean every audit write also pushes
-// the entire family state to the server.
-//
-// No await at call sites — the log write should never block UI. If
-// the fetch fails, we log to console and move on. Audit completeness
-// is best-effort; the user's action still happened.
-function appendAuditLog(action, target){
-  if(!currentFamilyId || !currentUser) return;
-  const body = {
-    _auditLogAppend: {
-      parent: currentUser,
-      action: String(action || ""),
-      target: String(target || "")
-    },
-    familyId: currentFamilyId
-  };
-  try {
-    // v37.1 FEAT-9 — mode:'no-cors' removed. Fire-and-forget stays (no await at
-    // call sites); failures log to console but never block UI. Audit completeness
-    // is best-effort.
-    fetch(API_URL, {
-      method: "POST",
-      body:   JSON.stringify(body)
-    }).then(res => {
-      if(!res.ok) res.json().then(b => {
-        console.warn("[FamilyBank v37.1] appendAuditLog server error:", action, target, b);
-      }).catch(() => {
-        console.warn("[FamilyBank v37.1] appendAuditLog non-ok response:", action, target, res.status);
-      });
-    }).catch(err => {
-      console.warn("[FamilyBank v37.1] appendAuditLog failed:", action, target, err);
-    });
-  } catch(err){
-    console.warn("[FamilyBank v37.1] appendAuditLog threw:", action, target, err);
-  }
-}
-window.appendAuditLog = appendAuditLog;
-
-// ──────────────────────────────────────────────────────────────────
-// _purgeChildFromState(name)
-// ──────────────────────────────────────────────────────────────────
-// v37.0 — Purges in-memory state only. Ledger rows tagged with this
-// child's name remain in the sheet (visible to the Sheet owner, invisible
-// to the app since the child is no longer in state.users). Server-side
-// orphan row cleanup deferred to v37.1+ to avoid a Code.gs touch this
-// session. Harmless: reports scan via getChildNames() which no longer
-// includes the deleted child.
-//
-// KNOWN EDGE CASE (v37.1+ backlog): name collision. Deleting "Linnea"
-// then creating a new child also named "Linnea" means the new child
-// inherits the old child's ledger history. PDF export, YTD interest,
-// and net worth history all roll up by child name. Rare in practice
-// (same family, same name reuse) but worth a guard in a future pass.
-//
-// Child-specific scrub. Mirrors _purgeUserFromState but hits the
-// child-only config slots (avatarPhotos, childSetupComplete,
-// deactivatedChildren) too. Children ARE shared across parents via
-// parentChildren, so the remove-from-every-parent's-list loop stays.
-function _purgeChildFromState(name){
-  if(!name || !state) return;
-  if(state.users){
-    const i = state.users.indexOf(name);
-    if(i !== -1) state.users.splice(i, 1);
-  }
-  ["pins","roles","children","usersData","history"].forEach(k => {
-    if(state[k] && state[k][name] !== undefined) delete state[k][name];
-  });
-  if(state.config){
-    ["emails","avatars","avatarPhotos","calendars","tabs","notify"].forEach(k => {
-      if(state.config[k] && state.config[k][name] !== undefined) delete state.config[k][name];
-    });
-    // v37.0 — new per-child config slot for wizard completion tracking
-    if(state.config.childSetupComplete && state.config.childSetupComplete[name] !== undefined){
-      delete state.config.childSetupComplete[name];
-    }
-    // Remove from every parent's assigned-children list
-    if(state.config.parentChildren){
-      Object.keys(state.config.parentChildren).forEach(p => {
-        const list = state.config.parentChildren[p] || [];
-        const idx = list.indexOf(name);
-        if(idx !== -1) list.splice(idx, 1);
-      });
-    }
-    // Clear from deactivated list in case we're hard-deleting a deactivated child
-    if(Array.isArray(state.config.deactivatedChildren)){
-      state.config.deactivatedChildren = state.config.deactivatedChildren.filter(x => x !== name);
-    }
-  }
-  if(state.config && state.config.loginStats && state.config.loginStats[name]){
-    delete state.config.loginStats[name];
-  }
-  // Remove local-only avatar photo
-  try { localStorage.removeItem("fb_avatar_" + name); } catch(e){}
-}
-window._purgeChildFromState = _purgeChildFromState;
-
-// ──────────────────────────────────────────────────────────────────
-// deactivateChild(name)
-// ──────────────────────────────────────────────────────────────────
-// Soft-hide a child. Data preserved. Re-entry via restoreChild.
-function deactivateChild(name){
-  if(!name) return;
-  if(!state.config.deactivatedChildren) state.config.deactivatedChildren = [];
-  if(state.config.deactivatedChildren.indexOf(name) === -1){
-    state.config.deactivatedChildren.push(name);
-  }
-  // If this was the active child, clear it so the next render doesn't try
-  // to load a child that's now hidden from getAssignedChildren().
-  if(activeChild === name){
-    activeChild = null;
-    try { sessionStorage.removeItem("fb_session_child"); } catch(e){}
-  }
-  appendAuditLog("Deactivate Child", name);
-  syncToCloud("Child Deactivated");
-  showToast('"' + name + '" deactivated. Restore anytime from the child picker.', "info", 4000);
-  // Re-render surfaces that show child lists
-  try { renderAdminUsers(); } catch(e){}
-  try { showChildPicker(); } catch(e){}
-}
-window.deactivateChild = deactivateChild;
-
-// ──────────────────────────────────────────────────────────────────
-// restoreChild(name)
-// ──────────────────────────────────────────────────────────────────
-function restoreChild(name){
-  if(!name) return;
-  if(Array.isArray(state.config.deactivatedChildren)){
-    state.config.deactivatedChildren = state.config.deactivatedChildren.filter(x => x !== name);
-  }
-  appendAuditLog("Restore Child", name);
-  syncToCloud("Child Restored");
-  showToast('"' + name + '" restored.', "success", 3500);
-  try { showChildPicker(); } catch(e){}
-  try { renderAdminUsers(); } catch(e){}
-}
-window.restoreChild = restoreChild;
-
-// ──────────────────────────────────────────────────────────────────
-// deleteChild(name) — hard delete, irreversible. Reauth-gated.
-// ──────────────────────────────────────────────────────────────────
-// Per v37.0 locked scope: invoked from the child profile page, not
-// the Admin Panel. NOT available from the deactivated view — users
-// must restore first, then delete from the profile. Two-step path
-// is deliberate friction.
-function deleteChild(name){
-  if(!name) return;
-  if(currentRole !== "parent"){
-    showToast("Only a parent can delete a child.", "error", 4000);
-    return;
-  }
-  const names = getChildNames();
-  if(names.indexOf(name) === -1){
-    showToast('"' + name + '" not found.', "error", 3500);
-    return;
-  }
-
-  confirmReauth("Delete " + name + " permanently", () => {
-    _purgeChildFromState(name);
-    if(activeChild === name){
-      activeChild = null;
-      try { sessionStorage.removeItem("fb_session_child"); } catch(e){}
-    }
-    appendAuditLog("Delete Child", name);
-    syncToCloud("Child Deleted");
-    showToast('"' + name + '" permanently deleted.', "info", 4000);
-    // Return to picker (or main if there's still one child left)
-    try {
-      document.getElementById("parent-panel")?.classList.add("hidden");
-      document.getElementById("child-panel")?.classList.add("hidden");
-      const remaining = getAssignedChildren();
-      if(remaining.length === 1){
-        selectChild(remaining[0]);
-      } else if(remaining.length > 1){
-        document.getElementById("main-screen")?.classList.add("hidden");
-        showChildPicker();
-      } else {
-        // No children left — stay on main-screen with the parent panel,
-        // label will show "—" via existing empty-assigned path on re-render.
-        document.getElementById("main-screen")?.classList.remove("hidden");
-        const ptb = document.getElementById("ptb-child-name");
-        if(ptb) ptb.textContent = "—";
-      }
-    } catch(e){
-      console.warn("[FamilyBank v37.0] deleteChild post-delete render failed:", e);
-    }
-  });
-}
-window.deleteChild = deleteChild;
-
-// ──────────────────────────────────────────────────────────────────
-// Child picker "Show deactivated" toggle — session-local UI state
-// ──────────────────────────────────────────────────────────────────
-// Intentionally NOT persisted (sessionStorage or state). Resets per
-// session so deactivated kids don't keep leaking into view across
-// reloads. The picker's re-render reads this flag and appends a
-// deactivated section below the active list when true.
-let showDeactivatedInPicker = false;
-function toggleShowDeactivatedInPicker(){
-  showDeactivatedInPicker = !showDeactivatedInPicker;
-  try { showChildPicker(); } catch(e){}
-}
-window.toggleShowDeactivatedInPicker = toggleShowDeactivatedInPicker;
-
-// ──────────────────────────────────────────────────────────────────
-// v37.0 — AUDIT LOG VIEWER (STUB)
-// ──────────────────────────────────────────────────────────────────
-// Deferred to v37.1. appendAuditLog() above is fully wired and
-// accumulates entries in the server-side AuditLog sheet. This viewer
-// just reads them for display — low operational value, and requires
-// either a Code.gs doGet handler (touches the sealed v37.0 Code.gs)
-// or cross-origin POST-response reading (untested in this deployment).
-//
-// v37.1 decision: add a GET-based doGet handler path like
-// ?action=auditLog&familyId=X&limit=50. Simpler than fighting CORS
-// on POST and matches the existing checkCalendar GET pattern.
-//
-// Today: button in Parent Settings opens a sheet with an explainer.
-function openAuditLogViewer(){
-  const sheet = document.getElementById("audit-log-sheet");
-  if(!sheet){
-    // Markup not yet in place — fall back to modal so the button still works.
-    openModal({
-      icon: "📜",
-      title: "Activity Log",
-      body: "Activity log viewer is coming in v37.1. Audit events are being recorded correctly — you can view them directly in the AuditLog tab of the Google Sheet in the meantime.",
-      confirmText: "OK",
-      hideCancel: true
-    });
-    return;
-  }
-  openSheet("audit-log-sheet");
-}
-window.openAuditLogViewer = openAuditLogViewer;
-
 
 // v34.2 — Parent Settings sheet
 function openParentSettingsSheet(){
-  // Populate email
-  const emailEl = document.getElementById("ps-email-input");
-  const msgEl   = document.getElementById("ps-email-msg");
-  if(emailEl && currentUser) emailEl.value = (state.config.emails && state.config.emails[currentUser]) || "";
-  if(msgEl) { msgEl.className="field-msg"; msgEl.textContent=""; }
+  // v38.1 final (In-2) — orphan ps-email-input/ps-email-msg reads removed.
   // Render children list (mirrors renderMyChildren but targets ps-specific container)
   renderMyChildrenInSheet("my-children-list-ps");
-  // v37.0 — Hide primary-only buttons (Transfer Primary, Delete Family)
-  // from non-primary parents. Scoped to this sheet so it doesn't affect
-  // other surfaces that reuse the same JS hooks.
-  try {
-    const sheet = document.getElementById("sheet-parent-settings");
-    const isPrim = isPrimaryParent(currentUser);
-    if(sheet){
-      sheet.querySelectorAll("[data-primary-only]").forEach(btn => {
-        btn.classList.toggle("hidden", !isPrim);
-      });
-    }
-  } catch(e){}
   openSheet("sheet-parent-settings");
 }
 
@@ -8272,49 +5463,19 @@ function renderMyChildrenInSheet(containerId){
     return `<div class="child-btn-wrap" style="margin-bottom:6px;">
       <div class="child-btn with-avatar" style="cursor:default;pointer-events:none;">
         ${renderAvatar(name,"sm")}
-        <span style="font-weight:700;">${name}</span>
-        <div class="child-btn-balance" style="font-size:.72rem;">${shared?"Shared":"Only on your account"}</div>
+        <span style="font-weight:700;">${escapeHtml(name)}</span>
+        <div class="child-btn-balance" style="font-size:14px;">${shared?"Shared":"Only on your account"}</div>
       </div>
-      <button class="btn btn-sm btn-outline child-btn-wizard" onclick="startWizardForExistingChild('${name}');closeSheet('sheet-parent-settings',true);" title="Edit with Wizard">🪄</button>
+      <button class="btn btn-sm btn-outline child-btn-wizard" onclick="uwOpenEdit('${name}')" title="Edit with Wizard">🪄</button>
       <button class="btn btn-sm btn-outline" style="width:auto;margin:0;padding:6px 10px;" onclick="openShareChildSheet('${name}')">Share</button>
       <button class="btn btn-sm btn-ghost" style="width:auto;margin:0;padding:6px 10px;color:var(--danger);" onclick="confirmRemoveChild('${name}')"><svg class="icon" aria-hidden="true"><use href="vendor/phosphor-sprite.svg#ph-trash"/></svg></button>
     </div>`;
   }).join("");
 }
 
-function saveParentEmailFromSheet(){
-  const input = document.getElementById("ps-email-input");
-  const msg   = document.getElementById("ps-email-msg");
-  if(!input || !currentUser || currentRole !== "parent") return;
-  const val = input.value.trim();
-  if(val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)){
-    if(msg){ msg.className="field-msg error"; msg.textContent="Please enter a valid email."; }
-    return;
-  }
-  if(!state.config.emails) state.config.emails = {};
-  if(val) state.config.emails[currentUser] = val;
-  else    delete state.config.emails[currentUser];
-  syncToCloud("Parent Email Updated");
-  if(msg){ msg.className="field-msg success"; msg.textContent = val ? "Email saved." : "Email cleared."; }
-  showToast(val ? "Your email was saved." : "Your email was cleared.","success");
-}
+// v38 Step 4 — saveParentEmailFromSheet removed (parent self-service email edit retired; D5/D6 throw-out).
 function openDeleteMyAccount(){
   if(!currentUser){ return; }
-  // v37.0 — Block primary-parent self-delete. Primary must transfer the
-  // role to another parent before deleting their own account. Without
-  // this, a primary's self-delete would leave the family with no primary,
-  // breaking Delete Family visibility (render-gated on primaryParent)
-  // and the wizard's primary-completion invariant.
-  if(isPrimaryParent(currentUser)){
-    openModal({
-      icon: "⚠️",
-      title: "Transfer primary first",
-      body: "You're the primary parent of this family. Transfer the primary role to another parent before deleting your own account. (Parent Settings → Transfer Primary.)",
-      confirmText: "OK",
-      hideCancel: true
-    });
-    return;
-  }
   // Guard: cannot delete the last parent
   const parentCount = (state.users||[]).filter(u => state.roles && state.roles[u] === "parent").length;
   if(parentCount <= 1){
@@ -8351,7 +5512,7 @@ function openDeleteMyAccount(){
     body: bodyText,
     confirmText:"I understand, continue",
     confirmClass:"btn-danger",
-    onConfirm: async ()=>{
+    onConfirm:()=>{
       closeModal();
       // Second-confirm typed DELETE
       const typed = prompt('Type DELETE (in all caps) to permanently delete your account:');
@@ -8363,39 +5524,9 @@ function openDeleteMyAccount(){
       soloKids.forEach(k => _purgeUserFromState(k));
       // Remove self
       _purgeUserFromState(currentUser);
-      // v37.0 — audit trail before the sync. Note the log row lands in
-      // AuditLog keyed to this familyId; the self-delete doesn't remove
-      // the family row so the log entry persists.
-      appendAuditLog("Delete Own Account", currentUser);
-      // v37.1 BUG #9 — await the sync before logging out. syncToCloud captures
-      // familyId at queue time so the POST ships with the correct familyId even
-      // though logout() will null currentFamilyId. The 600ms setTimeout was
-      // the race condition: sync fires after logout nulls familyId → POST rejected
-      // silently by no-cors → user sees success but account not deleted on server.
-      // v37.1 hotfix — 10s Promise.race timeout per scope §4.3.2. On timeout, do
-      // NOT logout (user's data is ambiguous — delete might have landed, might not).
-      // Tell them to refresh, which re-hydrates from server and shows truth.
-      showToast("Deleting account…", "info", 10000);
-      try {
-        await Promise.race([
-          syncToCloud("Parent Self-Delete"),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000))
-        ]);
-        showToast("Account deleted.", "success");
-        try { logout(); } catch(e){ location.reload(); }
-      } catch(err) {
-        // syncToCloud now re-throws on server/network error (split-chain pattern)
-        // and Promise.race rejects with Error("timeout") if the 10s gate hits.
-        // Either way: do NOT logout. User's local state was already mutated
-        // (_purgeUserFromState ran pre-sync); refresh will re-hydrate truth.
-        const isTimeout = err && err.message === "timeout";
-        if(isTimeout){
-          showToast("Deletion timed out — please refresh and try again.", "error", 7000);
-        } else {
-          showToast("Delete failed — account may still exist. Please refresh and try again.", "error", 7000);
-        }
-        console.error("[FamilyBank v37.1] openDeleteMyAccount sync failed:", err);
-      }
+      syncToCloud("Parent Self-Delete");
+      showToast("Account deleted.", "success");
+      setTimeout(()=>{ try { logout(); } catch(e){ location.reload(); } }, 600);
     }
   });
 }
@@ -8422,8 +5553,6 @@ async function checkChoreCalendar(chore){
       "&child="     + encodeURIComponent(activeChild) +
       "&choreId="   + encodeURIComponent(chore.id || "") +
       "&choreName=" + encodeURIComponent(chore.name || "") +
-      // v37.0 — familyId required for all backend reads
-      "&familyId="  + encodeURIComponent(currentFamilyId || "") +
       "&t="         + Date.now();
     const res = await fetch(url);
     const data = await res.json();
@@ -8474,8 +5603,6 @@ async function reAddChoreToCalendar(choreId){
     const url = API_URL + "?action=checkCalendar&child=" + encodeURIComponent(activeChild) +
       "&choreId=" + encodeURIComponent(chore.id || "") +
       "&choreName=" + encodeURIComponent(chore.name || "") +
-      // v37.0 — familyId required for all backend reads
-      "&familyId=" + encodeURIComponent(currentFamilyId || "") +
       "&t=" + Date.now();
     const res = await fetch(url);
     const d = await res.json();
@@ -8486,10 +5613,10 @@ async function reAddChoreToCalendar(choreId){
       return;
     }
   } catch(e){ /* fall through, still try the sync */ }
-  // Trigger a server-side rebuild by submitting an edit with _editedChoreId
-  state._editedChoreId = chore.id;
-  syncToCloud("Chore Edited (calendar re-add)");
-  delete state._editedChoreId;
+  // v38.1 final (M-2) — exact lastAction string (Code.gs matches "Chore Edited"
+  // with ===, so the old suffixed form never hit its branch) and _editedChoreId
+  // handed in via opts.extra so it actually rides the queued payload.
+  syncToCloud("Chore Edited", {activeChild:activeChild, extra:{_editedChoreId:chore.id}});
   setTimeout(()=>{ checkChoreCalendar(chore); }, 2500);
   showToast("Added to calendar.", "success");
 }
@@ -8551,9 +5678,8 @@ window.reAddChoreToCalendar = reAddChoreToCalendar;
   } else { seed(); }
 
   // Wrap openSheet/closeSheet/showChildPicker to auto-maintain the stack.
-  // v35.0 — EXCEPTION: sheet-wizard uses its own in-wizard Back button
-  // (user requested system back NOT interfere with wizard navigation).
-  const NO_STACK = {"sheet-wizard": true};
+  // v35.0 exception for the legacy #sheet-wizard removed in v38.1 final (sheet gone).
+  const NO_STACK = {};
   const _open  = window.openSheet;
   const _close = window.closeSheet;
   if(typeof _open === "function"){
@@ -8578,3 +5704,1793 @@ window.reAddChoreToCalendar = reAddChoreToCalendar;
     };
   }
 })();
+
+// ════════════════════════════════════════════════════════════════════
+// v38.1 WIZARD v2 — shared step engine + USER WIZARD (Drop-1)
+// Spec of record: FamilyBank_v38_1_Wizard_Scope_Lock.md (Halyard, 2026-07-03)
+// Replaced the legacy #sheet-wizard (child wizard) and #sheet-user-edit (add/edit
+// user); both surfaces were removed in v38.1 final along with #sheet-chore-creator.
+// Commit model: ZERO mid-wizard POSTs (Spec-E). S3 order: state POST first
+// (emails untouched), verified {status:"ok"}, THEN setChildEmail GET leg.
+// ════════════════════════════════════════════════════════════════════
+
+let wz = null;                          // active wizard instance
+const WZ_DRAFT_KEY = "fb_wiz_draft";    // Spec-H — device-local draft
+
+// ── small helpers ───────────────────────────────────────────────────
+function wzEsc(s){ return escapeHtml(s); }
+function wzEmailOk(e){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
+function uwOtherChildren(){
+  // Copy-source candidates: every existing child except the one being edited.
+  const ex = (wz && wz.mode==="edit") ? wz.meta.editName : null;
+  return getChildNames().filter(n => n !== ex);
+}
+const WZ_WEEKDAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+function uwMonthDayLabel(v){
+  if(v==="last") return "Last day of month";
+  if(v==="last-1") return "2nd-to-last day";
+  if(v==="last-2") return "3rd-to-last day";
+  const n = parseInt(v,10);
+  if(!n) return String(v||"");
+  return n + (n===1?"st":n===2?"nd":n===3?"rd":"th") + " of the month";
+}
+
+// ── draft persistence (Spec-H) ─────────────────────────────────────
+function wzDraftKey(){ return (wz && wz.meta && wz.meta.draftKey) || WZ_DRAFT_KEY; }   // v38.1 final — chore wizard uses fb_cw_draft
+function wzSaveDraft(){
+  if(!wz || wz.meta.committed) return;
+  try{
+    const d = {...wz.draft}; delete d._photo;  // dataURLs too big for the draft slot
+    localStorage.setItem(wzDraftKey(), JSON.stringify({
+      k: wz.kind, mode: wz.mode, editName: wz.meta.editName || null,
+      idx: wz.idx, draft: d, ts: Date.now()
+    }));
+  }catch(_){}
+}
+function wzLoadDraft(kind, mode, editName, key){
+  try{
+    const raw = localStorage.getItem(key||WZ_DRAFT_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    if(s.k!==kind || s.mode!==mode) return null;
+    if(mode==="edit" && s.editName!==editName) return null;
+    return s;
+  }catch(_){ return null; }
+}
+function wzClearDraft(){ try{ localStorage.removeItem(wzDraftKey()); }catch(_){} }
+
+// ── engine: navigation ─────────────────────────────────────────────
+function wzVisible(){ return wz.steps.filter(s => !(s.skip && s.skip(wz.draft))); }
+function wzCur(){ return wz.steps[wz.idx]; }
+function wzStepIndexById(id){ return wz.steps.findIndex(s => s.id===id); }
+function wzIsSkipped(step){ return !!(step.skip && step.skip(wz.draft)); }
+
+function wzNormalizeIdx(){
+  // If the current step became skipped (e.g. after a draft resume or a
+  // dependency flip), slide forward to the next visible step.
+  let guard = 0;
+  while(wz.idx < wz.steps.length && wzIsSkipped(wz.steps[wz.idx]) && guard++ < 60){ wz.idx++; }
+  if(wz.idx >= wz.steps.length) wz.idx = wzStepIndexById("review");
+}
+
+function wzGotoId(id){
+  const i = wzStepIndexById(id);
+  if(i === -1) return;
+  wz.idx = i; wzNormalizeIdx(); wzRender();
+}
+
+/** Advance after the current step's value is saved on the draft. */
+function wzAdvance(){
+  wzSaveDraft();
+  const cur = wzCur();
+  if(cur.afterPick === "review" && wz.draft._copied){ wz.meta.returnToReview=false; wzGotoId("review"); return; }
+  if(wz.meta.returnToReview){
+    // Came from a Review edit-link. Return to Review unless the change
+    // exposed a required step that's now unset (e.g. allowance flipped ON):
+    // continue forward to the first invalid required step instead (spec §2 Spec-E).
+    const vis = wzVisible();
+    const curVisIdx = vis.indexOf(cur);
+    for(let i=curVisIdx+1; i<vis.length; i++){
+      const s = vis[i];
+      if(s.id==="review" || s.id==="success" || s.id==="resume") break;
+      if(s.validate && s.validate(wz.draft) !== true){ wz.idx = wzStepIndexById(s.id); wzRender(); return; }
+    }
+    wz.meta.returnToReview = false;
+    wzGotoId("review"); return;
+  }
+  const vis = wzVisible();
+  const curVisIdx = vis.indexOf(cur);
+  const next = vis[curVisIdx+1];
+  if(next){ wz.idx = wzStepIndexById(next.id); wzRender(); }
+}
+
+function wzBack(){
+  const cur = wzCur();
+  if(cur.id==="success") return;
+  if(wz.meta.returnToReview){ wz.meta.returnToReview=false; wzGotoId("review"); return; }
+  const vis = wzVisible();
+  const curVisIdx = vis.indexOf(cur);
+  if(curVisIdx > 0){
+    const prev = vis[curVisIdx-1];
+    if(prev.id==="resume") return;                 // never navigate back into resume
+    wz.idx = wzStepIndexById(prev.id); wzSaveDraft(); wzRender();
+  }
+}
+
+function wzJump(id){
+  // Review edit-link: jump to a step, return to Review on its advance (Spec-E).
+  wz.meta.returnToReview = true;
+  wzGotoId(id);
+}
+
+function wzClose(){
+  // ✕ pre-commit: plain close. Draft persists in localStorage (Spec-H) —
+  // reopening offers Resume/Start-over. Post-commit ✕ = Done.
+  if(wz && wz.meta.committed){ (wz.meta.onDone||uwSuccessDone)(); return; }
+  wzSaveDraft();
+  closeSheet("sheet-wiz2", true);
+  wz = null;
+}
+
+// ── engine: input plumbing ─────────────────────────────────────────
+function wzChooseIdx(i){
+  const s = wzCur(); if(!s || !s.options) return;
+  const opt = s.options[i]; if(!opt) return;
+  if(s.beforePick && s.beforePick(opt.v) === false){ return; } // guard hook (inline msg set by hook)
+  wz.draft[s.field] = opt.v;
+  if(s.onPick) s.onPick(opt.v);
+  wzAdvance();
+}
+function wzToggleIdx(i){
+  const s = wzCur(); if(!s || !s.options) return;
+  const opt = s.options[i]; if(!opt) return;
+  if(s.multiKind === "tabs"){
+    wz.draft.tabs[opt.v] = !wz.draft.tabs[opt.v];
+  } else {
+    const arr = wz.draft[s.field] || (wz.draft[s.field]=[]);
+    const at = arr.indexOf(opt.v);
+    if(at===-1) arr.push(opt.v); else arr.splice(at,1);
+  }
+  wzSaveDraft();
+  wzRenderBodyOnly();
+}
+function wzTextInput(){
+  const s = wzCur();
+  const el = document.getElementById("wz-input");
+  if(!s || !el) return;
+  wz.draft[s.field] = el.value;
+  wzRefreshPrimary();
+  wzInlineMsg(s);
+}
+function wzPinInput(){
+  const el = document.getElementById("wz-input"); if(!el) return;
+  let v = (el.value||"").replace(/\D/g,"").slice(0,4);
+  if(el.value !== v) el.value = v;
+  wz.draft.pin = v;
+  const s = wzCur();
+  wzInlineMsg(s);
+  if(v.length===4){
+    if(s.validate(wz.draft) === true){ wzAdvance(); }
+  }
+}
+function wzKeydown(ev){
+  if(ev.key !== "Enter") return;
+  ev.preventDefault();
+  const btn = document.getElementById("wz-primary");
+  if(btn && !btn.disabled) wzPrimary();
+}
+function wzInlineMsg(s){
+  const m = document.getElementById("wz-msg"); if(!m) return;
+  const r = s.validate ? s.validate(wz.draft) : true;
+  const raw = (wz.draft[s.field]==null?"":String(wz.draft[s.field]));
+  if(r === true || raw.trim()===""){ m.className="wz-msg"; m.textContent=""; }
+  else { m.className="wz-msg error"; m.textContent = r; }
+}
+function wzRefreshPrimary(){
+  const s = wzCur();
+  const btn = document.getElementById("wz-primary"); if(!btn || !s) return;
+  btn.disabled = s.validate ? (s.validate(wz.draft) !== true) : false;
+}
+/** Primary button — text/multi/etc. steps (Spec-B). */
+function wzPrimary(){
+  const s = wzCur(); if(!s) return;
+  if(s.onPrimary && s.onPrimary() === false) return;
+  if(s.validate && s.validate(wz.draft) !== true){ wzInlineMsg(s); return; }
+  wzAdvance();
+}
+function wzSecondary(){
+  const s = wzCur(); if(!s || !s.onSecondary) return;
+  s.onSecondary();
+}
+
+// ── engine: render ─────────────────────────────────────────────────
+function wzRender(){
+  const body = document.getElementById("wz2-body");
+  const foot = document.getElementById("wz2-footer");
+  if(!body || !foot || !wz) return;
+  wzNormalizeIdx();
+  const s = wzCur();
+  const vis = wzVisible().filter(x => x.id!=="resume" && x.id!=="success");
+  const pos = Math.max(1, vis.indexOf(s)+1);
+
+  // header chrome
+  const backBtn = document.getElementById("wz2-back");
+  const secEl   = document.getElementById("wz2-section");
+  const fill    = document.getElementById("wz2-progress-fill");
+  const noChrome = (s.id==="resume" || s.id==="success");
+  if(backBtn){
+    const vAll = wzVisible();
+    const firstNav = vAll.find(x => x.id!=="resume");
+    const hideBack = noChrome || (s === firstNav && !wz.meta.returnToReview)
+      || (s.id==="review" && wz.mode==="edit" && !wz.meta.navigated);
+    backBtn.style.visibility = hideBack ? "hidden" : "visible";
+  }
+  if(secEl) secEl.textContent = wz.meta.sectionLabel;
+  if(fill)  fill.style.width = noChrome ? "0%" : Math.round((pos/vis.length)*100) + "%";
+  if(s.id!=="resume" && s.id!=="review" && s.id!=="success") wz.meta.navigated = true;
+
+  // body
+  const title = (typeof s.title==="function") ? s.title(wz.draft) : s.title;
+  const sub   = s.sub ? ((typeof s.sub==="function") ? s.sub(wz.draft) : s.sub) : "";
+  body.innerHTML = `
+    ${noChrome ? "" : `<h2 class="wz-q">${title}</h2>`}
+    ${sub ? `<div class="wz-sub">${sub}</div>` : ""}
+    <div id="wz-content">${s.render(wz.draft)}</div>
+    <div class="wz-msg" id="wz-msg"></div>`;
+
+  // footer
+  foot.innerHTML = wzFooterHtml(s);
+  wzRefreshPrimary();
+
+  // Spec-G: autofocus on step entry
+  setTimeout(()=>{ const el=document.getElementById("wz-input"); if(el){ el.focus(); } }, 80);
+  body.scrollTop = 0;
+}
+function wzRenderBodyOnly(){
+  const s = wzCur();
+  const c = document.getElementById("wz-content");
+  if(c && s){ c.innerHTML = s.render(wz.draft); wzRefreshPrimary(); }
+}
+function wzFooterHtml(s){
+  if(s.footer === "none") return "";
+  if(s.footer === "custom") return s.footerHtml ? s.footerHtml(wz.draft) : "";
+  let h = "";
+  if(s.secondaryLabel) h += `<button class="wz-btn-secondary" onclick="wzSecondary()">${s.secondaryLabel}</button>`;
+  h += `<button class="btn btn-primary wz-btn-primary" id="wz-primary" onclick="wzPrimary()">${s.primaryLabel||"Continue"}</button>`;
+  return h;
+}
+
+// ── shared render fragments ────────────────────────────────────────
+function wzOptButtons(s, selectedTest){
+  return s.options.map((o,i)=>`
+    <button type="button" class="wz-opt${selectedTest(o.v)?" selected":""}" onclick="${s.multi?`wzToggleIdx(${i})`:`wzChooseIdx(${i})`}">
+      <span class="wz-opt-label">${o.label}</span>
+      ${o.desc?`<span class="wz-opt-desc">${o.desc}</span>`:""}
+    </button>`).join("");
+}
+function wzChoiceRender(d){
+  const s = wzCur();
+  return `<div class="wz-opts">${wzOptButtons(s, v => d[s.field]===v)}</div>`;
+}
+function wzMultiRender(d){
+  const s = wzCur();
+  const test = s.multiKind==="tabs" ? (v)=>!!d.tabs[v] : (v)=> (d[s.field]||[]).indexOf(v)!==-1;
+  return `<div class="wz-opts">${wzOptButtons(s, test)}</div>`;
+}
+
+// ════════════════════════════════════════════════════════════════════
+// USER WIZARD
+// ════════════════════════════════════════════════════════════════════
+
+function uwBlankDraft(){
+  return {
+    role: undefined, name:"", pin:"", email:"", emailSkipped:false,
+    assignChildren: [],
+    copyChoice: undefined, copyFrom: undefined, _copied:false,
+    tabs: {money:false, chores:false, loans:false},
+    useAllowance: undefined, structure: undefined, schedule: undefined,
+    allowWeekday: undefined, allowMonthlyDay: undefined,
+    allowChk: "", allowSav: "", rateChk:"", rateSav:"",
+    choreRewards: undefined,
+    notifyEmail: undefined, notifyChoreRewards: undefined,
+    useCalendar: undefined, calendarId:"",
+    celebrationSound: undefined,
+    avatarEmoji:"", _photo:null,
+    _oldEmail:""
+  };
+}
+
+/** Edit-mode prefill (field set inherited from the retired legacy child wizard). */
+function uwPrefillEdit(name){
+  const d = uwBlankDraft();
+  const role = (state.roles && state.roles[name]) || "child";
+  d.role = role;
+  d.name = name;
+  d.pin  = "";                                        // blank = keep current (legacy rule)
+  d._oldEmail = (state.config.emails && state.config.emails[name]) || "";
+  d.email = d._oldEmail;
+  d.emailAction = d._oldEmail ? "keep" : undefined;   // d1.2 R-1 default
+  if(role === "parent"){
+    d.assignChildren = [ ...(((state.config.parentChildren||{})[name]) || []) ];
+    return d;
+  }
+  const data  = (state.children && state.children[name]) || {};
+  const ad    = data.autoDeposit || {};
+  const rates = data.rates || {};
+  const tabs  = (state.config.tabs && state.config.tabs[name]) || {money:true, chores:true, loans:false};
+  const notify= (state.config.notify && state.config.notify[name]) || {};
+  d.tabs = {...tabs};
+  d.useAllowance = !!((ad.checking||0) + (ad.savings||0));
+  d.structure = (ad.checking>0 && ad.savings>0) ? "both" : (ad.savings>0 ? "savings" : "checking");
+  d.schedule  = ad.schedule || "weekly";
+  d.allowWeekday    = (ad.weekday !== undefined) ? ad.weekday : 1;
+  d.allowMonthlyDay = ad.monthlyDay || "1";
+  d.allowChk = ad.checking || 0;
+  d.allowSav = ad.savings  || 0;
+  d.rateChk  = (rates.checking===0 || rates.checking) ? rates.checking : "";
+  d.rateSav  = (rates.savings===0  || rates.savings)  ? rates.savings  : "";
+  d.choreRewards       = notify.choreRewards !== false;
+  d.notifyEmail        = notify.email !== false;
+  d.notifyChoreRewards = notify.choreRewards !== false;
+  d.useCalendar = !!(state.config.calendars && state.config.calendars[name]);
+  d.calendarId  = (state.config.calendars && state.config.calendars[name]) || "";
+  d.celebrationSound = !!(state.usersData && state.usersData[name] && state.usersData[name].celebrationSound !== false);
+  d.avatarEmoji = (state.config.avatars && state.config.avatars[name]) || "";
+  return d;
+}
+
+/** Copy-set (spec §3, LOCKED). Reads live state of the source child. */
+function uwApplyCopySet(src){
+  const d = wz.draft;
+  const data  = (state.children && state.children[src]) || {};
+  const ad    = data.autoDeposit || {};
+  const rates = data.rates || {};
+  const tabs  = (state.config.tabs && state.config.tabs[src]) || {money:true, chores:true, loans:false};
+  const notify= (state.config.notify && state.config.notify[src]) || {};
+  d.tabs = {...tabs};
+  d.useAllowance = !!((ad.checking||0) + (ad.savings||0));
+  d.structure = (ad.checking>0 && ad.savings>0) ? "both" : (ad.savings>0 ? "savings" : "checking");
+  d.schedule  = ad.schedule || "weekly";
+  d.allowWeekday    = (ad.weekday !== undefined) ? ad.weekday : 1;
+  d.allowMonthlyDay = ad.monthlyDay || "1";
+  d.allowChk = ad.checking || 0;
+  d.allowSav = ad.savings  || 0;
+  d.rateChk  = (rates.checking===0 || rates.checking) ? rates.checking : "";
+  d.rateSav  = (rates.savings===0  || rates.savings)  ? rates.savings  : "";
+  d.choreRewards       = notify.choreRewards !== false;
+  d.notifyEmail        = notify.email !== false;
+  d.notifyChoreRewards = notify.choreRewards !== false;
+  d.celebrationSound   = !!(state.usersData && state.usersData[src] && state.usersData[src].celebrationSound !== false);
+  // NEVER copies (locked): name, pin, email, avatar, useCalendar/calendarId,
+  // balances, ledger, goals, streaks, history.
+  d._copied = true;
+  d.copyFrom = src;
+}
+
+// ── step definitions ───────────────────────────────────────────────
+function uwBuildSteps(mode){
+  const isEdit = mode === "edit";
+  const steps = [];
+
+  steps.push({
+    id:"resume", footer:"none",
+    skip: () => !wz.meta.hasSavedDraft,
+    render: () => `
+      <h2 class="wz-q">Pick up where you left off?</h2>
+      <div class="wz-sub">You have an unfinished setup from before.</div>
+      <div class="wz-opts">
+        <button type="button" class="wz-opt" onclick="uwResumeDraft()"><span class="wz-opt-label">Resume where I left off</span></button>
+        <button type="button" class="wz-opt" onclick="uwStartOver()"><span class="wz-opt-label">Start over</span></button>
+      </div>`
+  });
+
+  steps.push({
+    id:"role", field:"role", footer:"none",
+    skip: () => isEdit,
+    title:"Who are you adding?",
+    options:[
+      {v:"parent", label:"A parent", desc:"Approves chores and manages the family"},
+      {v:"child",  label:"A child",  desc:"Earns, saves, and spends"}
+    ],
+    beforePick:(v)=>{
+      if(v==="child" && typeof getMyChildrenList==="function" && getMyChildrenList().length >= MAX_CHILDREN_PER_PARENT){
+        const m=document.getElementById("wz-msg");
+        if(m){ m.className="wz-msg error"; m.textContent="You've hit the "+MAX_CHILDREN_PER_PARENT+"-child limit."; }
+        return false;
+      }
+      return true;
+    },
+    validate:(d)=> d.role!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"name", field:"name", footer:"default",
+    skip: () => isEdit,
+    title:(d)=> d.role==="parent" ? "What's the parent's name?" : "What's your child's name?",
+    sub:"This is the display name they'll log in with.",
+    validate:(d)=>{
+      const n=(d.name||"").trim();
+      if(!n) return "Name is required.";
+      if((state.users||[]).includes(n)) return `"${n}" is already taken.`;   // spec §10 — inline, at the Name step
+      return true;
+    },
+    render:(d)=>`<input id="wz-input" class="wz-text" type="text" value="${wzEsc(d.name)}" placeholder="e.g. Emma" autocomplete="off" oninput="wzTextInput()" onkeydown="wzKeydown(event)">`,
+    onPrimary:()=>{ wz.draft.name = (wz.draft.name||"").trim(); return true; }
+  });
+
+  steps.push({
+    id:"pin", field:"pin", footer: isEdit ? "default" : "none",
+    title:(d)=> isEdit ? "Set a new PIN?" : `Pick a 4-digit PIN for ${wzEsc(d.name||"them")}`,
+    sub: isEdit ? "Type a new 4-digit PIN, or keep the current one." : "They'll use it to log in. Digits show as you type.",
+    secondaryLabel: isEdit ? "Keep current PIN" : null,
+    onSecondary: isEdit ? ()=>{ wz.draft.pin=""; wzAdvance(); } : null,
+    primaryLabel:"Continue",
+    validate:(d)=>{
+      const p = d.pin||"";
+      if(isEdit && p==="") return true;                       // blank = keep (rule inherited from the retired user-edit sheet)
+      if(!/^\d{4}$/.test(p)) return "PIN must be exactly 4 digits.";
+      const ex = isEdit ? wz.meta.editName : undefined;
+      const col = (typeof checkNamePinCollision==="function") ? checkNamePinCollision((d.name||"").trim(), p, ex) : {collision:false};
+      if(col.collision) return col.reason || "Name/PIN conflict.";
+      return true;
+    },
+    render:(d)=>`<input id="wz-input" class="wz-pin" type="text" inputmode="numeric" autocomplete="off" maxlength="4" value="${wzEsc(d.pin)}" placeholder="0000" oninput="wzPinInput()">`
+  });
+
+  steps.push({
+    id:"email", field:"email", footer:"custom",
+    // d1.2 (R-1) — edit-with-existing gets an explicit Keep/Change/Remove
+    // choice. Blank NEVER silently clears (PIN symmetry). Email commits
+    // inside the state POST — no setChildEmail leg, no admin PIN here.
+    title:(d)=> (isEdit && d._oldEmail && d.emailAction!=="change")
+      ? "Email for " + wzEsc(wz.meta.editName||"")
+      : "Add an email for " + wzEsc((d.name||"").trim()||"them") + "?",
+    sub:"Used for statements and notifications.",
+    validate:(d)=>{
+      if(isEdit && d._oldEmail){
+        if(d.emailAction==="keep" || d.emailAction==="remove") return true;
+        if(d.emailAction==="change"){
+          const e=(d.email||"").trim();
+          if(!e) return "Enter the new address, or go back to options.";
+          if(!wzEmailOk(e)) return "That doesn't look like a valid email.";
+          const holder=uwEmailTaken(e, wz.meta.editName);
+          if(holder) return "Already used by "+holder+".";
+          return true;
+        }
+        return "Pick one.";
+      }
+      const e=(d.email||"").trim();
+      if(!e) return true;
+      if(!wzEmailOk(e)) return "That doesn't look like a valid email.";
+      const holder=uwEmailTaken(e, isEdit ? wz.meta.editName : null);
+      if(holder) return "Already used by "+holder+".";
+      return true;
+    },
+    render:(d)=>{
+      if(isEdit && d._oldEmail && d.emailAction!=="change"){
+        return `<div class="wz-opts">
+          <button type="button" class="wz-opt${d.emailAction==="keep"?" selected":""}" onclick="uwEmailChoice('keep')"><span class="wz-opt-label">Keep current</span><span class="wz-opt-desc">${wzEsc(d._oldEmail)}</span></button>
+          <button type="button" class="wz-opt" onclick="uwEmailChoice('change')"><span class="wz-opt-label">Change it</span></button>
+          <button type="button" class="wz-opt${d.emailAction==="remove"?" selected":""}" onclick="uwEmailChoice('remove')"><span class="wz-opt-label">Remove email</span><span class="wz-opt-desc">Stops statements and notifications</span></button>
+        </div>`;
+      }
+      return `<input id="wz-input" class="wz-text" type="email" inputmode="email" autocomplete="off" value="${wzEsc(d.email)}" placeholder="name@example.com" oninput="wzTextInput()" onkeydown="wzKeydown(event)">`;
+    },
+    footerHtml:(d)=>{
+      if(isEdit && d._oldEmail && d.emailAction!=="change") return "";
+      let h="";
+      if(isEdit && d._oldEmail) h += `<button class="wz-btn-secondary" onclick="uwEmailChoice(null)">Back to options</button>`;
+      else h += `<button class="wz-btn-secondary" onclick="uwEmailSkip()">Maybe later</button>`;
+      h += `<button class="btn btn-primary wz-btn-primary" id="wz-primary" onclick="wzPrimary()">Continue</button>`;
+      return h;
+    },
+    onPrimary:()=>{ const d=wz.draft; d.email=(d.email||"").trim(); return true; }
+  });
+
+  steps.push({
+    id:"assignChildren", field:"assignChildren", footer:"default", multi:true,
+    skip:(d)=> d.role!=="parent" || getChildNames().filter(n=> n!==wz.meta.editName).length===0,  // spec S1 auto-skip
+    title:(d)=>`Which children should ${wzEsc((d.name||"").trim()||"this parent")} manage?`,
+    sub:"Tap to toggle. You can change this anytime.",
+    get options(){ return getChildNames().filter(n=> n!==wz.meta.editName).map(n=>({v:n,label:wzEsc(n)})); },
+    validate:()=> true,                                        // empty allowed (legacy hint: no selection = sees no children)
+    render: wzMultiRender
+  });
+
+  steps.push({
+    id:"copyAsk", field:"copyChoice", footer:"none",
+    skip:(d)=> isEdit || d.role!=="child" || uwOtherChildren().length===0,   // spec §3 auto-skip
+    title:(d)=>`Copy an existing child's settings for ${wzEsc((d.name||"").trim()||"them")}?`,
+    sub:"Copies setup like tabs, allowance, and rates — never balances, PINs, or history.",
+    options:[
+      {v:"copy",  label:"Yes, copy from another child", desc:"Fastest — review and adjust after"},
+      {v:"fresh", label:"No, set up from scratch"}
+    ],
+    validate:(d)=> d.copyChoice!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"copySource", field:"copyFrom", footer:"none", afterPick:"review",
+    skip:(d)=> isEdit || d.role!=="child" || d.copyChoice!=="copy",
+    title:"Copy settings from which child?",
+    get options(){ return uwOtherChildren().map(n=>({v:n,label:wzEsc(n)})); },
+    onPick:(v)=> uwApplyCopySet(v),
+    validate:(d)=> d.copyChoice!=="copy" || d.copyFrom ? true : "Pick a child.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"tabs", footer:"default", multi:true, multiKind:"tabs", field:"tabs",
+    skip:(d)=> d.role!=="child",
+    title:(d)=>`Which tabs should ${wzEsc((d.name||"").trim()||"they")} see?`,
+    sub:"Pick at least one.",
+    options:[
+      {v:"money",  label:"💰 Money",  desc:"Balances, deposits, goals"},
+      {v:"chores", label:"🧹 Chores", desc:"Tasks and rewards"},
+      {v:"loans",  label:"🏦 Loans",  desc:"Borrowing from the Bank of Mom & Dad"}
+    ],
+    validate:(d)=> (d.tabs.money||d.tabs.chores||d.tabs.loans) ? true : "Pick at least one tab.",
+    render: wzMultiRender
+  });
+
+  steps.push({
+    id:"useAllowance", field:"useAllowance", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:(d)=>`Does ${wzEsc((d.name||"").trim()||"this child")} get an allowance?`,
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.useAllowance!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"structure", field:"structure", footer:"none",
+    skip:(d)=> d.role!=="child" || d.useAllowance!==true,
+    title:"Where should the allowance go?",
+    options:[
+      {v:"checking", label:"Checking only"},
+      {v:"savings",  label:"Savings only"},
+      {v:"both",     label:"Split between both"}
+    ],
+    validate:(d)=> d.structure!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"schedule", field:"schedule", footer:"none",
+    skip:(d)=> d.role!=="child" || d.useAllowance!==true,
+    title:"How often is allowance paid?",
+    options:[
+      {v:"weekly",   label:"Weekly"},
+      {v:"biweekly", label:"Every 2 weeks"},
+      {v:"monthly",  label:"Monthly"}
+    ],
+    validate:(d)=> d.schedule!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"weekday", field:"allowWeekday", footer:"none",
+    skip:(d)=> d.role!=="child" || d.useAllowance!==true || d.schedule==="monthly",
+    title:"Which day does it pay out?",
+    options: WZ_WEEKDAYS.map((n,i)=>({v:i,label:n})),
+    validate:(d)=> d.allowWeekday!==undefined ? true : "Pick a day.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"monthday", field:"allowMonthlyDay", footer:"default",
+    skip:(d)=> d.role!=="child" || d.useAllowance!==true || d.schedule!=="monthly",
+    title:"Which day of the month?",
+    sub:"Enter 1–28, or pick a month-end option.",
+    validate:(d)=>{
+      const v = d.allowMonthlyDay;
+      if(v==="last"||v==="last-1"||v==="last-2") return true;
+      const n = parseInt(v,10);
+      return (n>=1 && n<=28) ? true : "Enter a day from 1 to 28, or pick an option below.";
+    },
+    render:(d)=>{
+      const isNum = d.allowMonthlyDay && !String(d.allowMonthlyDay).startsWith("last");
+      return `
+        <input id="wz-input" class="wz-text" type="text" inputmode="numeric" maxlength="2" value="${isNum?wzEsc(d.allowMonthlyDay):""}" placeholder="e.g. 15" oninput="wzTextInput()" onkeydown="wzKeydown(event)">
+        <div class="wz-opts" style="margin-top:14px;">
+          <button type="button" class="wz-opt${d.allowMonthlyDay==="last"?" selected":""}" onclick="uwPickMonthEnd('last')"><span class="wz-opt-label">Last day of the month</span></button>
+          <button type="button" class="wz-opt${d.allowMonthlyDay==="last-1"?" selected":""}" onclick="uwPickMonthEnd('last-1')"><span class="wz-opt-label">2nd-to-last day</span></button>
+          <button type="button" class="wz-opt${d.allowMonthlyDay==="last-2"?" selected":""}" onclick="uwPickMonthEnd('last-2')"><span class="wz-opt-label">3rd-to-last day</span></button>
+        </div>`;
+    },
+    onPrimary:()=>{ wz.draft.allowMonthlyDay = String(parseInt(wz.draft.allowMonthlyDay,10)); return true; }
+  });
+
+  steps.push({
+    id:"amounts", footer:"default", field:"allowChk",
+    skip:(d)=> d.role!=="child" || d.useAllowance!==true,
+    title:"How much per payment?",
+    sub:(d)=> d.structure==="both" ? "Split it however you like." : "",
+    validate:(d)=>{
+      const num = v => { const n=parseFloat(String(v).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; };
+      const c=num(d.allowChk), s=num(d.allowSav);
+      if(c<0||s<0) return "Amounts can't be negative.";
+      return true;
+    },
+    render:(d)=>{
+      const chk = d.structure!=="savings";
+      const sav = d.structure!=="checking";
+      return `
+        ${chk?`<label class="wz-label">Checking ($)</label>
+        <input id="wz-input" class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.allowChk)}" placeholder="0.00" oninput="uwAmountInput('allowChk',this)" onkeydown="wzKeydown(event)">`:""}
+        ${sav?`<label class="wz-label"${chk?' style="margin-top:14px;"':""}>Savings ($)</label>
+        <input ${chk?"":'id="wz-input" '}class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.allowSav)}" placeholder="0.00" oninput="uwAmountInput('allowSav',this)" onkeydown="wzKeydown(event)">`:""}`;
+    }
+  });
+
+  steps.push({
+    id:"rates", footer:"default", field:"rateChk",
+    skip:(d)=> d.role!=="child",
+    title:"Any interest on their balances?",
+    sub:"Annual rate, %. Leave blank for none.",
+    validate:(d)=>{
+      const ok = v => { if(v===""||v===null||v===undefined) return true; const n=parseFloat(v); return !isNaN(n)&&n>=0&&n<=100; };
+      if(!ok(d.rateChk)||!ok(d.rateSav)) return "Rates must be between 0 and 100.";
+      return true;
+    },
+    render:(d)=>`
+      <label class="wz-label">Checking rate (% / yr)</label>
+      <input id="wz-input" class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.rateChk)}" placeholder="e.g. 2" oninput="uwAmountInput('rateChk',this)" onkeydown="wzKeydown(event)">
+      <label class="wz-label" style="margin-top:14px;">Savings rate (% / yr)</label>
+      <input class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.rateSav)}" placeholder="e.g. 5" oninput="uwAmountInput('rateSav',this)" onkeydown="wzKeydown(event)">`
+  });
+
+  steps.push({
+    id:"choreRewards", field:"choreRewards", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:"Do chores pay rewards?",
+    sub:"If yes, completed chores add money to their balance.",
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.choreRewards!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"notifyEmail", field:"notifyEmail", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:"Email them monthly statements?",
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.notifyEmail!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"notifyRewards", field:"notifyChoreRewards", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:"Email them about chore rewards?",
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.notifyChoreRewards!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"useCalendar", field:"useCalendar", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:"Sync chores to a Google Calendar?",
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.useCalendar!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"calId", field:"calendarId", footer:"default",
+    skip:(d)=> d.role!=="child" || d.useCalendar!==true,
+    title:"Paste their Calendar ID",
+    sub:"From Google Calendar → Settings → Integrate calendar.",
+    validate:(d)=> (d.calendarId||"").trim() ? true : "Calendar ID is required when sync is on.",
+    render:(d)=>`<input id="wz-input" class="wz-text" type="text" autocomplete="off" value="${wzEsc(d.calendarId)}" placeholder="abc123@group.calendar.google.com" oninput="wzTextInput()" onkeydown="wzKeydown(event)">`,
+    onPrimary:()=>{ wz.draft.calendarId=(wz.draft.calendarId||"").trim(); return true; }
+  });
+
+  steps.push({
+    id:"sound", field:"celebrationSound", footer:"none",
+    skip:(d)=> d.role!=="child",
+    title:"Play a sound when they earn money?",
+    options:[ {v:true,label:"Yes"}, {v:false,label:"No"} ],
+    validate:(d)=> d.celebrationSound!==undefined ? true : "Pick Yes or No.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"avatar", footer:"default", field:"avatarEmoji",
+    skip:(d)=> d.role!=="child",
+    title:"Pick an avatar",
+    sub:"Choose an emoji, or upload a photo. You can change it later.",
+    validate:()=> true,
+    render:(d)=>{
+      const emojis = (typeof AVATAR_EMOJIS!=="undefined" ? AVATAR_EMOJIS : ["🙂","😀","😎","🐱","🐶","🦊","🐼","🐸","🦄","🐵","🐯","🦁"]);
+      const cur = d.avatarEmoji || "";
+      const grid = emojis.map(e=>`<button type="button" class="wz-emoji${e===cur?" selected":""}" onclick="uwPickEmoji('${e}')">${e}</button>`).join("");
+      const photoRow = d._photo
+        ? `<div class="wz-photo-row"><img src="${d._photo}" class="wz-photo-preview" alt=""> <button type="button" class="wz-btn-secondary" style="width:auto;" onclick="uwRemovePhoto()">Remove photo</button></div>`
+        : `<button type="button" class="wz-btn-secondary" style="width:auto;margin-top:14px;" onclick="document.getElementById('wz-avatar-file').click()">Upload a photo instead</button>`;
+      return `<div class="wz-emoji-grid" id="wz-emoji-grid">${grid}</div>
+        ${photoRow}
+        <input type="file" id="wz-avatar-file" accept="image/*" style="display:none;" onchange="uwPhotoPicked(event)">`;
+    }
+  });
+
+  steps.push({
+    id:"review", footer:"custom",
+    title: isEdit ? "Review the changes" : "Review before creating",
+    sub: isEdit ? "Nothing saves until you confirm." : "Nothing is created until you confirm.",
+    validate:()=> true,
+    render: uwReviewRender,
+    footerHtml: ()=>{
+      const bad = uwInvalidSteps().length>0;
+      const busy = wz.meta.committing;
+      const label = busy ? "Saving…" : (isEdit ? "Save changes" : (wz.draft.role==="parent" ? "Add parent" : "Add child"));
+      return `<button class="btn btn-primary wz-btn-primary" id="wz-primary" onclick="uwCommit()" ${bad||busy?"disabled":""}>${label}</button>`;
+    }
+  });
+
+  steps.push({
+    id:"success", footer:"none",
+    skip:()=> !wz.meta.committed,
+    render: uwSuccessRender
+  });
+
+  return steps;
+}
+
+// step-specific input handlers
+function uwAmountInput(field, el){ wz.draft[field]=el.value; wzRefreshPrimary(); wzInlineMsg(wzCur()); }
+function uwPickMonthEnd(v){ wz.draft.allowMonthlyDay=v; wzAdvance(); }
+function uwPickEmoji(e){
+  wz.draft.avatarEmoji=e;
+  const g=document.getElementById("wz-emoji-grid");
+  if(g) g.querySelectorAll("button").forEach(b=> b.classList.toggle("selected", b.textContent===e));
+}
+function uwPhotoPicked(ev){
+  const file = ev && ev.target && ev.target.files && ev.target.files[0];
+  if(!file) return;
+  if(typeof resizeImageFileTo200 !== "function"){ showToast("Image resize unavailable.","error"); return; }
+  resizeImageFileTo200(file).then(dataUrl=>{ wz.draft._photo=dataUrl; wzRenderBodyOnly(); })
+    .catch(()=> showToast("Couldn't process image.","error"));
+}
+function uwRemovePhoto(){ wz.draft._photo=null; wzRenderBodyOnly(); }
+// d1.2 — email step handlers (R-1 Keep/Change/Remove) + within-family uniqueness
+function uwEmailChoice(a){
+  const d=wz.draft;
+  if(a==="keep"){ d.emailAction="keep"; d.email=d._oldEmail; wzAdvance(); return; }
+  if(a==="remove"){ d.emailAction="remove"; d.email=""; wzAdvance(); return; }
+  if(a==="change"){ d.emailAction="change"; d.email=""; wzRender(); return; }
+  d.emailAction = d._oldEmail ? "keep" : undefined;   // back to options
+  d.email = d._oldEmail || "";
+  wzRender();
+}
+function uwEmailSkip(){ wz.draft.email=""; wz.draft.emailSkipped=true; wzAdvance(); }
+function uwEmailTaken(email, excludeUser){
+  const e=(email||"").trim().toLowerCase();
+  if(!e) return null;
+  const map=(state.config && state.config.emails)||{};
+  for(const u in map){
+    if(excludeUser && u===excludeUser) continue;
+    if(String(map[u]||"").trim().toLowerCase()===e) return u;
+  }
+  return null;
+}
+function uwResumeDraft(){
+  const s = wz.meta.savedDraft;
+  if(s && s.draft){ wz.draft = {...uwBlankDraft(), ...s.draft, _photo:null}; wz.idx = s.idx||0; }
+  wz.meta.hasSavedDraft=false;
+  if(wzCur() && wzCur().id==="resume") wz.idx++;
+  wzNormalizeIdx(); wzRender();
+}
+function uwStartOver(){
+  wzClearDraft();
+  wz.meta.hasSavedDraft=false;
+  wz.draft = wz.mode==="edit" ? uwPrefillEdit(wz.meta.editName) : uwBlankDraft();
+  wz.idx = 0; wzNormalizeIdx(); wzRender();
+}
+
+// ── review ─────────────────────────────────────────────────────────
+function uwInvalidSteps(){
+  const bad=[];
+  wzVisible().forEach(s=>{
+    if(s.id==="resume"||s.id==="review"||s.id==="success") return;
+    if(s.validate && s.validate(wz.draft)!==true) bad.push(s.id);
+  });
+  return bad;
+}
+function uwReviewRows(){
+  const d=wz.draft, isEdit=wz.mode==="edit";
+  const yn = v => v===true?"Yes":v===false?"No":"—";
+  const rows=[];
+  const row=(label,value,stepId,locked)=> rows.push({label,value,stepId,locked:!!locked});
+  row("Role", d.role==="parent"?"Parent":"Child", "role", true);
+  row("Name", wzEsc(d.name), "name", isEdit);
+  row("PIN", isEdit ? (d.pin?"••••  (new)":"Unchanged") : (d.pin?"••••":"—"), "pin");
+  const emailVal = (isEdit && d._oldEmail)
+    ? (d.emailAction==="remove" ? "Will be removed"
+       : d.emailAction==="change" ? wzEsc(d.email)
+       : wzEsc(d._oldEmail))
+    : (d.email ? wzEsc(d.email) : "None");
+  row("Email", emailVal, "email");
+  if(d.role==="parent"){
+    const kids = getChildNames().filter(n=> n!==wz.meta.editName);
+    if(kids.length) row("Manages", (d.assignChildren&&d.assignChildren.length)? d.assignChildren.map(wzEsc).join(", ") : "No children selected", "assignChildren");
+    return rows;
+  }
+  const t=[]; if(d.tabs.money)t.push("Money"); if(d.tabs.chores)t.push("Chores"); if(d.tabs.loans)t.push("Loans");
+  row("Tabs", t.length?t.join(", "):"—", "tabs");
+  if(d.useAllowance===true){
+    const amt=[];
+    const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.\-]/g,""));return isNaN(n)?0:n;};
+    if(d.structure!=="savings") amt.push("$"+num(d.allowChk).toFixed(2)+" checking");
+    if(d.structure!=="checking") amt.push("$"+num(d.allowSav).toFixed(2)+" savings");
+    const when = d.schedule==="monthly"
+      ? uwMonthDayLabel(d.allowMonthlyDay)
+      : (d.schedule==="biweekly"?"every 2 weeks":"weekly")+(d.allowWeekday!==undefined?" on "+WZ_WEEKDAYS[d.allowWeekday]:"");
+    row("Allowance", amt.join(" + ")+", "+when, "useAllowance");
+  } else {
+    row("Allowance", d.useAllowance===false?"Off":"—", "useAllowance");
+  }
+  const rc = d.rateChk===""?"0":String(d.rateChk), rs = d.rateSav===""?"0":String(d.rateSav);
+  row("Interest", rc+"% checking / "+rs+"% savings", "rates");
+  row("Chore rewards", yn(d.choreRewards), "choreRewards");
+  row("Statement emails", yn(d.notifyEmail), "notifyEmail");
+  row("Reward emails", yn(d.notifyChoreRewards), "notifyRewards");
+  row("Calendar sync", d.useCalendar===true ? "On — "+wzEsc(d.calendarId||"(no ID)") : yn(d.useCalendar), "useCalendar");
+  row("Celebration sound", yn(d.celebrationSound), "sound");
+  row("Avatar", d._photo ? "Photo" : (d.avatarEmoji||"Default"), "avatar");
+  return rows;
+}
+function uwReviewRender(d){
+  const bad = uwInvalidSteps();
+  const visIds = wzVisible().map(s=>s.id);
+  const rows = uwReviewRows().filter(r => r.locked || visIds.includes(r.stepId));
+  const copied = d._copied ? `<div class="wz-copied-note">Settings copied from <b>${wzEsc(d.copyFrom)}</b> — tap any row to adjust.</div>` : "";
+  const err = wz.meta.commitError ? `<div class="wz-commit-error">${wzEsc(wz.meta.commitError)}</div>` : "";
+  return copied + err + `<div class="wz-review">` + rows.map(r=>{
+    const invalid = bad.includes(r.stepId);
+    return `<div class="wz-review-row${invalid?" invalid":""}">
+      <div class="wz-review-l"><div class="wz-review-label">${r.label}</div>
+      <div class="wz-review-value">${invalid?'<span class="wz-req">Required — tap Edit</span>':r.value}</div></div>
+      ${r.locked?"":`<button type="button" class="wz-review-edit" onclick="wzJump('${r.stepId}')">Edit</button>`}
+    </div>`;
+  }).join("") + `</div>`;
+}
+
+// ── S3 COMMIT PROTOCOL (spec §4 — order-critical) ─────────────────
+function uwApplyAdd(){
+  const d=wz.draft, name=d.name.trim();
+  const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.\-]/g,""));return isNaN(n)?0:n;};
+  state.users = state.users||[]; state.users.push(name);
+  state.pins  = state.pins ||{}; state.pins[name]=d.pin;
+  state.roles = state.roles||{}; state.roles[name]=d.role;
+  state.config = state.config||{};
+  // d1.2 — email commits inside the state POST (both roles).
+  const _em=(d.email||"").trim();
+  if(_em){ state.config.emails = state.config.emails||{}; state.config.emails[name]=_em; }
+  if(d.role==="parent"){
+    state.config.parentChildren = state.config.parentChildren||{};
+    state.config.parentChildren[name] = [ ...(d.assignChildren||[]) ];
+    return name;
+  }
+  // child — mirrors legacy wizard writes (app.js:5928–6100), single-shot
+  getChildData(name);                                        // seed balances/chores
+  state.config.tabs = state.config.tabs||{};
+  state.config.tabs[name] = {...d.tabs};
+  state.config.notify = state.config.notify||{};
+  state.config.notify[name] = {
+    email: d.notifyEmail,
+    calendar: !!(d.useCalendar && (d.calendarId||"").trim()),
+    choreRewards: d.notifyChoreRewards
+  };
+  state.usersData = state.usersData||{};
+  state.usersData[name] = { celebrationSound: d.celebrationSound, createdAt: new Date().toISOString() };
+  state.config.parentChildren = state.config.parentChildren||{};
+  state.config.parentChildren[currentUser] = state.config.parentChildren[currentUser]||[];
+  if(state.config.parentChildren[currentUser].indexOf(name)===-1) state.config.parentChildren[currentUser].push(name);
+  const cd = getChildData(name);
+  if(d.useAllowance===true){
+    cd.autoDeposit = {
+      checking: d.structure==="savings" ? 0 : num(d.allowChk),
+      savings:  d.structure==="checking"? 0 : num(d.allowSav),
+      schedule: d.schedule
+    };
+    if(d.schedule==="monthly") cd.autoDeposit.monthlyDay = String(d.allowMonthlyDay);
+    else cd.autoDeposit.weekday = (d.allowWeekday!==undefined ? d.allowWeekday : 1);
+  } else {
+    cd.autoDeposit = {checking:0, savings:0};                // legacy case-3 shape
+  }
+  cd.rates = {
+    checking: d.rateChk===""?0:parseFloat(d.rateChk)||0,
+    savings:  d.rateSav===""?0:parseFloat(d.rateSav)||0
+  };
+  state.config.calendars = state.config.calendars||{};
+  if(d.useCalendar && (d.calendarId||"").trim()) state.config.calendars[name]=(d.calendarId||"").trim();
+  if(d.avatarEmoji) setAvatarEmoji(name, d.avatarEmoji);
+  return name;
+}
+
+function uwApplyEdit(){
+  const d=wz.draft, u=wz.meta.editName;
+  const num=v=>{const n=parseFloat(String(v).replace(/[^0-9.\-]/g,""));return isNaN(n)?0:n;};
+  if(d.pin) state.pins[u]=d.pin;                             // blank = keep (legacy)
+  // d1.2 (R-1) — explicit email action; keep = untouched, blank never clears.
+  state.config = state.config||{};
+  state.config.emails = state.config.emails||{};
+  if(d._oldEmail){
+    if(d.emailAction==="remove") delete state.config.emails[u];
+    else if(d.emailAction==="change" && (d.email||"").trim()) state.config.emails[u]=(d.email||"").trim();
+  } else if((d.email||"").trim()){
+    state.config.emails[u]=(d.email||"").trim();
+  }
+  if(d.role==="parent"){
+    state.config.parentChildren = state.config.parentChildren||{};
+    state.config.parentChildren[u] = [ ...(d.assignChildren||[]) ];
+    return u;
+  }
+  state.config.tabs = state.config.tabs||{};
+  state.config.tabs[u] = {...d.tabs};
+  state.config.notify = state.config.notify||{};
+  state.config.notify[u] = {
+    email: d.notifyEmail,
+    calendar: !!(d.useCalendar && (d.calendarId||"").trim()),
+    choreRewards: d.notifyChoreRewards
+  };
+  state.config.calendars = state.config.calendars||{};
+  if(d.useCalendar && (d.calendarId||"").trim()) state.config.calendars[u]=(d.calendarId||"").trim();
+  else delete state.config.calendars[u];
+  state.usersData = state.usersData||{};
+  state.usersData[u] = state.usersData[u]||{};
+  state.usersData[u].celebrationSound = d.celebrationSound;
+  const cd = getChildData(u);
+  if(d.useAllowance===true){
+    cd.autoDeposit = {
+      checking: d.structure==="savings" ? 0 : num(d.allowChk),
+      savings:  d.structure==="checking"? 0 : num(d.allowSav),
+      schedule: d.schedule
+    };
+    if(d.schedule==="monthly") cd.autoDeposit.monthlyDay = String(d.allowMonthlyDay);
+    else cd.autoDeposit.weekday = (d.allowWeekday!==undefined ? d.allowWeekday : 1);
+  } else {
+    cd.autoDeposit = {checking:0, savings:0};
+  }
+  cd.rates = cd.rates||{};
+  cd.rates.checking = d.rateChk===""?0:parseFloat(d.rateChk)||0;
+  cd.rates.savings  = d.rateSav===""?0:parseFloat(d.rateSav)||0;
+  if(d.avatarEmoji) setAvatarEmoji(u, d.avatarEmoji);
+  return u;
+}
+
+async function uwCommit(){
+  if(!wz || wz.meta.committing || wz.meta.committed) return;
+  const bad = uwInvalidSteps();
+  if(bad.length){ wzRender(); return; }
+  wz.meta.committing = true; wz.meta.commitError = null;
+  wzRender();
+  const snapshot = JSON.stringify(state);
+  let name;
+  try{
+    name = (wz.mode==="add") ? uwApplyAdd() : uwApplyEdit();
+  }catch(e){
+    state = JSON.parse(snapshot);
+    wz.meta.committing=false; wz.meta.commitError="Local error: "+(e&&e.message||e);
+    wzRender(); return;
+  }
+  let res = null;
+  try{
+    res = await syncToCloud(wz.mode==="add" ? "User Created (Wizard)" : "User Updated (Wizard)");
+  }catch(_){ res=null; }
+  if(!(res && res.status==="ok")){
+    // S3 step 2 — failure/timeout: roll back local mutation, draft retained,
+    // Review becomes the retry point. Never toast success unverified (M-1 class).
+    state = JSON.parse(snapshot);
+    try{ renderBalances(); }catch(_){}
+    wz.meta.committing=false;
+    wz.meta.commitError = (res && res.reason)
+      ? "Save failed ("+res.reason+")."
+      : "Couldn't reach the server — nothing was saved. Check your connection and try again.";
+    wzRender(); return;
+  }
+  // verified success
+  wz.meta.committing=false; wz.meta.committed=true;
+  wz.meta.name = name;
+  wzClearDraft();
+  if(wz.draft._photo){ try{ localStorage.setItem("fb_avatar_"+name, wz.draft._photo); }catch(_){} }
+  try{ renderMyChildren && renderMyChildren(); }catch(_){}
+  try{ renderParentTabBar && renderParentTabBar(); }catch(_){}
+  try{ renderAdminUsers && renderAdminUsers(); }catch(_){}
+  // d1.2 — email rode the commit POST above (scope §4 current rev).
+  // No setChildEmail leg, no admin-PIN prompt in user-facing UI (locked).
+  wzGotoId("success");
+}
+
+// ── success screen + Q2 landings (spec §5) ────────────────────────
+function uwSuccessRender(){
+  const isEdit = wz.mode==="edit";
+  const name = wzEsc(wz.meta.name||"");
+  const childAdd = (!isEdit && wz.draft.role==="child");
+  return `
+    <div class="wz-success">
+      <div class="wz-success-check">✓</div>
+      <h2 class="wz-q" style="text-align:center;">${name} ${isEdit?"updated":"added"}!</h2>
+      <div class="wz-opts" style="margin-top:22px;">
+        ${childAdd?`<button type="button" class="wz-opt" onclick="uwSuccessChores()"><span class="wz-opt-label">Create chores for ${name} now</span><span class="wz-opt-desc">Takes about a minute</span></button>`:""}
+        <button type="button" class="wz-opt" onclick="uwSuccessDone()"><span class="wz-opt-label">Done</span></button>
+      </div>
+    </div>`;
+}
+function uwSuccessDone(){
+  const isEdit = wz && wz.mode==="edit";
+  const nm = wz && wz.meta.name;
+  wz = null;
+  closeSheet("sheet-wiz2", true);
+  if(isEdit && nm) showToast(nm+" updated.","success");
+  else if(nm) showToast('"'+nm+'" added!',"success");
+}
+function uwSuccessChores(){
+  const nm = wz && wz.meta.name;
+  wz = null;
+  closeSheet("sheet-wiz2", true);
+  if(nm) uwGotoChores(nm);
+}
+/** v38.1 final — lands the parent on the new child, then opens the chore
+ *  wizard with that child pre-selected (child step auto-skips). */
+function uwGotoChores(childName){
+  try{ selectChild(childName); }catch(_){}
+  setTimeout(()=>{ try{ cwOpenAdd(childName); }catch(_){} }, 250);
+}
+
+// ── open / entry points ────────────────────────────────────────────
+function uwStart(mode, editName){
+  const saved = wzLoadDraft("user", mode, editName||null);
+  wz = {
+    kind:"user", mode:mode, idx:0,
+    draft: mode==="edit" ? uwPrefillEdit(editName) : uwBlankDraft(),
+    steps: null,
+    meta: {
+      editName: editName||null,
+      sectionLabel: mode==="edit" ? ("Edit "+editName) : "Add a user",
+      hasSavedDraft: !!saved, savedDraft: saved,
+      returnToReview:false, navigated:false,
+      committing:false, committed:false, commitError:null,
+      name:null
+    }
+  };
+  wz.steps = uwBuildSteps(mode);
+  if(mode==="edit" && !saved){ wz.idx = wzStepIndexById("review"); }   // spec §7 — edit opens AT Review
+  openSheet("sheet-wiz2");
+  wzRender();
+}
+function uwOpenAdd(){
+  if(currentRole !== "parent"){ showToast("Only parents can add users.","error"); return; }
+  uwStart("add", null);
+}
+function uwOpenEdit(name){
+  if(currentRole !== "parent"){ showToast("Only parents can edit users.","error"); return; }
+  if(!name || !state.roles || !state.roles[name]){ showToast("User not found.","error"); return; }
+  uwStart("edit", name);
+}
+window.uwOpenAdd = uwOpenAdd;
+window.uwOpenEdit = uwOpenEdit;
+
+// ════════════════════════════════════════════════════════════════════
+// CHORE WIZARD (v38.1 final — built on the shared wz step engine above)
+// Spec of record: FamilyBank_v38_1_FINISH_DOC.md §2 (Halyard, 2026-09-04)
+// Entry points: cwOpenAdd(presetChild?) — parent Chores tab launcher and the
+//   user-wizard success screen ("Create chores now?"); cwOpenEdit(child, id)
+//   — the Edit button on a chore card (editChore() forwards here).
+// Draft: fb_cw_draft (resume / start-over like the user wizard).
+// Commit protocol (WB-1 hybrid, locked):
+//   exactly 1 chore × 1 child → one POST "Chore Created" (server creates the
+//     calendar event + sends the notification email — full fidelity);
+//   anything multi (chores OR children) → one POST PER CHILD, "Chore Edited",
+//     no _editedChoreId → server full-rebuilds that child's chore calendar;
+//     bulk "new chore" emails intentionally dropped.
+//   Sequential, each awaited and verified {status:"ok"} (S3 pattern). On a
+//   failure the fan stops: children already posted stay committed, the
+//   failed child's local clones roll back, per-child ✓/✗ + "Retry remaining".
+// Edit mode: opens AT Review pre-populated; single POST "Chore Edited" with
+//   _editedChoreId riding the payload (legacy createChore contract, Code.gs
+//   syncCalendarEvent:1907 — single-chore calendar rebuild).
+// Zero mid-wizard POSTs — everything at commit, same as the user wizard.
+// ════════════════════════════════════════════════════════════════════
+
+const CW_DRAFT_KEY = "fb_cw_draft";
+const CW_REMINDER_HOURS = [[6,"6:00 AM"],[7,"7:00 AM"],[8,"8:00 AM"],[9,"9:00 AM"],[10,"10:00 AM"],
+  [11,"11:00 AM"],[12,"12:00 PM (Noon)"],[13,"1:00 PM"],[14,"2:00 PM"],[15,"3:00 PM (After school)"],
+  [16,"4:00 PM"],[17,"5:00 PM"],[18,"6:00 PM (Evening)"],[19,"7:00 PM"],[20,"8:00 PM"]];
+const CW_MONTH_DAYS = (()=>{ const a=[]; for(let i=1;i<=28;i++) a.push(String(i)); return a.concat(["last-2","last-1","last"]); })();
+// Authoritative per-chore field list = legacy createChore's choreFields (app.js
+// "data.chores.push(" site). Instance fields (id/status/completed*/streakCount/
+// createdAt) are NOT in this list — they're reset on every clone.
+const CW_FIELD_KEYS = ["name","desc","amount","schedule","monthlyDay","weekday","weekdays",
+  "onceDate","onceDueOn","reminderHour","dayTimes","skipFirstWeek","splitChk","childChooses",
+  "paused","endDate","requiresProof","streakStart","streakMilestone","streakReward"];
+
+// ── helpers ─────────────────────────────────────────────────────────
+function cwNum(v){ const n=parseFloat(String(v==null?"":v).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
+function cwCopy(o){ return JSON.parse(JSON.stringify(o)); }
+function cwChildrenList(preset){
+  // Parent context: children this parent manages; fall back to every child
+  // (rows with no parentChildren map). A preset child is always offered.
+  let list = (typeof getAssignedChildren==="function") ? getAssignedChildren() : getChildNames();
+  if(!list.length) list = getChildNames();
+  if(preset && list.indexOf(preset)===-1) list = [preset].concat(list);
+  return list;
+}
+function cwChildren(){ return cwChildrenList(wz && wz.meta ? wz.meta.presetChild : null); }
+function cwPrimaryChild(d){ return (wz && wz.mode==="edit") ? wz.meta.editChild : (d.child || (cwChildren()[0]||null)); }
+function cwRewardsOn(){ return typeof choreRewardsEnabled==="function" ? choreRewardsEnabled(cwPrimaryChild(wz.draft)) : true; }
+function cwChildHasCalendar(child){ return !!(child && state.config && state.config.calendars && state.config.calendars[child]); }
+function cwCopySources(d){
+  return getChildNames().filter(n => n!==d.child && (((state.children||{})[n]||{}).chores||[]).length>0);
+}
+function cwManual(d){ return (wz && wz.mode==="edit") || d.copyChoice==="manual" || cwCopySources(d).length===0; }
+function cwCurActive(d){ return (wz && wz.mode==="edit") || d._curOpen===true || (d.chores||[]).length===0; }
+
+function cwBlankCur(){
+  return {
+    cName:"", cDesc:"", cAmount:"", cSplit:50, cChildChooses:true,
+    cSchedule:undefined, cOnceType:undefined, cOnceDate:"", cWeekdays:[], cSkipFirst:undefined,
+    cMonthlyDay:"1", cEndDate:"", cReminder:8, cProof:undefined,
+    cStreakStart:"0", cStreakMilestone:"", cStreakReward:"", cDayTimes:{}
+  };
+}
+function cwBlankDraft(){
+  return { child:null, copyChoice:undefined, copyFrom:null, _copyFromPrev:null, copySel:[], copyAll:false,
+           chores:[], curIdx:-1, _curOpen:true, _fromReview:false, addAnother:undefined, assign:[],
+           ...cwBlankCur() };
+}
+function cwResetCur(d){ Object.assign(d, cwBlankCur()); d.curIdx=-1; d.addAnother=undefined; }
+
+/** Draft c* fields → legacy chore field object (mirrors createChore's choreFields). */
+function cwCurToFields(d){
+  const schedule = d.cSchedule||"once";
+  const weekdays = (schedule==="weekly"||schedule==="biweekly") ? (d.cWeekdays||[]).map(Number).sort((a,b)=>a-b) : null;
+  const onceType = schedule==="once" ? (d.cOnceType||"none") : "none";
+  const split = (d.cSplit===undefined||d.cSplit===null||d.cSplit==="") ? 50 : parseInt(d.cSplit,10);
+  return {
+    name:(d.cName||"").trim(), desc:(d.cDesc||"").trim(),
+    amount: cwRewardsOn() ? cwNum(d.cAmount) : 0,
+    schedule,
+    monthlyDay: schedule==="monthly" ? (d.cMonthlyDay||"1") : null,
+    weekday: weekdays && weekdays.length ? weekdays[0] : null,          // legacy single-day field
+    weekdays,
+    onceDate: (schedule==="once" && onceType!=="none") ? (d.cOnceDate||null) : null,
+    onceDueOn: onceType==="on",
+    reminderHour: parseInt(d.cReminder,10)||8,
+    dayTimes: (weekdays && d.cDayTimes && typeof d.cDayTimes==="object") ? cwCopy(d.cDayTimes) : {},
+    skipFirstWeek: schedule==="biweekly" && d.cSkipFirst===true,
+    splitChk: Math.max(0, Math.min(100, isNaN(split)?50:split)),
+    childChooses: d.cChildChooses===true,
+    paused:false,
+    endDate: schedule!=="once" ? (d.cEndDate||null) : null,
+    requiresProof: d.cProof===true,
+    streakStart: parseInt(d.cStreakStart,10)||0,
+    streakMilestone: parseInt(d.cStreakMilestone,10)||0,
+    streakReward: cwNum(d.cStreakReward)||0
+  };
+}
+/** Existing chore (or staged field object) → draft c* fields. */
+function cwFieldsToCur(c){
+  const cur = cwBlankCur(); c = c||{};
+  cur.cName = c.name||""; cur.cDesc = c.desc||"";
+  cur.cAmount = (c.amount===undefined||c.amount===null||c.amount==="") ? "" : String(c.amount);
+  cur.cSplit = (c.splitChk===undefined||c.splitChk===null) ? 50 : c.splitChk;
+  cur.cChildChooses = !!c.childChooses;                                   // legacy editChore: !!chore.childChooses
+  cur.cSchedule = c.schedule||"once";
+  cur.cOnceType = c.onceDate ? (c.onceDueOn?"on":"by") : "none";
+  cur.cOnceDate = c.onceDate||"";
+  cur.cWeekdays = (c.weekdays || (c.weekday!==undefined&&c.weekday!==null ? [c.weekday] : [])).slice();
+  cur.cSkipFirst = !!c.skipFirstWeek;
+  cur.cMonthlyDay = c.monthlyDay||"1";
+  cur.cEndDate = c.endDate||"";
+  cur.cReminder = c.reminderHour||8;
+  cur.cProof = !!c.requiresProof;
+  cur.cStreakStart = String(c.streakStart||0);
+  cur.cStreakMilestone = c.streakMilestone ? String(c.streakMilestone) : "";
+  cur.cStreakReward = c.streakReward ? String(c.streakReward) : "";
+  cur.cDayTimes = (c.dayTimes && typeof c.dayTimes==="object") ? cwCopy(c.dayTimes) : {};
+  return cur;
+}
+/** Copy branch: strip a source chore down to its configuration fields. */
+function cwFieldsFromChore(c){
+  const o={};
+  CW_FIELD_KEYS.forEach(k=>{ if(c[k]!==undefined) o[k]=cwCopy(c[k]); });
+  o.paused=false; o.streakStart=0;                                       // never carry streak credit across children
+  return o;
+}
+/** Clone rule (§2): fresh id, instance fields reset, fresh createdAt. */
+function cwClone(fields, stamp, n){
+  return { id:"chore_"+stamp+"_"+n, ...cwCopy(fields),
+           status:"available", completedBy:null, completedAt:null, denialNote:null,
+           createdAt:fmtDate(new Date()), streakCount:0 };
+}
+/** Chores staged for Review/commit, as field objects. */
+function cwStaged(d){
+  if(wz.mode==="edit") return [cwCurToFields(d)];
+  if(d.copyChoice==="copy" && cwCopySources(d).length){
+    const src = (((state.children||{})[d.copyFrom]||{}).chores||[]);
+    return src.filter(c=> (d.copySel||[]).indexOf(c.id)!==-1).map(cwFieldsFromChore);
+  }
+  return (d.chores||[]).slice();
+}
+function cwTargets(d){
+  if(wz.mode==="edit") return [wz.meta.editChild];
+  const kids = cwChildren();
+  if(kids.length>1 && (d.assign||[]).length) return d.assign.filter(n=>kids.indexOf(n)!==-1);
+  return d.child ? [d.child] : [];
+}
+function cwStageCur(d){
+  const f=cwCurToFields(d);
+  if(d.curIdx>=0 && d.chores[d.curIdx]) d.chores[d.curIdx]=f; else d.chores.push(f);
+  cwResetCur(d); d._curOpen=false;
+}
+function cwChoreSummary(c){
+  const bits=["$"+cwNum(c.amount).toFixed(2), (typeof scheduleLabel==="function") ? scheduleLabel(c) : (c.schedule||"")];
+  if(c.schedule==="biweekly" && c.skipFirstWeek) bits.push("starts next week");
+  if(c.endDate) bits.push("ends "+c.endDate);
+  if(c.requiresProof) bits.push("📷 proof");
+  if(c.streakMilestone) bits.push("streak every "+c.streakMilestone+" → $"+cwNum(c.streakReward).toFixed(2));
+  return wzEsc(bits.join(" · "));
+}
+
+// ── step-specific input handlers ────────────────────────────────────
+function cwInput(field, el){ wz.draft[field]=el.value; wzSaveDraft(); wzRefreshPrimary(); wzInlineMsg(wzCur()); }
+function cwToggleBool(field){ wz.draft[field]=!wz.draft[field]; wzSaveDraft(); wzRenderBodyOnly(); }
+function cwSplitInput(el){
+  const v=Math.max(0,Math.min(100,parseInt(el.value,10)||0)); wz.draft.cSplit=v;
+  const a=document.getElementById("cw-split-chk"), b=document.getElementById("cw-split-sav");
+  if(a) a.textContent=v; if(b) b.textContent=100-v;
+  wzSaveDraft();
+}
+function cwCopyToggle(id){
+  const d=wz.draft; const a=d.copySel||(d.copySel=[]); const i=a.indexOf(id);
+  if(i===-1) a.push(id); else a.splice(i,1);
+  d.copyAll=false; wzSaveDraft(); wzRenderBodyOnly();
+}
+function cwCopyAll(){
+  const d=wz.draft; const src=(((state.children||{})[d.copyFrom]||{}).chores||[]);
+  const all = src.length>0 && src.every(c=>(d.copySel||[]).indexOf(c.id)!==-1);
+  d.copySel = all ? [] : src.map(c=>c.id); d.copyAll=!all;
+  wzSaveDraft(); wzRenderBodyOnly();
+}
+function cwAssignAll(){
+  const d=wz.draft; const kids=cwChildren();
+  const all = kids.every(k=>(d.assign||[]).indexOf(k)!==-1);
+  d.assign = all ? (d.child?[d.child]:[]) : kids.slice();
+  wzSaveDraft(); wzRenderBodyOnly();
+}
+function cwCopySelectRender(d){
+  const src=(((state.children||{})[d.copyFrom]||{}).chores||[]); const sel=d.copySel||[];
+  const all = src.length>0 && src.every(c=>sel.indexOf(c.id)!==-1);
+  return `<div class="wz-opts">
+    <button type="button" class="wz-opt wz-opt-all${all?" selected":""}" onclick="cwCopyAll()"><span class="wz-opt-label">${all?"✓ ":""}Copy all (${src.length})</span></button>
+    ${src.map(c=>`<button type="button" class="wz-opt${sel.indexOf(c.id)!==-1?" selected":""}" onclick="cwCopyToggle('${wzEsc(c.id)}')">
+      <span class="wz-opt-label">${wzEsc(c.name)}</span><span class="wz-opt-desc">${cwChoreSummary(c)}</span></button>`).join("")}
+  </div>`;
+}
+function cwResumeDraft(){
+  const s = wz.meta.savedDraft;
+  if(s && s.draft){ wz.draft = {...cwBlankDraft(), ...s.draft}; wz.idx = s.idx||0; }
+  const preset = wz.meta.presetChild;
+  if(preset){                                   // launched for a specific child: retarget the resumed draft
+    const d=wz.draft;
+    d.child = preset; d.assign=[preset];
+    if(d.copyFrom===preset){ d.copyFrom=null; d._copyFromPrev=null; d.copySel=[]; d.copyAll=false; if(d.copyChoice==="copy") d.copyChoice=undefined; }
+    // In-progress manual chores must survive a retarget that newly exposes the copy question.
+    if(d.copyChoice!=="copy" && ((d.chores||[]).length || (d.cName||"").trim())) d.copyChoice="manual";
+  }
+  wz.meta.hasSavedDraft=false;
+  if(wzCur() && wzCur().id==="resume") wz.idx++;
+  wzNormalizeIdx(); wzRender();
+}
+function cwStartOver(){
+  wzClearDraft(); wz.meta.hasSavedDraft=false;
+  wz.draft = cwFreshDraft(wz.mode, wz.meta);
+  wz.idx = 0; wzNormalizeIdx(); wzRender();
+}
+function cwFreshDraft(mode, meta){
+  if(mode==="edit"){
+    const ex=(((state.children||{})[meta.editChild]||{}).chores||[]).find(c=>c.id===meta.editChoreId);
+    return {...cwBlankDraft(), ...cwFieldsToCur(ex), child:meta.editChild, _curOpen:true};
+  }
+  const d=cwBlankDraft(); const kids=cwChildrenList(meta.presetChild);
+  d.child = meta.presetChild || (kids.length===1 ? kids[0] : null);
+  d.assign = d.child ? [d.child] : [];
+  return d;
+}
+
+// ── steps ───────────────────────────────────────────────────────────
+function cwBuildSteps(mode){
+  const isEdit = mode==="edit";
+  const steps = [];
+  const man = (d)=> !cwManual(d) || !cwCurActive(d);     // skip predicate for the per-chore steps
+
+  steps.push({
+    id:"resume", footer:"none",
+    skip: () => !wz.meta.hasSavedDraft,
+    render: () => `
+      <h2 class="wz-q">Pick up where you left off?</h2>
+      <div class="wz-sub">You have unfinished chores from before.</div>
+      <div class="wz-opts">
+        <button type="button" class="wz-opt" onclick="cwResumeDraft()"><span class="wz-opt-label">Resume where I left off</span></button>
+        <button type="button" class="wz-opt" onclick="cwStartOver()"><span class="wz-opt-label">Start over</span></button>
+      </div>`
+  });
+
+  steps.push({
+    id:"child", field:"child", footer:"none",
+    skip:()=> isEdit || !!wz.meta.presetChild || cwChildren().length<=1,   // §2 auto-skip
+    title:"Chores for which child?",
+    get options(){ return cwChildren().map(n=>({v:n,label:wzEsc(n)})); },
+    onPick:(v)=>{ const d=wz.draft; d.assign=[v]; if(d.copyFrom===v){ d.copyFrom=null; d._copyFromPrev=null; d.copySel=[]; d.copyAll=false; } },
+    validate:(d)=> d.child ? true : "Pick a child.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"copyAsk", field:"copyChoice", footer:"none",
+    skip:(d)=> isEdit || cwCopySources(d).length===0,                       // §2 auto-skip
+    title:"Copy chores from another child?",
+    sub:"Copies the chore setup only — never completion history or streaks.",
+    options:[
+      {v:"copy",   label:"Yes, copy existing chores", desc:"Pick which ones, then review"},
+      {v:"manual", label:"No, create new chores"}
+    ],
+    validate:(d)=> d.copyChoice!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"copySource", field:"copyFrom", footer:"none",
+    skip:(d)=> isEdit || d.copyChoice!=="copy" || cwCopySources(d).length===0,
+    title:"Copy chores from which child?",
+    get options(){ return cwCopySources(wz.draft).map(n=>({v:n,label:wzEsc(n),desc:((((state.children||{})[n]||{}).chores||[]).length)+" chores"})); },
+    onPick:(v)=>{ const d=wz.draft; if(d._copyFromPrev!==v){ d.copySel=[]; d.copyAll=false; } d._copyFromPrev=v; },
+    validate:(d)=> d.copyFrom ? true : "Pick a child.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"copySelect", field:"copySel", footer:"default",
+    skip:(d)=> isEdit || d.copyChoice!=="copy" || !d.copyFrom || cwCopySources(d).length===0,
+    title:(d)=>`Which of ${wzEsc(d.copyFrom||"")}'s chores?`,
+    sub:"Tap to toggle.",
+    validate:(d)=> (d.copySel||[]).length ? true : "Pick at least one chore.",
+    render: cwCopySelectRender
+  });
+
+  // ── manual branch: one chore at a time (repeat loop via addAnother) ──
+  steps.push({
+    id:"cName", field:"cName", footer:"default", skip:man,
+    title:(d)=> isEdit ? "Chore name" : (d.curIdx>=0 ? "Edit the chore name" : ((d.chores||[]).length ? "What's the next chore?" : "What's the chore?")),
+    sub:"Short and clear — this is what they'll see.",
+    validate:(d)=> (d.cName||"").trim() ? true : "Chore name is required.",
+    render:(d)=>`<input id="wz-input" class="wz-text" type="text" value="${wzEsc(d.cName)}" placeholder="e.g. Vacuum living room" autocomplete="off" oninput="wzTextInput()" onkeydown="wzKeydown(event)">
+      <label class="wz-label" style="margin-top:14px;">Details (optional)</label>
+      <input class="wz-text" type="text" value="${wzEsc(d.cDesc)}" placeholder="Any extra details…" autocomplete="off" oninput="cwInput('cDesc',this)" onkeydown="wzKeydown(event)">`,
+    onPrimary:()=>{ wz.draft.cName=(wz.draft.cName||"").trim(); wz.draft.cDesc=(wz.draft.cDesc||"").trim(); return true; }
+  });
+
+  steps.push({
+    id:"cReward", field:"cAmount", footer:"default",
+    skip:(d)=> man(d) || !cwRewardsOn(),
+    title:(d)=>`How much does "${wzEsc((d.cName||"").trim()||"it")}" pay?`,
+    sub:"$0 is fine for unpaid chores.",
+    validate:(d)=>{
+      const raw=String(d.cAmount==null?"":d.cAmount).trim();
+      if(raw==="") return "Enter an amount (0 is OK).";
+      const n=parseFloat(raw.replace(/[^0-9.\-]/g,""));
+      return (!isNaN(n)&&n>=0) ? true : "Enter a valid amount (0 or more).";
+    },
+    render:(d)=>`<input id="wz-input" class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.cAmount)}" placeholder="0.00" oninput="wzTextInput()" onkeydown="wzKeydown(event)">`
+  });
+
+  steps.push({
+    id:"cSplit", field:"cSplit", footer:"default",
+    skip:(d)=> man(d) || !cwRewardsOn() || cwNum(d.cAmount)<=0,
+    title:"How should the reward be split?",
+    sub:"Between checking and savings.",
+    validate:()=> true,
+    render:(d)=>{
+      const s=parseInt(d.cSplit,10); const chk=isNaN(s)?50:s;
+      return `
+      <div class="wz-split-labels"><span>Checking <b id="cw-split-chk">${chk}</b>%</span><span>Savings <b id="cw-split-sav">${100-chk}</b>%</span></div>
+      <input type="range" class="wz-range" min="0" max="100" step="5" value="${chk}" oninput="cwSplitInput(this)">
+      <div class="wz-opts" style="margin-top:18px;">
+        <button type="button" class="wz-opt${d.cChildChooses?" selected":""}" onclick="cwToggleBool('cChildChooses')"><span class="wz-opt-label">${d.cChildChooses?"✓ ":""}Let them choose their own split</span><span class="wz-opt-desc">They pick checking vs. savings when they complete it</span></button>
+      </div>`;
+    }
+  });
+
+  steps.push({
+    id:"cSchedule", field:"cSchedule", footer:"none", skip:man,
+    title:"How often?",
+    options:[{v:"once",label:"One-time"},{v:"daily",label:"Daily"},{v:"weekly",label:"Weekly"},{v:"biweekly",label:"Every 2 weeks"},{v:"monthly",label:"Monthly"}],
+    validate:(d)=> d.cSchedule ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"cOnceType", field:"cOnceType", footer:"none",
+    skip:(d)=> man(d) || d.cSchedule!=="once",
+    title:"Is there a due date?",
+    options:[{v:"none",label:"No specific date"},{v:"by",label:"Due by a date",desc:"Anytime before that day"},{v:"on",label:"Due on a date",desc:"That day only"}],
+    validate:(d)=> d.cOnceType ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"cOnceDate", field:"cOnceDate", footer:"default",
+    skip:(d)=> man(d) || d.cSchedule!=="once" || !d.cOnceType || d.cOnceType==="none",
+    title:(d)=> d.cOnceType==="on" ? "Due on which day?" : "Due by which day?",
+    validate:(d)=> d.cOnceDate ? true : "Pick a date.",
+    render:(d)=>`<input class="wz-text" type="date" value="${wzEsc(d.cOnceDate)}" oninput="cwInput('cOnceDate',this)" onchange="cwInput('cOnceDate',this)">`
+  });
+
+  steps.push({
+    id:"cWeekdays", field:"cWeekdays", footer:"default", multi:true,
+    skip:(d)=> man(d) || (d.cSchedule!=="weekly" && d.cSchedule!=="biweekly"),
+    title:"Which days?", sub:"Tap to toggle.",
+    options: WZ_WEEKDAYS.map((n,i)=>({v:i,label:n})),
+    validate:(d)=> (d.cWeekdays||[]).length ? true : "Pick at least one day.",
+    render: wzMultiRender
+  });
+
+  steps.push({
+    id:"cSkipFirst", field:"cSkipFirst", footer:"none",
+    skip:(d)=> man(d) || d.cSchedule!=="biweekly",
+    title:"Start this week or next?",
+    options:[{v:false,label:"This week"},{v:true,label:"Next week",desc:"Skip the current week"}],
+    validate:(d)=> d.cSkipFirst!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"cMonthlyDay", field:"cMonthlyDay", footer:"default",
+    skip:(d)=> man(d) || d.cSchedule!=="monthly",
+    title:"Which day of the month?",
+    validate:(d)=> d.cMonthlyDay ? true : "Pick a day.",
+    render:(d)=>`<select class="wz-text" onchange="cwInput('cMonthlyDay',this)">${CW_MONTH_DAYS.map(v=>`<option value="${v}"${String(d.cMonthlyDay)===v?" selected":""}>${uwMonthDayLabel(v)}</option>`).join("")}</select>`
+  });
+
+  steps.push({
+    id:"cEndDate", field:"cEndDate", footer:"default",
+    skip:(d)=> man(d) || d.cSchedule==="once",
+    title:"Does it end on a date?", sub:"Optional — leave blank to keep it going.",
+    secondaryLabel:"No end date", onSecondary:()=>{ wz.draft.cEndDate=""; wzAdvance(); },
+    validate:()=> true,
+    render:(d)=>`<input class="wz-text" type="date" value="${wzEsc(d.cEndDate)}" oninput="cwInput('cEndDate',this)" onchange="cwInput('cEndDate',this)">`
+  });
+
+  steps.push({
+    id:"cReminder", field:"cReminder", footer:"default",
+    skip:(d)=> man(d) || !cwChildHasCalendar(cwPrimaryChild(d)),
+    title:"Calendar reminder time?", sub:"When the calendar event is set for.",
+    validate:()=> true,
+    render:(d)=>`<select class="wz-text" onchange="cwInput('cReminder',this)">${CW_REMINDER_HOURS.map(([v,l])=>`<option value="${v}"${(parseInt(d.cReminder,10)||8)===v?" selected":""}>${l}</option>`).join("")}</select>`
+  });
+
+  steps.push({
+    id:"cProof", field:"cProof", footer:"none", skip:man,
+    title:"Require a proof photo?", sub:"They'll attach a photo when they mark it done.",
+    options:[{v:false,label:"No"},{v:true,label:"Yes, require a photo"}],
+    validate:(d)=> d.cProof!==undefined ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"cStreak", field:"cStreakMilestone", footer:"default",
+    skip:(d)=> man(d) || !cwRewardsOn() || d.cSchedule==="once",
+    title:"Streak bonus?", sub:"Optional. A bonus deposited to checking every X completions in a row.",
+    secondaryLabel:"No streak bonus", onSecondary:()=>{ wz.draft.cStreakMilestone=""; wz.draft.cStreakReward=""; wzAdvance(); },
+    validate:(d)=>{
+      const m=String(d.cStreakMilestone==null?"":d.cStreakMilestone).trim();
+      const r=String(d.cStreakReward==null?"":d.cStreakReward).trim();
+      const s=String(d.cStreakStart==null?"":d.cStreakStart).trim();
+      if(m!=="" && !/^\d+$/.test(m)) return "Milestone must be a whole number.";
+      if(s!=="" && !/^\d+$/.test(s)) return "Starting streak must be a whole number.";
+      if(r!=="" && (isNaN(parseFloat(r.replace(/[^0-9.\-]/g,""))) || cwNum(r)<0)) return "Bonus must be 0 or more.";
+      return true;
+    },
+    render:(d)=>`<label class="wz-label">Milestone every X times</label>
+      <input id="wz-input" class="wz-text" type="text" inputmode="numeric" value="${wzEsc(d.cStreakMilestone)}" placeholder="e.g. 4" oninput="wzTextInput()" onkeydown="wzKeydown(event)">
+      <label class="wz-label" style="margin-top:14px;">Bonus reward $</label>
+      <input class="wz-text" type="text" inputmode="decimal" value="${wzEsc(d.cStreakReward)}" placeholder="0.00" oninput="cwInput('cStreakReward',this)" onkeydown="wzKeydown(event)">
+      <label class="wz-label" style="margin-top:14px;">Starting streak count</label>
+      <input class="wz-text" type="text" inputmode="numeric" value="${wzEsc(d.cStreakStart)}" placeholder="0" oninput="cwInput('cStreakStart',this)" onkeydown="wzKeydown(event)">
+      <div class="wz-sub" style="margin-top:6px;margin-bottom:0;">Credit past completions.</div>`
+  });
+
+  steps.push({
+    id:"addAnother", field:"addAnother", footer:"none",
+    skip:(d)=> isEdit || man(d),
+    title:(d)=>`"${wzEsc((d.cName||"").trim())}" is ready.`,
+    sub:(d)=> d._fromReview ? "" : `${(d.chores||[]).length+1} chore${(d.chores||[]).length?"s":""} so far.`,
+    get options(){
+      const fr = wz.draft._fromReview;
+      return [
+        {v:"another", label:"Save and add another chore"},
+        {v:"done",    label: fr ? "Save changes" : "Done — review chores", desc: fr ? "" : "Nothing is created until you confirm"}
+      ];
+    },
+    beforePick:(v)=>{
+      // Staging closes the per-chore steps (this one included), so navigate
+      // explicitly instead of letting wzAdvance() look for a now-hidden step.
+      const d=wz.draft; const fromReview=!!d._fromReview;
+      cwStageCur(d); d.addAnother=v; d._fromReview=false; wz.meta.returnToReview=false;
+      if(v==="another"){ d._curOpen=true; wzSaveDraft(); wzGotoId("cName"); return false; }
+      wzSaveDraft();
+      wzGotoId(fromReview ? "review" : "assign");                        // "done" → assign (normalizes to review when assign is skipped)
+      return false;
+    },
+    validate:()=> true,
+    render: wzChoiceRender
+  });
+
+  steps.push({
+    id:"assign", field:"assign", footer:"default", multi:true,
+    skip:()=> isEdit || cwChildren().length<=1,                            // NTH-33; pointless with one child
+    title:"Assign to which children?",
+    sub:"Each selected child gets their own copy.",
+    get options(){ return cwChildren().map(n=>({v:n,label:wzEsc(n)})); },
+    validate:(d)=> (d.assign||[]).length ? true : "Pick at least one child.",
+    render:(d)=>{
+      const kids=cwChildren(); const all=kids.every(k=>(d.assign||[]).indexOf(k)!==-1);
+      return `<div class="wz-opts">
+        <button type="button" class="wz-opt wz-opt-all${all?" selected":""}" onclick="cwAssignAll()"><span class="wz-opt-label">${all?"✓ ":""}Assign to all (${kids.length})</span></button>
+        ${wzOptButtons(wzCur(), v=>(d.assign||[]).indexOf(v)!==-1)}
+      </div>`;
+    }
+  });
+
+  steps.push({
+    id:"review", footer:"custom",
+    title: isEdit ? "Review the changes" : "Review before creating",
+    sub: isEdit ? "Nothing saves until you confirm." : "Nothing is created until you confirm.",
+    validate:()=> true,
+    render: cwReviewRender,
+    footerHtml: ()=>{
+      const d=wz.draft, bad=cwInvalidSteps().length>0, busy=wz.meta.committing;
+      const n=cwStaged(d).length, t=cwTargets(d).length;
+      const failed = wz.meta.fan && wz.meta.fan.some(f=>f.status==="fail");
+      if(failed && !busy) return `<button class="btn btn-primary wz-btn-primary" id="wz-primary" onclick="cwRetryFan()">Retry remaining</button>`;
+      const label = busy ? "Saving…" : isEdit ? "Save changes" : `Create ${n} chore${n===1?"":"s"}${t>1?" for "+t+" children":""}`;
+      return `<button class="btn btn-primary wz-btn-primary" id="wz-primary" onclick="cwCommit()" ${bad||busy||n===0||t===0?"disabled":""}>${label}</button>`;
+    }
+  });
+
+  steps.push({ id:"success", footer:"none", skip:()=> !wz.meta.committed, render: cwSuccessRender });
+  return steps;
+}
+
+// ── review ──────────────────────────────────────────────────────────
+function cwInvalidSteps(){
+  const bad=[];
+  wzVisible().forEach(s=>{
+    if(s.id==="resume"||s.id==="review"||s.id==="success"||s.id==="addAnother") return;
+    if(s.validate && s.validate(wz.draft)!==true) bad.push(s.id);
+  });
+  return bad;
+}
+function cwReviewEditChore(i){
+  const d=wz.draft; const f=d.chores[i]; if(!f) return;
+  Object.assign(d, cwFieldsToCur(f)); d.curIdx=i; d._curOpen=true; d._fromReview=true;
+  wz.meta.returnToReview=false; wzSaveDraft(); wzGotoId("cName");
+}
+function cwReviewRemoveChore(i){ const d=wz.draft; d.chores.splice(i,1); wzSaveDraft(); wzRender(); }
+function cwReviewAddChore(){
+  const d=wz.draft; cwResetCur(d); d._curOpen=true; d._fromReview=true; d.copyChoice="manual";
+  wz.meta.returnToReview=false; wzSaveDraft(); wzGotoId("cName");
+}
+function cwReviewDeselect(id){ cwCopyToggle(id); wzRender(); }
+function cwFanStatusHtml(){
+  const fan=wz.meta.fan||[];
+  const icon = s => s==="ok"?"✓":s==="fail"?"✗":s==="saving"?"…":"·";
+  return `<div class="wz-fan">${fan.map(f=>`<div class="wz-fan-row ${f.status}"><span class="wz-fan-icon">${icon(f.status)}</span><span>${wzEsc(f.child)}</span><span class="wz-fan-state">${f.status==="ok"?"Saved":f.status==="fail"?"Failed":f.status==="saving"?"Saving":"Waiting"}</span></div>`).join("")}</div>`;
+}
+function cwReviewRender(d){
+  const isEdit = wz.mode==="edit";
+  const bad = cwInvalidSteps();
+  const visIds = wzVisible().map(s=>s.id);
+  const err = wz.meta.commitError ? `<div class="wz-commit-error">${wzEsc(wz.meta.commitError)}</div>` : "";
+  const fan = wz.meta.fan ? cwFanStatusHtml() : "";
+  const rowHtml = (label, value, stepId, locked)=>{
+    const invalid = stepId && bad.includes(stepId);
+    return `<div class="wz-review-row${invalid?" invalid":""}">
+      <div class="wz-review-l"><div class="wz-review-label">${label}</div>
+      <div class="wz-review-value">${invalid?'<span class="wz-req">Required — tap Edit</span>':value}</div></div>
+      ${locked||!stepId?"":`<button type="button" class="wz-review-edit" onclick="wzJump('${stepId}')">Edit</button>`}
+    </div>`;
+  };
+
+  if(isEdit){
+    const f = cwCurToFields(d);
+    const rows=[];
+    rows.push(rowHtml("Child", wzEsc(wz.meta.editChild), null, true));
+    rows.push(rowHtml("Name", wzEsc(d.cName), "cName"));
+    rows.push(rowHtml("Details", d.cDesc ? wzEsc(d.cDesc) : "—", "cName"));
+    if(visIds.includes("cReward")) rows.push(rowHtml("Reward", "$"+cwNum(d.cAmount).toFixed(2), "cReward"));
+    if(visIds.includes("cSplit"))  rows.push(rowHtml("Payout split", f.splitChk+"% checking / "+(100-f.splitChk)+"% savings"+(f.childChooses?" · child may choose":""), "cSplit"));
+    rows.push(rowHtml("Schedule", wzEsc(typeof scheduleLabel==="function" ? scheduleLabel(f) : f.schedule), "cSchedule"));
+    if(visIds.includes("cOnceType")) rows.push(rowHtml("Due date", f.onceDate ? ((f.onceDueOn?"Due on ":"Due by ")+wzEsc(f.onceDate)) : "None", "cOnceType"));
+    if(visIds.includes("cWeekdays")) rows.push(rowHtml("Days", (f.weekdays||[]).map(i=>WZ_WEEKDAYS[i]).join(", ")||"—", "cWeekdays"));
+    if(visIds.includes("cSkipFirst")) rows.push(rowHtml("Starts", f.skipFirstWeek?"Next week":"This week", "cSkipFirst"));
+    if(visIds.includes("cMonthlyDay")) rows.push(rowHtml("Day of month", uwMonthDayLabel(f.monthlyDay), "cMonthlyDay"));
+    if(visIds.includes("cEndDate")) rows.push(rowHtml("End date", f.endDate ? wzEsc(f.endDate) : "None", "cEndDate"));
+    if(visIds.includes("cReminder")){ const h=CW_REMINDER_HOURS.find(x=>x[0]===f.reminderHour); rows.push(rowHtml("Calendar reminder", h?h[1]:(f.reminderHour+":00"), "cReminder")); }
+    rows.push(rowHtml("Proof photo", f.requiresProof?"Required":"No", "cProof"));
+    if(visIds.includes("cStreak")) rows.push(rowHtml("Streak bonus", f.streakMilestone ? ("Every "+f.streakMilestone+" → $"+cwNum(f.streakReward).toFixed(2)+(f.streakStart?" (starting at "+f.streakStart+")":"")) : "None", "cStreak"));
+    // v34.1 Item 14 — calendar status lives on Review now that the legacy creator sheet is gone.
+    setTimeout(()=>{ try{ if(typeof checkChoreCalendar==="function" && wz && wz.mode==="edit"){ const ex=(((state.children||{})[wz.meta.editChild]||{}).chores||[]).find(c=>c.id===wz.meta.editChoreId); if(ex) checkChoreCalendar(ex); } }catch(_){} }, 50);
+    return err + `<div class="wz-review">${rows.join("")}</div><div id="chore-cal-status" class="chore-cal-status hidden"></div>`;
+  }
+
+  const targets = cwTargets(d);
+  const staged  = cwStaged(d);
+  const isCopy  = d.copyChoice==="copy" && cwCopySources(d).length>0;
+  const forStep = visIds.includes("assign") ? "assign" : (visIds.includes("child") ? "child" : null);
+  let h = err + fan;
+  h += `<div class="wz-review">`;
+  h += rowHtml("For", targets.length ? targets.map(wzEsc).join(", ") : "—", forStep, !forStep);
+  if(isCopy) h += rowHtml("Copied from", wzEsc(d.copyFrom||"—"), "copySource");
+  h += `</div>`;
+  h += `<div class="wz-label" style="margin-top:18px;">Chores (${staged.length})</div>`;
+  if(!staged.length) h += `<div class="wz-sub">No chores yet.</div>`;
+  const srcIds = isCopy ? ((((state.children||{})[d.copyFrom]||{}).chores||[]).filter(c=>(d.copySel||[]).indexOf(c.id)!==-1).map(c=>c.id)) : [];
+  h += staged.map((c,i)=>`
+    <div class="wz-chore-card">
+      <div class="wz-chore-main"><div class="wz-chore-name">${wzEsc(c.name)}</div><div class="wz-chore-sum">${cwChoreSummary(c)}${c.desc?"<br>"+wzEsc(c.desc):""}</div></div>
+      <div class="wz-chore-actions">
+        ${isCopy ? `<button type="button" class="wz-review-edit" onclick="cwReviewDeselect('${wzEsc(srcIds[i]||"")}')">Remove</button>`
+                 : `<button type="button" class="wz-review-edit" onclick="cwReviewEditChore(${i})">Edit</button><button type="button" class="wz-review-edit" onclick="cwReviewRemoveChore(${i})">Remove</button>`}
+      </div>
+    </div>`).join("");
+  if(isCopy) h += `<button type="button" class="wz-linkbtn" onclick="wzJump('copySelect')">Change which chores are copied</button>`;
+  else       h += `<button type="button" class="wz-linkbtn" onclick="cwReviewAddChore()">+ Add another chore</button>`;
+  return h;
+}
+
+// ── commit (WB-1 hybrid, S3-verified, sequential fan) ───────────────
+async function cwCommit(){
+  if(!wz || wz.meta.committing || wz.meta.committed) return;
+  if(cwInvalidSteps().length){ wzRender(); return; }
+  wz.meta.committing=true; wz.meta.commitError=null;
+  if(wz.mode==="edit"){ await cwCommitEdit(); return; }
+  const staged=cwStaged(wz.draft), targets=cwTargets(wz.draft);
+  if(!staged.length || !targets.length){ wz.meta.committing=false; wz.meta.commitError="Nothing to create."; wzRender(); return; }
+  wz.meta.fan = targets.map(n=>({child:n, status:"pending"}));
+  wz.meta.single = (staged.length===1 && targets.length===1);
+  wzRender();
+  await cwRunFan(staged);
+}
+async function cwRetryFan(){
+  if(!wz || wz.meta.committing || wz.meta.committed || !wz.meta.fan) return;
+  wz.meta.fan.forEach(f=>{ if(f.status==="fail") f.status="pending"; });
+  wz.meta.committing=true; wz.meta.commitError=null; wzRender();
+  await cwRunFan(cwStaged(wz.draft));
+}
+async function cwRunFan(staged){
+  const fan=wz.meta.fan; let counter=wz.meta.idCounter||0;
+  for(let k=0;k<fan.length;k++){
+    const f=fan[k]; if(f.status==="ok") continue;
+    f.status="saving"; wzRender();
+    const snapshot=JSON.stringify(state);
+    const stamp=Date.now();
+    const data=getChildData(f.child); data.chores=data.chores||[];
+    staged.forEach(fields=>{ data.chores.push(cwClone(fields, stamp, counter++)); });   // clones added per child, right before its POST
+    const isLast = !fan.slice(k+1).some(x=>x.status!=="ok");
+    let res=null;
+    try{
+      // payload.activeChild = this child (server keys calendar/email off it);
+      // skipReload on all but the last leg so an early loadFromCloud can't
+      // clobber the local state the later legs are about to POST.
+      res = await syncToCloud(wz.meta.single ? "Chore Created" : "Chore Edited", {activeChild:f.child, skipReload:!isLast});
+    }catch(_){ res=null; }
+    if(!(res && res.status==="ok")){
+      state=JSON.parse(snapshot);                       // roll back THIS child only; earlier legs stay committed
+      f.status="fail";
+      const earlier = fan.slice(0,k).filter(x=>x.status==="ok").length;
+      wz.meta.commitError = (res && res.reason)
+        ? "Save failed for "+f.child+" ("+res.reason+")."
+        : "Couldn't reach the server while saving "+f.child+". "+(earlier?earlier+" child"+(earlier===1?"":"ren")+" already saved; ":"Nothing was saved; ")+"the rest were not. Check your connection and retry.";
+      wz.meta.idCounter=counter; wz.meta.committing=false;
+      try{ renderParentChores(); renderChildChores(); updateChoreBadges(); }catch(_){}
+      wzRender(); return;
+    }
+    f.status="ok"; wzRender();
+  }
+  wz.meta.committing=false; wz.meta.committed=true;
+  wz.meta.created=staged.length; wz.meta.createdFor=fan.map(x=>x.child);
+  wzClearDraft();
+  try{ renderParentChores(); renderChildChores(); updateChoreBadges(); }catch(_){}
+  wzGotoId("success");
+}
+async function cwCommitEdit(){
+  const d=wz.draft, child=wz.meta.editChild, id=wz.meta.editChoreId;
+  const data=getChildData(child);
+  const ex=(data.chores||[]).find(c=>c.id===id);
+  if(!ex){ wz.meta.committing=false; wz.meta.commitError="That chore no longer exists."; wzRender(); return; }
+  const snapshot=JSON.stringify(state);
+  Object.assign(ex, cwCurToFields(d));                   // legacy createChore edit path: Object.assign(ex, choreFields)
+  wzRender();
+  let res=null;
+  try{ res = await syncToCloud("Chore Edited", {activeChild:child, extra:{_editedChoreId:id}}); }catch(_){ res=null; }
+  if(!(res && res.status==="ok")){
+    state=JSON.parse(snapshot); wz.meta.committing=false;
+    wz.meta.commitError = (res && res.reason) ? "Save failed ("+res.reason+")." : "Couldn't reach the server — nothing was saved. Check your connection and try again.";
+    try{ renderParentChores(); }catch(_){}
+    wzRender(); return;
+  }
+  wz.meta.committing=false; wz.meta.committed=true; wz.meta.editedName=ex.name;
+  wzClearDraft();
+  try{ renderParentChores(); renderChildChores(); updateChoreBadges(); }catch(_){}
+  wzGotoId("success");
+}
+
+// ── success ─────────────────────────────────────────────────────────
+function cwSuccessRender(){
+  const m=wz.meta, isEdit=wz.mode==="edit";
+  const msg = isEdit
+    ? `"${wzEsc(m.editedName||"")}" updated!`
+    : `${m.created} chore${m.created===1?"":"s"} created for ${(m.createdFor||[]).map(wzEsc).join(", ")}!`;
+  const multi = !isEdit && !m.single;
+  return `
+    <div class="wz-success">
+      <div class="wz-success-check">✓</div>
+      <h2 class="wz-q" style="text-align:center;">${msg}</h2>
+      ${multi ? `<div class="wz-sub" style="text-align:center;">Calendar events were rebuilt where enabled. Bulk creation doesn't send "new chore" emails.</div>` : ""}
+      <div class="wz-opts" style="margin-top:22px;">
+        ${isEdit ? "" : `<button type="button" class="wz-opt" onclick="cwSuccessMore()"><span class="wz-opt-label">Create more chores</span></button>`}
+        <button type="button" class="wz-opt" onclick="cwSuccessDone()"><span class="wz-opt-label">Done</span></button>
+      </div>
+    </div>`;
+}
+function cwSuccessDone(){
+  const m = wz && wz.meta;
+  const primary = m && (m.editChild || (m.createdFor && m.createdFor[0]));
+  wz=null; closeSheet("sheet-wiz2", true);
+  // Land the parent on the child that just got chores (if they were viewing someone else).
+  if(primary && primary!==activeChild && currentRole==="parent"){ try{ selectChild(primary); }catch(_){} }
+}
+function cwSuccessMore(){ wz=null; closeSheet("sheet-wiz2", true); setTimeout(()=>{ try{ cwOpenAdd(null); }catch(_){} }, 200); }
+
+// ── open / entry points ────────────────────────────────────────────
+function cwStart(mode, opts){
+  opts=opts||{};
+  const editKey = mode==="edit" ? (opts.child+"|"+opts.choreId) : null;
+  const saved = wzLoadDraft("chore", mode, editKey, CW_DRAFT_KEY);
+  const meta = {
+    draftKey:CW_DRAFT_KEY, onDone:cwSuccessDone,
+    presetChild:opts.presetChild||null, editChild:opts.child||null, editChoreId:opts.choreId||null, editName:editKey,
+    sectionLabel: mode==="edit" ? "Edit chore" : "New chores",
+    hasSavedDraft:!!saved, savedDraft:saved,
+    returnToReview:false, navigated:false,
+    committing:false, committed:false, commitError:null,
+    fan:null, single:false, idCounter:0, created:0, createdFor:[], editedName:null
+  };
+  wz = { kind:"chore", mode:mode, idx:0, draft:null, steps:null, meta:meta };
+  wz.draft = cwFreshDraft(mode, meta);
+  wz.steps = cwBuildSteps(mode);
+  if(mode==="edit" && !saved){ wz.idx = wzStepIndexById("review"); }     // edit opens AT Review (spec §7 symmetry)
+  openSheet("sheet-wiz2");
+  wzRender();
+}
+function cwOpenAdd(presetChild){
+  if(currentRole !== "parent"){ showToast("Only parents can create chores.","error"); return; }
+  const kids = cwChildrenList(presetChild||null);
+  if(!kids.length){ showToast("Add a child first.","error"); return; }
+  if(presetChild && getChildNames().indexOf(presetChild)===-1) presetChild=null;
+  cwStart("add", {presetChild:presetChild||null});
+}
+function cwOpenEdit(child, choreId){
+  if(currentRole !== "parent"){ showToast("Only parents can edit chores.","error"); return; }
+  const ex=(((state.children||{})[child]||{}).chores||[]).find(c=>c.id===choreId);
+  if(!ex){ showToast("Chore not found.","error"); return; }
+  cwStart("edit", {child:child, choreId:choreId});
+}
+window.cwOpenAdd = cwOpenAdd;
+window.cwOpenEdit = cwOpenEdit;

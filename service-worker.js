@@ -15,7 +15,7 @@
    ║  script.google.com is always bypassed — never cached.            ║
    ╚═══════════════════════════════════════════════════════════════════╝ */
 
-const SW_VERSION  = 'v37.0';
+const SW_VERSION  = 'v38.1-final';
 const CACHE_NAME  = 'family-bank-' + SW_VERSION;
 const CORE_ASSETS = [
   './',
@@ -87,15 +87,22 @@ function handleVersionCheck(req) {
     .then(res => {
       if (res && res.status === 200) {
         res.clone().json().then(data => {
-          if (data && data.version && data.version !== SW_VERSION.replace('v', '')) {
-            // Tell every open page there's a new version available
-            self.clients.matchAll().then(clients => {
-              clients.forEach(c => c.postMessage({
-                type: 'NEW_VERSION_AVAILABLE',
-                newVersion: data.version,
-                currentVersion: SW_VERSION.replace('v', '')
-              }));
-            });
+          if (data && data.version) {
+            // v38.1 final (In-6) — normalize both sides: strip a leading "v" and
+            // whitespace so "v38.1-final" and "38.1-final" compare equal.
+            var norm = function(s){ return String(s || '').trim().replace(/^v/i, ''); };
+            var remote = norm(data.version + (data.build ? '-' + data.build : ''));
+            var local  = norm(SW_VERSION);
+            if (remote !== local) {
+              // Tell every open page there's a new version available
+              self.clients.matchAll().then(clients => {
+                clients.forEach(c => c.postMessage({
+                  type: 'NEW_VERSION_AVAILABLE',
+                  newVersion: remote,
+                  currentVersion: local
+                }));
+              });
+            }
           }
         }).catch(() => {});
       }
