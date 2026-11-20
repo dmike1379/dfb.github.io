@@ -67,7 +67,7 @@ const CFG_IMG_LOGO   = "images/logo.png";
 const CFG_IMG_ICON   = "images/icon.png";
 
 // ── Version ──
-const APP_VERSION = "42.0";   // v42.0 — fallback stamp only (version.json is authoritative)
+const APP_VERSION = "44.0";   // v44.0 — fallback stamp only (version.json is authoritative)
 
 // ╔═══════════════════════════════════════════════════════════════════╗
 // ║         END OF CONFIGURATION — DO NOT EDIT BELOW THIS LINE       ║
@@ -723,6 +723,10 @@ async function _doSyncToCloud(action, opts, gen){
         // and the person redoes it on current data.
         showToast("Someone else saved first — the screen is refreshed. Please do that again.","error",7000);
         _resync = true;
+      } else if(_parsed && _parsed.status==="error" && _parsed.reason==="emailTaken"){
+        // v43-1 — a new email that another family already uses: nothing was saved
+        showToast("That email ("+(_parsed.email||"")+") is already used by another family — the change wasn't saved.","error",8000);
+        _resync = true;
       } else if(_parsed && _parsed.status==="error" && _parsed.reason==="busy"){
         showToast("The bank was busy — the screen is refreshed. Please do that again.","error",7000);   // v39-8 / v39-19
         _resync = true;
@@ -748,6 +752,9 @@ async function _doSyncToCloud(action, opts, gen){
       }
     }
     if(_resync) _resyncAfterFailedSave();   // v39-19
+    if(_parsed && _parsed.status==="ok" && _parsed.emailIndexFailed){   // v43-4 (#3)
+      showToast("Saved — but the email login list didn't update. Ask the bank's admin to run Admin → Rebuild email index.","error",8000);
+    }
     if(_parsed && _parsed.status==="ok"){   // v38.3-1 (BUG-B) — remember stamps known to be on the server (audit re-check #1)
       _postedStamps.push(payload._savedAt); if(_postedStamps.length>20) _postedStamps.shift();
       if(_parsed.rev !== undefined && _parsed.rev !== null && state) state._rev = _parsed.rev;   // v39-8 — next save is based on this revision
@@ -774,6 +781,7 @@ function _saveReasonText(r){
   if(r==="stale")   return "someone else saved first — the screen was refreshed";
   if(r==="busy")    return "the bank was busy — the screen was refreshed";
   if(r==="dropped") return "an earlier change didn't save, so the screen was refreshed";
+  if(r==="emailTaken") return "that email is already used by another family";   // v43-1
   return r;
 }
 
@@ -2180,6 +2188,7 @@ function renderParentChores(){
     </div>` : "";
   { const nb=document.createElement("div"); approvalsEl.prepend(nb); renderNotices(nb, activeChild); }   // v42-2
 
+  try{ renderChoreHistory(); }catch(_){}   // v44-3 (NTH-14)
   const listEl=document.getElementById("parent-chore-list");
   if(!chores.length){
     listEl.innerHTML=emptyState("chores","No chores yet.");
@@ -2188,6 +2197,7 @@ function renderParentChores(){
   listEl.innerHTML=chores.map(c=>{
     const badge = c.status==="pending"
       ? '<span class="status-badge badge-pending">Awaiting Approval</span>'
+      : c.calendarDeleted ? '<span class="status-badge badge-pending">Hidden</span>'   // v44-4
       : '<span class="status-badge badge-available">Active</span>';
     return `<div class="chore-card">
       <div class="chore-card-header">
@@ -2199,13 +2209,75 @@ function renderParentChores(){
         <svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-currency-dollar'/></svg> ${c.splitChk}% Chk / ${100-c.splitChk}% Sav${c.childChooses?" (child chooses)":""}${c.endDate?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-clock'/></svg> Ends: "+c.endDate:""}${c.desc?"<br><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> "+escapeHtml(c.desc):""}
         ${_renderNextChorePill(c)}
       </div>
+      ${c.calendarDeleted ? `<div class="chore-cal-deleted">📅 Deleted in Google Calendar on ${fmtMissedDay(c.calendarDeleted)} — hidden from ${escapeHtml(activeChild)}. Put it back, or delete it for good.</div>` : ""}
       <div class="row" style="gap:8px;margin-top:4px;flex-wrap:wrap;">
+        ${c.calendarDeleted ? `<button class="btn btn-secondary btn-sm" onclick="restoreCalendarChore('${c.id}')">↩️ Put it back</button>` : ""}
         <button class="btn btn-outline btn-sm" onclick="editChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-pencil'/></svg> Edit</button>
         <button class="btn btn-danger  btn-sm" onclick="deleteChore('${c.id}')"><svg class='icon' aria-hidden='true'><use href='vendor/phosphor-sprite.svg#ph-trash'/></svg> Delete</button>
       </div>
     </div>`;
   }).join("");
 }
+
+// v44-4 (Stage C) — a chore deleted in Google Calendar comes back: flag cleared, its events rebuilt by the save
+function restoreCalendarChore(choreId){
+  const data=getChildData(activeChild); const chore=(data.chores||[]).find(c=>c.id===choreId);
+  if(!chore || !chore.calendarDeleted) return;
+  delete chore.calendarDeleted;
+  const who=activeChild;
+  renderParentChores(); updateChoreBadges();
+  syncToCloud("Chore Edited", {extra:{_editedChoreId:chore.id}}).then(r=>{   // the server rebuilds just this chore's events
+    if(r && r.status==="ok") showToast("Put back — it's on "+who+"'s list and calendar again.","success");   // v44-5 (#6)
+  });
+}
+window.restoreCalendarChore = restoreCalendarChore;
+
+// ── v44-3 (NTH-14) — parent chore history: last 14 days (30 on tap), newest first ──
+let _choreHistDays = 14;
+function choreHistoryRows(child, days){
+  const data = getChildData(child) || {}; const chores = data.chores || [];
+  const end = todayStr(); const p = end.split("-").map(Number);
+  const start = ymdLocal(new Date(p[0], p[1]-1, p[2] - (days-1)));
+  const inWin = (d) => d && d >= start && d <= end;
+  const rows = []; const paid = {};
+  ((state.history && state.history[child]) || []).forEach(h => {
+    const note = String(h.note || ""); let d = null;
+    try { const t = new Date(h.date); if(!isNaN(t)) d = ymdLocal(t); } catch(_){}
+    if(!inWin(d)) return;
+    let m = /^Chore: (.+?) \((Chk|Sav|late, no reward)\)$/.exec(note);
+    if(m){
+      const k = d + "|" + m[1] + "|" + (m[2]==="late, no reward" ? "late" : "paid");   // v44-5 (#8)
+      if(!paid[k]){ paid[k] = {day:d, name:m[1], kind: m[2]==="late, no reward" ? "late" : "paid", amt:0}; rows.push(paid[k]); }
+      paid[k].amt += Number(h.amt) || 0;
+      return;
+    }
+    m = /^🔥 Streak Bonus: (.+?) \((\d+) in a row!\)/.exec(note);
+    if(m) rows.push({day:d, name:m[1], kind:"streak", amt:Number(h.amt)||0, n:m[2]});
+  });
+  chores.forEach(c => {
+    (c.missedDates || []).forEach(d => { if(inWin(d)) rows.push({day:d, name:c.name, kind:"missed"}); });
+    if(c.status === "pending"){ const d = c.submittedFor || end; if(inWin(d)) rows.push({day:d, name:c.name, kind:"pending"}); }
+  });
+  const order = {pending:0, paid:1, late:2, streak:3, missed:4};
+  rows.sort((a,b) => a.day < b.day ? 1 : a.day > b.day ? -1 : (order[a.kind]-order[b.kind]) || a.name.localeCompare(b.name));
+  return rows;
+}
+function renderChoreHistory(){
+  const el = document.getElementById("parent-chore-history");
+  if(!el || !activeChild) return;
+  const rows = choreHistoryRows(activeChild, _choreHistDays);
+  const label = {paid:"✅ Paid", late:"⏰ Approved late — no reward", streak:"🔥 Streak bonus", missed:"❌ Missed", pending:"⏳ Waiting for your approval"};
+  let html = "", lastDay = null;
+  rows.forEach(r => {
+    if(r.day !== lastDay){ html += `<div class="chore-hist-day">${r.day===todayStr()?"Today":fmtMissedDay(r.day)}</div>`; lastDay = r.day; }
+    const amt = (r.kind==="paid" || r.kind==="streak") && r.amt>0 ? `<span class="chore-hist-amt">+${fmt(r.amt)}</span>` : "";
+    html += `<div class="chore-hist-row chore-hist-${r.kind}"><span class="chore-hist-name">${escapeHtml(r.name)}${r.kind==="streak"?" ("+escapeHtml(r.n)+" in a row)":""}</span><span class="chore-hist-what">${label[r.kind]}</span>${amt}</div>`;
+  });
+  el.innerHTML = (html || `<div class="chore-card-meta">Nothing in the last ${_choreHistDays} days yet.</div>`)
+    + `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="toggleChoreHistDays()">${_choreHistDays===14?"Show 30 days":"Show 14 days"}</button>`;
+}
+function toggleChoreHistDays(){ _choreHistDays = _choreHistDays===14 ? 30 : 14; renderChoreHistory(); }
+window.toggleChoreHistDays = toggleChoreHistDays;
 
 // v40-5 — one approval body for approveChore / quickApproveOne. withReward=false (a late chore the
 // parent approves without pay) deposits nothing and writes a $0 ledger line; either way the chore is
@@ -2273,7 +2345,7 @@ function approveChore(choreId){
   const late=!!chore.lateFor;
   const finish=(withReward)=>{
     applyChoreApproval(data, chore, withReward);
-    syncToCloud("Chore Approved", {extra:{_approvedChoreId:chore.id, _approvedChoreSchedule:chore.schedule}});   // v39-2 — calendar hint rides the POST
+    syncToCloud("Chore Approved", {extra:{_approvedChoreId:chore.id, _approvedChoreSchedule:chore.schedule, _approvedChoreName:chore.name}});   // v39-2 — calendar hint rides the POST (v44-6: + name for the email)
     showToast(withReward ? "Approved! "+fmt(chore.amount)+" deposited. 🎉" : "Approved — no reward this time. Streak continues.","success");
     renderParentChores(); renderChildChores(); updateChoreBadges();
   };
@@ -2395,7 +2467,7 @@ function isScheduledOn(chore, ymd){
 }
 /** Is the chore due on this local date, one-off changes included? (status / lastCompleted aside) */
 function isDueOn(chore, ymd){
-  if(!chore) return false;
+  if(!chore || chore.calendarDeleted) return false;   // v44-4 — deleted in Google Calendar: hidden until a parent decides (mirror of Code.gs _choreDueOn)
   if(chore.schedule==="once"){
     if(chore.notBefore && ymd<chore.notBefore) return false;
     return isScheduledOn(chore, ymd);
@@ -2502,7 +2574,7 @@ function renderChildChores(){
   if(streakEl) streakEl.innerHTML = "";
   if(!listEl) return;
   const data=getChildData(activeChild||currentUser);
-  const chores=data.chores||[];
+  const chores=(data.chores||[]).filter(c=>!c.calendarDeleted);   // v44-4 — deleted in Google Calendar: hidden from the child
   // Notification cards for approved/denied chores
   const decisions=chores.filter(c=>(c.status==="approved"||c.status==="denied")&&c.completedBy===currentUser);
   if(notifEl){
@@ -2550,7 +2622,7 @@ function renderChoreTable(){
   const wrap=document.getElementById("chore-table-wrap");
   if(!wrap) return;
   const data=getChildData(activeChild||currentUser);
-  const chores=data.chores||[];
+  const chores=(data.chores||[]).filter(c=>!c.calendarDeleted);   // v44-4
   const today=todayStr();
   const expired=chores.filter(c=>c.schedule==="once"&&c.onceDate&&c.onceDate<today&&c.status==="available"&&!missedDaysOpen(c).length);   // v40-12 (N4)
   // v30.1: "available" now means non-paused, not-yet-completed-today, not-past-endDate.
@@ -2668,6 +2740,16 @@ function submitChoreCheck(choreId,chkPct){
   if(!chore) return;
   // Animate (v40-10 L4: a make-up row has its own ids, chore-row-<id>-<day>)
   const lateDay=_lateForByChore[choreId]||null; const rowId=lateDay ? choreId+"-"+lateDay : choreId;
+  { // v44-1 (NTH-31) — only on a day it is due, once, and not paused / ended; a make-up day is checked by the Missed row
+    const t=todayStr();
+    const ok = lateDay ? (chore.status==="available" && !chore.paused && missedDaysOpen(chore).indexOf(lateDay)!==-1)
+                       : (chore.status==="available" && !chore.paused && !(chore.endDate && chore.endDate<t) && isDueOn(chore, t) && !isDoneOn(chore, t));
+    if(!ok){
+      delete _lateForByChore[choreId];
+      if(pendingProofChoreId===choreId){ pendingProofPhoto=null; pendingProofChoreId=null; }   // v44-5 (#4) — the photo must not ride the next submission
+      showToast("That chore isn't due right now — nothing was sent.","error"); renderChildChores(); return;
+    }
+  }
   const row=document.getElementById("chore-row-"+rowId);
   const chkEl=document.getElementById("chk-"+rowId);
   const amtEl=document.getElementById("chore-amt-"+choreId);
@@ -2690,6 +2772,15 @@ function submitChoreCheck(choreId,chkPct){
     lateFor:lateFor
   });
   chore.doneDates=(chore.doneDates||[]).filter(d=>d!==forDay).concat([forDay]).slice(-60);
+  if(chore.autoApprove===true && !chore.requiresProof && !lateFor){   // v44-2 (NTH-29) — pays out now, no parent step (a late one still goes to the parent)
+    const cid=chore.id, sched=chore.schedule, name=chore.name, amt=chore.amount;
+    applyChoreApproval(data, chore, true);
+    syncToCloud("Chore Approved (Auto)", {extra:{_submittedChoreId:cid, _submittedFor:forDay, _approvedChoreId:cid, _approvedChoreSchedule:sched, _approvedChoreName:name}});
+    showEarnedPopup(amt,name);
+    const lbl=document.getElementById("earned-popup-label"); if(lbl) lbl.textContent='"'+name+'" done — paid!';
+    renderChildChores(); updateChoreBadges();
+    return;
+  }
   syncToCloud("Chore Submitted", {extra:{_submittedChoreId:chore.id, _submittedFor:forDay}});   // calendar hint rides the POST
   showEarnedPopup(chore.amount,chore.name);
   updateChoreBadges();
@@ -3448,12 +3539,7 @@ async function attemptAdminLogin(){
 
 function populateAdminForm(){
   const cfg=state.config;
-  document.getElementById("admin-bank-name").value      = cfg.bankName       || "";
-  document.getElementById("admin-bank-tagline").value   = cfg.tagline        || "";
-  document.getElementById("admin-color-primary").value  = cfg.colorPrimary   || CFG_COLOR_PRIMARY;
-  document.getElementById("admin-color-secondary").value= cfg.colorSecondary || CFG_COLOR_SECONDARY;
-  document.getElementById("admin-img-banner").value     = cfg.imgBanner      || "";
-  document.getElementById("admin-img-logo").value       = cfg.imgLogo        || "";
+  // v43-2 — bank name / tagline / colors / images moved to Parent Settings → Our Bank
   { // v41-1 — show the family's zone (an old "GMT-6" value shows as Central); none set → this phone's zone
     const sel=document.getElementById("admin-timezone");
     if(sel) sel.value=tzNorm(cfg.timezone)||CFG_TIMEZONE;
@@ -3527,12 +3613,7 @@ function saveAdminSettings(){
   }
   if(aeMsg) aeMsg.className="field-msg";
   state.config.adminEmail     = aeVal;
-  state.config.bankName       = document.getElementById("admin-bank-name").value.trim()    || CFG_BANK_NAME;
-  state.config.tagline        = document.getElementById("admin-bank-tagline").value.trim() || "";
-  state.config.colorPrimary   = document.getElementById("admin-color-primary").value;
-  state.config.colorSecondary = document.getElementById("admin-color-secondary").value;
-  state.config.imgBanner      = document.getElementById("admin-img-banner").value.trim()   || CFG_IMG_BANNER;
-  state.config.imgLogo        = document.getElementById("admin-img-logo").value.trim()     || CFG_IMG_LOGO;
+  // v43-2 — branding is saved from Parent Settings → Our Bank (saveBankLook)
   state.config.timezone       = document.getElementById("admin-timezone").value;
   state.config.autoLogout     = parseInt(document.getElementById("admin-autologout").value) || 0;
   // v32: celebrationSound removed from global config — now per-user in user edit form
@@ -4065,7 +4146,7 @@ const HELP_CONTENT = {
     title: "Admin Panel",
     body: `<p>The Admin PIN gates this panel. Change it from <strong>Admin PIN</strong> below.</p>
       <p><strong>User Management</strong> — add kids, edit avatars, reset PINs, change emails/notifications, choose which tabs each child sees.</p>
-      <p><strong>Bank Branding</strong> — customize the name, tagline, and colors.</p>
+      <p><strong>Time Zone</strong> — the family's "today" and due times. The bank's name and colors are set by parents in Parent Settings → Our Bank.</p>
       <p><strong>Auto-Logout</strong> — returns to the login screen after inactivity. Set to 5 minutes on shared devices.</p>
       <p><strong>Celebration Sound</strong> — plays a short chime when kids submit chores. Off by default.</p>`
   }
@@ -4303,10 +4384,12 @@ function closeSheet(id, force){
   if(!document.querySelector(".bottom-sheet.open")){
     document.getElementById("sheet-backdrop")?.classList.remove("open");
   }
+  if(id === "sheet-parent-settings" && state && state.config){ try{ applyBranding(); }catch(_){} }   // v43-4 (#2) — X, back button: drop an unsaved color preview
 }
 
 function closeAllSheets(){
   // v32.3: Force-close all, no dirty check (used by selectChild / logout flows)
+  if(document.getElementById("sheet-parent-settings")?.classList.contains("open") && state && state.config){ try{ applyBranding(); }catch(_){} }   // v43-2 — drop an unsaved color preview
   document.querySelectorAll(".bottom-sheet.open").forEach(s=>{
     s.classList.remove("open");
     s.style.zIndex = ""; // v33.2 — reset stacking promotion
@@ -5747,8 +5830,82 @@ function openParentSettingsSheet(){
   // v38.1 final (In-2) — orphan ps-email-input/ps-email-msg reads removed.
   // Render children list (mirrors renderMyChildren but targets ps-specific container)
   renderMyChildrenInSheet("my-children-list-ps");
+  psFillBankLook();   // v43-2
   openSheet("sheet-parent-settings");
 }
+
+// ── v43-2 — Our Bank: parents name and color their own bank (presets + custom) ──
+const BANK_PALETTES = [
+  {id:"classic",  name:"Classic",  primary:"#2563eb", secondary:"#10b981"},
+  {id:"ocean",    name:"Ocean",    primary:"#0369a1", secondary:"#0f766e"},
+  {id:"forest",   name:"Forest",   primary:"#15803d", secondary:"#b45309"},
+  {id:"berry",    name:"Berry",    primary:"#be185d", secondary:"#7c3aed"},
+  {id:"sunset",   name:"Sunset",   primary:"#c2410c", secondary:"#be123c"},
+  {id:"midnight", name:"Midnight", primary:"#1e293b", secondary:"#0e7490"}
+];
+let _psPalette = "classic";
+function _hexOk(v){ return /^#[0-9a-fA-F]{6}$/.test(String(v||"")); }
+function _psColors(){
+  if(_psPalette === "custom"){
+    return { primary: document.getElementById("ps-color-primary").value, secondary: document.getElementById("ps-color-secondary").value };
+  }
+  const p = BANK_PALETTES.find(x => x.id === _psPalette) || BANK_PALETTES[0];
+  return { primary: p.primary, secondary: p.secondary };
+}
+function psFillBankLook(){
+  const cfg = (state && state.config) || {};
+  const set = (id, v) => { const el = document.getElementById(id); if(el) el.value = v; };
+  set("ps-bank-name",    cfg.bankName || "");
+  set("ps-bank-tagline", cfg.tagline  || "");
+  set("ps-img-banner",   cfg.imgBanner || "");
+  set("ps-img-logo",     cfg.imgLogo   || "");
+  const pri = (cfg.colorPrimary || CFG_COLOR_PRIMARY).toLowerCase(), sec = (cfg.colorSecondary || CFG_COLOR_SECONDARY).toLowerCase();
+  const match = BANK_PALETTES.find(p => p.primary === pri && p.secondary === sec);
+  _psPalette = match ? match.id : "custom";
+  set("ps-color-primary",   _hexOk(pri) ? pri : CFG_COLOR_PRIMARY);
+  set("ps-color-secondary", _hexOk(sec) ? sec : CFG_COLOR_SECONDARY);
+  psRenderPalettes();
+}
+function psRenderPalettes(){
+  const grid = document.getElementById("ps-palettes");
+  if(!grid) return;
+  const swatch = (p) => `<button type="button" class="palette-chip${_psPalette===p.id?" selected":""}" role="radio" aria-checked="${_psPalette===p.id}" onclick="psPickPalette('${p.id}')">
+      <span class="palette-dots"><span style="background:${p.primary}"></span><span style="background:${p.secondary}"></span></span>
+      <span class="palette-name">${p.name}</span></button>`;
+  grid.innerHTML = BANK_PALETTES.map(swatch).join("") +
+    `<button type="button" class="palette-chip${_psPalette==="custom"?" selected":""}" role="radio" aria-checked="${_psPalette==="custom"}" onclick="psPickPalette('custom')">
+      <span class="palette-dots palette-dots-custom">🎨</span><span class="palette-name">Custom</span></button>`;
+  document.getElementById("ps-custom-colors")?.classList.toggle("hidden", _psPalette !== "custom");
+}
+function psPickPalette(id){
+  if(id !== "custom" && !BANK_PALETTES.some(p => p.id === id)) return;
+  if(id === "custom" && _psPalette !== "custom"){   // start the pickers from the colors on screen
+    const c = _psColors();
+    document.getElementById("ps-color-primary").value = c.primary;
+    document.getElementById("ps-color-secondary").value = c.secondary;
+  }
+  _psPalette = id;
+  psRenderPalettes();
+  const c = _psColors();
+  previewColor("primary", c.primary); previewColor("secondary", c.secondary);   // live preview; Close puts the saved look back
+}
+function psCustomColor(){ const c = _psColors(); previewColor("primary", c.primary); previewColor("secondary", c.secondary); }
+async function saveBankLook(){
+  if(!state || !state.config || !currentUser || (state.roles||{})[currentUser] !== "parent"){ showToast("Only a parent can change the bank's look.","error"); return; }
+  const c = _psColors();
+  if(!_hexOk(c.primary) || !_hexOk(c.secondary)){ showToast("Pick two colors first.","error"); return; }
+  const name = document.getElementById("ps-bank-name").value.trim();
+  state.config.bankName       = name || CFG_BANK_NAME;
+  state.config.tagline        = document.getElementById("ps-bank-tagline").value.trim();
+  state.config.colorPrimary   = c.primary;
+  state.config.colorSecondary = c.secondary;
+  state.config.imgBanner      = document.getElementById("ps-img-banner").value.trim() || CFG_IMG_BANNER;
+  state.config.imgLogo        = document.getElementById("ps-img-logo").value.trim()   || CFG_IMG_LOGO;
+  applyBranding();
+  const r = await syncToCloud("Bank Look Updated");
+  if(r && r.status === "ok") showToast("Saved — "+state.config.bankName+" has a new look!","success");   // v43-4 (#7) — only once the server has it (a refusal already toasted and refreshed)
+}
+window.psPickPalette = psPickPalette; window.psCustomColor = psCustomColor; window.saveBankLook = saveBankLook;
 
 function renderMyChildrenInSheet(containerId){
   const list = document.getElementById(containerId);
@@ -7126,7 +7283,7 @@ const CW_MONTH_DAYS = (()=>{ const a=[]; for(let i=1;i<=28;i++) a.push(String(i)
 // createdAt) are NOT in this list — they're reset on every clone.
 const CW_FIELD_KEYS = ["name","desc","amount","schedule","monthlyDay","weekday","weekdays",
   "onceDate","onceDueOn","reminderHour","dueHour","dayTimes","skipFirstWeek","splitChk","childChooses",
-  "paused","endDate","requiresProof","streakStart","streakMilestone","streakReward"];
+  "paused","endDate","requiresProof","autoApprove","streakStart","streakMilestone","streakReward"];   // v44-2 autoApprove
 
 // ── helpers ─────────────────────────────────────────────────────────
 function cwNum(v){ const n=parseFloat(String(v==null?"":v).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; }
@@ -7199,7 +7356,7 @@ function cwBlankCur(){
   return {
     cName:"", cDesc:"", cAmount:"", cSplit:50, cChildChooses:true,
     cSchedule:undefined, cOnceType:undefined, cOnceDate:"", cWeekdays:[], cSkipFirst:undefined,
-    cMonthlyDay:"1", cEndDate:"", cReminder:20, cProof:undefined,   // v40-10 — new chores default to due by 8 PM
+    cMonthlyDay:"1", cEndDate:"", cReminder:20, cProof:undefined, cAuto:false,   // v40-10 — new chores default to due by 8 PM
     cStreakStart:"0", cStreakMilestone:"", cStreakReward:"", cDayTimes:{}
   };
 }
@@ -7236,6 +7393,7 @@ function cwCurToFields(d){
     paused:false,
     endDate: schedule!=="once" ? (d.cEndDate||null) : null,
     requiresProof: d.cProof===true,
+    autoApprove: d.cProof!==true && d.cAuto===true,   // v44-2 — never together with a proof photo
     streakStart: parseInt(d.cStreakStart,10)||0,
     streakMilestone: parseInt(d.cStreakMilestone,10)||0,
     streakReward: cwNum(d.cStreakReward)||0
@@ -7258,6 +7416,7 @@ function cwFieldsToCur(c){
   cur.cReminder = (c.dueHour!==undefined && c.dueHour!==null && !isNaN(parseInt(c.dueHour,10))) ? parseInt(c.dueHour,10) : DEFAULT_DUE_HOUR;   // v40-10 (H1) — an old chore shows 8 PM, its due time until changed
   cur.cPreV40Reminder = (c.dueHour===undefined || c.dueHour===null) && c.reminderHour!==undefined ? parseInt(c.reminderHour,10)||8 : null;   // v40-12 (N2) — a pre-v40 chore's calendar time, kept unless the parent picks a due time
   cur.cProof = !!c.requiresProof;
+  cur.cAuto = c.autoApprove===true && !c.requiresProof;   // v44-2
   cur.cStreakStart = String(c.streakStart||0);
   cur.cStreakMilestone = c.streakMilestone ? String(c.streakMilestone) : "";
   cur.cStreakReward = c.streakReward ? String(c.streakReward) : "";
@@ -7301,6 +7460,7 @@ function cwChoreSummary(c){
   if(c.schedule==="biweekly" && c.skipFirstWeek) bits.push("starts next week");
   if(c.endDate) bits.push("ends "+c.endDate);
   if(c.requiresProof) bits.push("📷 proof");
+  if(c.autoApprove && !c.requiresProof) bits.push("⚡ pays right away");   // v44-2
   if(c.streakMilestone) bits.push("streak every "+c.streakMilestone+" → $"+cwNum(c.streakReward).toFixed(2));
   return wzEsc(bits.join(" · "));
 }
@@ -7568,6 +7728,14 @@ function cwBuildSteps(mode){
     render: wzChoiceRender
   });
 
+  steps.push({   // v44-2 (NTH-29) — not asked when a proof photo is required (a parent looks at the photo)
+    id:"cAuto", field:"cAuto", footer:"none", skip:(d)=> man(d) || d.cProof===true,
+    title:"Pay it without your approval?", sub:"Yes: the reward is paid the moment they mark it done. Late ones still come to you.",
+    options:[{v:false,label:"No, I'll approve it"},{v:true,label:"Yes, pay right away"}],
+    validate:(d)=> (d.cAuto===true || d.cAuto===false) ? true : "Pick one.",
+    render: wzChoiceRender
+  });
+
   steps.push({
     id:"cStreak", field:"cStreakMilestone", footer:"default",
     skip:(d)=> man(d) || !cwRewardsOn() || d.cSchedule==="once",
@@ -7708,6 +7876,7 @@ function cwReviewRender(d){
     if(visIds.includes("cEndDate")) rows.push(rowHtml("End date", f.endDate ? wzEsc(f.endDate) : "None", "cEndDate"));
     if(visIds.includes("cReminder")){ const dh=(f.dueHour!==undefined && f.dueHour!==null) ? f.dueHour : f.reminderHour; const h=CW_REMINDER_HOURS.find(x=>x[0]===dh); rows.push(rowHtml("Due time", h?h[1]:(dh+":00"), "cReminder")); }   // v40-8 — was "Calendar reminder"; v40-10 — dueHour
     rows.push(rowHtml("Proof photo", f.requiresProof?"Required":"No", "cProof"));
+    if(!f.requiresProof) rows.push(rowHtml("Approval", f.autoApprove?"Paid right away — no approval":"You approve it", "cAuto"));   // v44-2
     if(visIds.includes("cStreak")) rows.push(rowHtml("Streak bonus", f.streakMilestone ? ("Every "+f.streakMilestone+" → $"+cwNum(f.streakReward).toFixed(2)+(f.streakStart?" (starting at "+f.streakStart+")":"")) : "None", "cStreak"));
     // v34.1 Item 14 — calendar status lives on Review now that the legacy creator sheet is gone.
     setTimeout(()=>{ try{ if(typeof checkChoreCalendar==="function" && wz && wz.mode==="edit"){ const ex=(((state.children||{})[wz.meta.editChild]||{}).chores||[]).find(c=>c.id===wz.meta.editChoreId); if(ex) checkChoreCalendar(ex); } }catch(_){} }, 50);
@@ -7803,6 +7972,7 @@ async function cwCommitEdit(){
   const newFields=cwCurToFields(d);
   const schedChanged = schedKey(cwCurToFields(cwFieldsToCur(ex))) !== schedKey(newFields);   // both sides normalized the same way
   Object.assign(ex, newFields);                          // legacy createChore edit path: Object.assign(ex, choreFields)
+  delete ex.calendarDeleted;                             // v44-5 (#3) — editing a chore hidden by a Google Calendar delete puts it back
   if(schedChanged){ delete ex.skipDates; delete ex.extraDates; delete ex.notBefore; delete ex.dayOverrides; delete ex.calOverrides; }   // v42-3 — one-day hour moves go with them
   wzRender();
   let res=null;
